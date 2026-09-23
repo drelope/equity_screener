@@ -62,12 +62,22 @@ def test_preferred_facts_skips_already_stored_ciks():
                 def all(self):
                     return self._rows
 
-            return _Mappings([
-                {"cik": "0000000002", "ticker": "BBB", "title": "B Corp",
-                 "security_id": "security-b"},
-                {"cik": "0000000001", "ticker": "AAA", "title": "A Corp",
-                 "security_id": "security-a"},
-            ]).mappings()
+            return _Mappings(
+                [
+                    {
+                        "cik": "0000000002",
+                        "ticker": "BBB",
+                        "title": "B Corp",
+                        "security_id": "security-b",
+                    },
+                    {
+                        "cik": "0000000001",
+                        "ticker": "AAA",
+                        "title": "A Corp",
+                        "security_id": "security-a",
+                    },
+                ]
+            ).mappings()
 
     conn = _ResumableConn()
     fetched = []
@@ -75,8 +85,9 @@ def test_preferred_facts_skips_already_stored_ciks():
     def _fake_ingest(_conn, cik, _entries, _stats):
         fetched.append(cik)
 
-    with patch.object(populate_companyfacts, "engine") as engine, patch.object(
-        populate_companyfacts, "_ingest_cik", side_effect=_fake_ingest
+    with (
+        patch.object(populate_companyfacts, "engine") as engine,
+        patch.object(populate_companyfacts, "_ingest_cik", side_effect=_fake_ingest),
     ):
         engine.connect.return_value = conn
         populate_companyfacts.populate_preferred_companyfacts()
@@ -89,8 +100,9 @@ def test_companyfacts_targets_include_preferred_profile_rows():
     audited = [{"ticker": "AAA", "security_id": "security-a"}]
     profile = [{"ticker": "PFD", "security_id": "security-pfd"}]
 
-    with patch.object(populate_companyfacts, "load_securities", return_value=audited), patch.object(
-        populate_companyfacts, "load_ticker_profile_targets", return_value=profile
+    with (
+        patch.object(populate_companyfacts, "load_securities", return_value=audited),
+        patch.object(populate_companyfacts, "load_ticker_profile_targets", return_value=profile),
     ):
         targets = populate_companyfacts.load_companyfacts_targets(_Connection())
 

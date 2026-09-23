@@ -1,6 +1,7 @@
-import requests
-import pytest
 from unittest.mock import patch
+
+import pytest
+import requests
 
 from scripts.populate_companyfacts import (
     PREFERRED_TAXONOMY_CONCEPTS,

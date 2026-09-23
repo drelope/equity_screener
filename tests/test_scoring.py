@@ -1,7 +1,9 @@
-import pandas as pd
 from unittest.mock import patch
+
+import pandas as pd
+
 from scripts.populate_reference_tables import get_issuer_info_with_fallback
-from src.crispdm.scoring import score,WEIGHTS
+from src.crispdm.scoring import WEIGHTS, score
 from src.crispdm.sec_client import (
     classify_companyfacts,
     classify_security_type,
@@ -9,16 +11,24 @@ from src.crispdm.sec_client import (
     get_legacy_issuer_data,
 )
 
+
 def test_weights():
-    assert sum(WEIGHTS.values())==1
+    assert sum(WEIGHTS.values()) == 1
+
 
 def test_score():
-    d=pd.DataFrame({
-      "dividend_yield":[.02,.05,.08],"dividend_growth":[.02,.05,.01],
-      "dividend_coverage":[1,2,3],"fcf_payout":[.9,.6,.4],
-      "momentum_252d":[-.1,.1,.2],"momentum_63d":[-.05,.03,.1],
-      "volatility_252d":[.4,.3,.2],"legal_rights_score":[.5,.7,.9]
-    })
+    d = pd.DataFrame(
+        {
+            "dividend_yield": [0.02, 0.05, 0.08],
+            "dividend_growth": [0.02, 0.05, 0.01],
+            "dividend_coverage": [1, 2, 3],
+            "fcf_payout": [0.9, 0.6, 0.4],
+            "momentum_252d": [-0.1, 0.1, 0.2],
+            "momentum_63d": [-0.05, 0.03, 0.1],
+            "volatility_252d": [0.4, 0.3, 0.2],
+            "legal_rights_score": [0.5, 0.7, 0.9],
+        }
+    )
     assert score(d).composite_score.notna().all()
 
 
@@ -45,15 +55,17 @@ def test_companyfacts_security_and_dividend_classification_is_auditable():
 
 
 def test_companyfacts_preferred_stock_uses_normalized_security_type():
-    result = classify_companyfacts({
-        "full_facts": {
-            "us-gaap": {
-                "PreferredStockSharesOutstanding": {
-                    "units": {"shares": [{"val": 100, "end": "2026-01-01"}]}
+    result = classify_companyfacts(
+        {
+            "full_facts": {
+                "us-gaap": {
+                    "PreferredStockSharesOutstanding": {
+                        "units": {"shares": [{"val": 100, "end": "2026-01-01"}]}
+                    }
                 }
             }
         }
-    })
+    )
 
     assert result["security_types"] == ["preferred stock"]
 
@@ -87,10 +99,14 @@ def test_issuer_data_reads_sec_submission_metadata():
 
 
 def test_legacy_issuer_data_uses_current_sec_company_endpoint():
-    response = type("Response", (), {
-        "text": "Company Name: Apple Inc. CIK: 0000320193 SIC Code: 3571 Fiscal Year End: 0926",
-        "raise_for_status": lambda self: None,
-    })()
+    response = type(
+        "Response",
+        (),
+        {
+            "text": "Company Name: Apple Inc. CIK: 0000320193 SIC Code: 3571 Fiscal Year End: 0926",
+            "raise_for_status": lambda self: None,
+        },
+    )()
 
     with patch("src.crispdm.sec_client.SEC_SESSION.get", return_value=response) as request:
         result = get_legacy_issuer_data(320193)
@@ -112,8 +128,12 @@ def test_reference_population_prefers_complete_sec_metadata():
         "fiscal_year_end": "09-26",
     }
 
-    with patch("scripts.populate_reference_tables.get_issuer_data", return_value=issuer) as sec_lookup, \
-            patch("scripts.populate_reference_tables.openbb_profile") as openbb_lookup:
+    with (
+        patch(
+            "scripts.populate_reference_tables.get_issuer_data", return_value=issuer
+        ) as sec_lookup,
+        patch("scripts.populate_reference_tables.openbb_profile") as openbb_lookup,
+    ):
         result, source = get_issuer_info_with_fallback("0000320193", "AAPL", "Apple Inc.")
 
     assert result == issuer

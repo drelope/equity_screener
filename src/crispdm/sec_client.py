@@ -1,7 +1,11 @@
-import hashlib, re, time, requests
+import hashlib
+import re
+import time
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field
 from typing import Optional
+
+import requests
 from bs4 import BeautifulSoup
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
@@ -13,7 +17,6 @@ from .xbrl_tags import (
     PREFERRED_PAR_VALUE_CONCEPTS,
     SECURITY_ATTRIBUTE_TAGS,
     SECURITY_FACT_RULES,
-    SECURITY_TYPE_VOCABULARY,
     normalize_security_type,
 )
 
@@ -38,7 +41,10 @@ class SECDataUnavailableError(requests.exceptions.HTTPError):
     def __init__(self, cik, url, response=None):
         self.cik = str(cik).zfill(10)
         self.url = url
-        super().__init__(f"SEC Company Facts unavailable for CIK {self.cik}: {url}", response=response)
+        super().__init__(
+            f"SEC Company Facts unavailable for CIK {self.cik}: {url}", response=response
+        )
+
 
 SEC_SESSION = requests.Session()
 SEC_SESSION.headers.update(HEADERS)
@@ -57,16 +63,17 @@ SEC_SESSION.mount(
     ),
 )
 
+
 def get_company_tickers():
     """
     Fetch all company tickers from the SEC's official company_tickers.json source.
-    
+
     Returns:
         dict: A mapping of index to company info with keys:
             - cik_str: Central Index Key (integer)
             - ticker: Stock ticker symbol (string)
             - title: Company name (string)
-    
+
     Example:
         >>> tickers = get_company_tickers()
         >>> aapl_entry = tickers["1"]  # Apple
@@ -79,19 +86,20 @@ def get_company_tickers():
         timeout=(10, 30),
     )
     r.raise_for_status()
-    time.sleep(.2)
+    time.sleep(0.2)
     return r.json()
+
 
 def ticker_to_cik(ticker):
     """
     Look up CIK number by stock ticker symbol.
-    
+
     Args:
         ticker (str): Stock ticker symbol (case-insensitive, e.g. "AAPL")
-    
+
     Returns:
         int: Central Index Key, or None if ticker not found
-    
+
     Example:
         >>> cik = ticker_to_cik("AAPL")
         >>> print(cik)  # 320193
@@ -100,22 +108,23 @@ def ticker_to_cik(ticker):
     try:
         tickers_data = get_company_tickers()
         for entry in tickers_data.values():
-            if entry['ticker'] == ticker:
-                return entry['cik_str']
+            if entry["ticker"] == ticker:
+                return entry["cik_str"]
     except Exception as e:
         print(f"Error looking up ticker {ticker}: {e}")
     return None
 
+
 def cik_to_ticker(cik):
     """
     Look up ticker symbol by CIK number.
-    
+
     Args:
         cik (int): Central Index Key
-    
+
     Returns:
         str: Stock ticker symbol, or None if CIK not found
-    
+
     Example:
         >>> ticker = cik_to_ticker(320193)
         >>> print(ticker)  # 'AAPL'
@@ -124,21 +133,28 @@ def cik_to_ticker(cik):
     try:
         tickers_data = get_company_tickers()
         for entry in tickers_data.values():
-            if entry['cik_str'] == cik:
-                return entry['ticker']
+            if entry["cik_str"] == cik:
+                return entry["ticker"]
     except Exception as e:
         print(f"Error looking up CIK {cik}: {e}")
     return None
 
+
 def get_submissions(cik):
-    r=SEC_SESSION.get(f"https://data.sec.gov/submissions/CIK{int(cik):010d}.json",
-                   headers=HEADERS,timeout=(10, 30))
-    r.raise_for_status(); time.sleep(.2); return r.json()
+    r = SEC_SESSION.get(
+        f"https://data.sec.gov/submissions/CIK{int(cik):010d}.json",
+        headers=HEADERS,
+        timeout=(10, 30),
+    )
+    r.raise_for_status()
+    time.sleep(0.2)
+    return r.json()
+
 
 def get_exchange_list():
     """
     Return a standard list of major US stock exchanges.
-    
+
     Returns:
         list: List of dicts with 'code' and 'name' keys
     """
@@ -152,13 +168,14 @@ def get_exchange_list():
         {"code": "PINK", "name": "OTC Pink Sheets"},
     ]
 
+
 def get_issuer_data(cik):
     """
     Extract issuer information from SEC submissions API.
-    
+
     Args:
         cik (int or str): Central Index Key
-    
+
     Returns:
         dict: Issuer data with keys: cik, issuer_name, sic, fiscal_year_end
     """
@@ -173,12 +190,12 @@ def get_issuer_data(cik):
         fiscal_year_end = data.get("fiscalYearEnd") or entity_info.get("fiscalYearEnd")
         if fiscal_year_end and len(str(fiscal_year_end)) == 4:
             fiscal_year_end = f"{str(fiscal_year_end)[:2]}-{str(fiscal_year_end)[2:]}"
-        
+
         return {
             "cik": str(int(cik)).zfill(10),
             "issuer_name": issuer_name,
             "sic": str(sic),
-            "fiscal_year_end": fiscal_year_end
+            "fiscal_year_end": fiscal_year_end,
         }
     except Exception as e:
         print(f"Error fetching issuer data for CIK {cik}: {e}")
@@ -218,28 +235,29 @@ def get_legacy_issuer_data(cik):
         print(f"Legacy SEC lookup failed for CIK {cik}: {exc}")
         return None
 
+
 def get_all_issuers_from_tickers(limit=None):
     """
     Fetch issuer information for all tickers in the SEC company_tickers.json.
-    
+
     Args:
         limit (int): Maximum number of issuers to fetch (for testing)
-    
+
     Returns:
         list: List of issuer dicts
     """
     tickers_data = get_company_tickers()
     issuers = []
-    
+
     count = 0
     for entry in tickers_data.values():
         if limit and count >= limit:
             break
-        
+
         cik = entry.get("cik_str")
         ticker = entry.get("ticker")
         title = entry.get("title", "")
-        
+
         try:
             issuer_info = get_issuer_data(cik)
             if issuer_info:
@@ -252,7 +270,7 @@ def get_all_issuers_from_tickers(limit=None):
         except Exception as e:
             print(f"Skipping CIK {cik} ({ticker}): {e}")
             time.sleep(0.5)  # Back off on error
-    
+
     return issuers
 
 
@@ -273,34 +291,52 @@ def classify_security_type(title):
     if any(term in normalized_title for term in ("warrant", "right")):
         return "derivative"
 
-    if any(term in normalized_title for term in ("preferred", "depositary share", "depositary receipt")):
+    if any(
+        term in normalized_title for term in ("preferred", "depositary share", "depositary receipt")
+    ):
         return "preferred stock"
 
     if any(term in normalized_title for term in ("government bond", "treasury", "municipal bond")):
         return "government debt"
 
-    if any(term in normalized_title for term in ("bond", "debenture", "corporate note", "senior debt", "subordinated debt", "due 20")):
+    if any(
+        term in normalized_title
+        for term in (
+            "bond",
+            "debenture",
+            "corporate note",
+            "senior debt",
+            "subordinated debt",
+            "due 20",
+        )
+    ):
         return "corporate bond"
 
     if any(term in normalized_title for term in ("unit", "units")):
         return "other_debt_and_equity"
 
-    if any(term in normalized_title for term in (
-        "certificate",
-        "commercial paper",
-        "asset-backed",
-        "loan participation",
-    )):
+    if any(
+        term in normalized_title
+        for term in (
+            "certificate",
+            "commercial paper",
+            "asset-backed",
+            "loan participation",
+        )
+    ):
         return "other_debt"
 
-    if any(term in normalized_title for term in (
-        "common stock",
-        "common shares",
-        "ordinary shares",
-        "class a",
-        "class b",
-        "class c",
-    )):
+    if any(
+        term in normalized_title
+        for term in (
+            "common stock",
+            "common shares",
+            "ordinary shares",
+            "class a",
+            "class b",
+            "class c",
+        )
+    ):
         return "common_stock"
 
     if any(term in normalized_title for term in ("stock", "share", "equity")):
@@ -331,6 +367,7 @@ SECURITY_TYPE_FALLBACK_PRIORITY: tuple[str, ...] = (
 @dataclass(frozen=True)
 class SymbolSuffix:
     """Class evidence parsed from the trailing dash segment of an SEC symbol."""
+
     security_type: str
     raw_suffix: str
     series_letter: Optional[str] = None
@@ -386,7 +423,6 @@ def collapse_security_types(security_types, dividend_fact_tags=None):
     the plain SEC symbol of a multi-class issuer is its common share.
     """
     facts = [str(f.get("tag", "")).lower() for f in (dividend_fact_tags or [])]
-    tag_text = " ".join(facts)
     has_common = any("common" in tag for tag in facts)
     has_preferred = any("preferred" in tag for tag in facts)
 
@@ -404,6 +440,7 @@ def collapse_security_types(security_types, dividend_fact_tags=None):
 @dataclass(frozen=True)
 class BoundTitle:
     """A dei security title alongside how strongly it names one symbol."""
+
     title: str
     index: int
     security_type: str
@@ -438,7 +475,7 @@ def bind_dei_titles_to_symbol(titles, symbol=None):
     Titles are kept in their reported (recency) order.
     """
     stripped = []
-    for item in (titles or []):
+    for item in titles or []:
         if not isinstance(item, str) or not item.strip():
             continue
         if item.strip() not in stripped:
@@ -452,13 +489,15 @@ def bind_dei_titles_to_symbol(titles, symbol=None):
             strong = True
         elif symbol_series is None and len(stripped) == 1:
             strong = True
-        bound.append(BoundTitle(
-            title=title,
-            index=index,
-            security_type=classify_security_type(title),
-            series_letter=series_letter,
-            strong=strong,
-        ))
+        bound.append(
+            BoundTitle(
+                title=title,
+                index=index,
+                security_type=classify_security_type(title),
+                series_letter=series_letter,
+                strong=strong,
+            )
+        )
     return bound
 
 
@@ -471,6 +510,7 @@ class InstrumentClassification:
     that pointed at different classes and were overruled. ``submissions`` is the
     anchor snapshot (membership/position/exchange) when available.
     """
+
     security_type: str
     source: str
     confidence: str
@@ -492,8 +532,9 @@ def _bound_details(bound):
     ]
 
 
-def classify_instrument(ticker, classification=None, *, dei_titles=None,
-                        submissions=None, issuer_name=None):
+def classify_instrument(
+    ticker, classification=None, *, dei_titles=None, submissions=None, issuer_name=None
+):
     """Decide the single canonical security_type for one SEC-listed instrument.
 
     Combines, in priority order, the symbol's dash suffix (high), dei titles
@@ -515,8 +556,13 @@ def classify_instrument(ticker, classification=None, *, dei_titles=None,
     conflicts = []
 
     # Phase 0: submissions tickers[] anchor.
-    anchor = {"in_tickers": False, "position": None, "primary": False,
-              "exchange": None, "anchor_ok": submissions is not None}
+    anchor = {
+        "in_tickers": False,
+        "position": None,
+        "primary": False,
+        "exchange": None,
+        "anchor_ok": submissions is not None,
+    }
     if submissions is not None:
         order = submissions.get("order") or []
         positions = {str(value).upper(): index for index, value in enumerate(order)}
@@ -530,16 +576,24 @@ def classify_instrument(ticker, classification=None, *, dei_titles=None,
         }
     evidence.append({"phase": 0, "signal": "submissions_tickers", "detail": anchor})
     if anchor["anchor_ok"] and not anchor["in_tickers"]:
-        evidence.append({"phase": 0, "signal": "submissions_mismatch",
-                         "detail": {"symbol": symbol}})
+        evidence.append(
+            {"phase": 0, "signal": "submissions_mismatch", "detail": {"symbol": symbol}}
+        )
 
     # Phase 1: symbol dash suffix (non-common classes decide immediately).
     suffix = symbol_suffix_evidence(symbol)
     if suffix is not None and suffix.security_type != "common_stock":
-        evidence.append({"phase": 1, "signal": "symbol_suffix",
-                         "detail": {"type": suffix.security_type,
-                                    "raw_suffix": suffix.raw_suffix,
-                                    "series_letter": suffix.series_letter}})
+        evidence.append(
+            {
+                "phase": 1,
+                "signal": "symbol_suffix",
+                "detail": {
+                    "type": suffix.security_type,
+                    "raw_suffix": suffix.raw_suffix,
+                    "series_letter": suffix.series_letter,
+                },
+            }
+        )
         bound = bind_dei_titles_to_symbol(titles, symbol)
         strong = [item for item in bound if item.strong]
         if strong:
@@ -564,19 +618,20 @@ def classify_instrument(ticker, classification=None, *, dei_titles=None,
     if issuer_name:
         issuer_type = classify_security_type(issuer_name)
         if issuer_type != "other":
-            evidence.append({"phase": 2, "signal": "issuer_title",
-                             "detail": {"type": issuer_type}})
+            evidence.append({"phase": 2, "signal": "issuer_title", "detail": {"type": issuer_type}})
             if suffix is None:
                 return InstrumentClassification(
-                    security_type=issuer_type, source="issuer_title",
-                    confidence="medium", evidence=evidence, conflicts=conflicts,
+                    security_type=issuer_type,
+                    source="issuer_title",
+                    confidence="medium",
+                    evidence=evidence,
+                    conflicts=conflicts,
                     submissions=anchor,
                 )
 
     # Phase 2b: dei titles bound to the symbol.
     bound = bind_dei_titles_to_symbol(titles, symbol)
-    evidence.append({"phase": 2, "signal": "dei_titles",
-                     "detail": _bound_details(bound)})
+    evidence.append({"phase": 2, "signal": "dei_titles", "detail": _bound_details(bound)})
     strong = [item for item in bound if item.strong]
     if strong:
         distinct = {item.security_type for item in strong}
@@ -588,13 +643,15 @@ def classify_instrument(ticker, classification=None, *, dei_titles=None,
                 # A series-letter-bound dei title names this exact series, so
                 # it overrides the generic dash-common default (e.g. WCC-A is
                 # Series A *Preferred*). Record the overruled suffix signal.
-                conflicts.append(
-                    f"suffix:{suffix.security_type} overruled by title:{decided_type}"
-                )
+                conflicts.append(f"suffix:{suffix.security_type} overruled by title:{decided_type}")
             return InstrumentClassification(
-                security_type=decided_type, source="dei_title",
-                confidence="high", matched_title=matched_title,
-                evidence=evidence, conflicts=conflicts, submissions=anchor,
+                security_type=decided_type,
+                source="dei_title",
+                confidence="high",
+                matched_title=matched_title,
+                evidence=evidence,
+                conflicts=conflicts,
+                submissions=anchor,
             )
 
     # Phase 2c: sole / unanimous dei titles (medium confidence).
@@ -611,90 +668,131 @@ def classify_instrument(ticker, classification=None, *, dei_titles=None,
     if decided_title is not None:
         decided_type = next(iter(title_types))
         if suffix is not None and suffix.security_type != decided_type:
-            conflicts.append(
-                f"suffix:{suffix.security_type} vs title:{decided_type}"
-            )
+            conflicts.append(f"suffix:{suffix.security_type} vs title:{decided_type}")
         if suffix is not None and decided_type != "common_stock":
             # Unbound titles are less specific than a dash suffix; keep the
             # symbol's reading but surface the disagreement.
             return InstrumentClassification(
-                security_type="common_stock", source="symbol_suffix",
-                confidence="high", matched_title=decided_title,
-                evidence=evidence, conflicts=conflicts, submissions=anchor,
+                security_type="common_stock",
+                source="symbol_suffix",
+                confidence="high",
+                matched_title=decided_title,
+                evidence=evidence,
+                conflicts=conflicts,
+                submissions=anchor,
             )
         return InstrumentClassification(
-            security_type=decided_type, source="dei_title",
-            confidence="medium", matched_title=decided_title,
-            evidence=evidence, conflicts=conflicts, submissions=anchor,
+            security_type=decided_type,
+            source="dei_title",
+            confidence="medium",
+            matched_title=decided_title,
+            evidence=evidence,
+            conflicts=conflicts,
+            submissions=anchor,
         )
     if len(title_types) > 1:
-        evidence.append({"phase": 2, "signal": "titles_multi_class",
-                         "detail": sorted(title_types)})
+        evidence.append({"phase": 2, "signal": "titles_multi_class", "detail": sorted(title_types)})
 
     # Phase 3: submissions leading position declares the plain symbol common.
-    if suffix is None and anchor["anchor_ok"] and anchor["in_tickers"] \
-            and anchor["position"] == 0 and len(title_types) > 1 \
-            and "common_stock" in title_types:
-        evidence.append({"phase": 3, "signal": "submissions_leading",
-                         "detail": {"position": anchor["position"]}})
+    if (
+        suffix is None
+        and anchor["anchor_ok"]
+        and anchor["in_tickers"]
+        and anchor["position"] == 0
+        and len(title_types) > 1
+        and "common_stock" in title_types
+    ):
+        evidence.append(
+            {
+                "phase": 3,
+                "signal": "submissions_leading",
+                "detail": {"position": anchor["position"]},
+            }
+        )
         common_title = next(
             (title for title in titles if classify_security_type(title) != "other"),
             None,
         )
         return InstrumentClassification(
-            security_type="common_stock", source="submissions_leading",
-            confidence="medium", matched_title=common_title,
-            evidence=evidence, conflicts=conflicts, submissions=anchor,
+            security_type="common_stock",
+            source="submissions_leading",
+            confidence="medium",
+            matched_title=common_title,
+            evidence=evidence,
+            conflicts=conflicts,
+            submissions=anchor,
         )
 
     # Phase 4: dividend-fact tags discriminate Common vs Preferred.
     bag = classification.get("security_types") or []
-    facts = [str(f.get("tag", "")).lower()
-             for f in (classification.get("dividend_facts") or [])]
+    facts = [str(f.get("tag", "")).lower() for f in (classification.get("dividend_facts") or [])]
     has_common = any("common" in tag for tag in facts)
     has_preferred = any("preferred" in tag for tag in facts)
     if has_preferred and not has_common and "preferred stock" in bag:
-        evidence.append({"phase": 4, "signal": "dividend_facts",
-                         "detail": {"preferred_tag": True, "common_tag": False}})
+        evidence.append(
+            {
+                "phase": 4,
+                "signal": "dividend_facts",
+                "detail": {"preferred_tag": True, "common_tag": False},
+            }
+        )
         return InstrumentClassification(
-            security_type="preferred stock", source="dividend_facts",
-            confidence="medium", evidence=evidence, conflicts=conflicts,
+            security_type="preferred stock",
+            source="dividend_facts",
+            confidence="medium",
+            evidence=evidence,
+            conflicts=conflicts,
             submissions=anchor,
         )
     if has_common and not has_preferred and "common_stock" in bag:
-        evidence.append({"phase": 4, "signal": "dividend_facts",
-                         "detail": {"preferred_tag": False, "common_tag": True}})
+        evidence.append(
+            {
+                "phase": 4,
+                "signal": "dividend_facts",
+                "detail": {"preferred_tag": False, "common_tag": True},
+            }
+        )
         return InstrumentClassification(
-            security_type="common_stock", source="dividend_facts",
-            confidence="medium", evidence=evidence, conflicts=conflicts,
+            security_type="common_stock",
+            source="dividend_facts",
+            confidence="medium",
+            evidence=evidence,
+            conflicts=conflicts,
             submissions=anchor,
         )
 
     # Phase 5: fall back to the concept bag / unavailable marker.
     if suffix is not None:
         return InstrumentClassification(
-            security_type="common_stock", source="symbol_suffix",
-            confidence="high", evidence=evidence, conflicts=conflicts,
+            security_type="common_stock",
+            source="symbol_suffix",
+            confidence="high",
+            evidence=evidence,
+            conflicts=conflicts,
             submissions=anchor,
         )
     if not classification or classification.get("status") == "unavailable":
         return InstrumentClassification(
-            security_type="other", source="unavailable", confidence="low",
-            evidence=evidence, conflicts=conflicts, submissions=anchor,
+            security_type="other",
+            source="unavailable",
+            confidence="low",
+            evidence=evidence,
+            conflicts=conflicts,
+            submissions=anchor,
         )
-    decided_type = collapse_security_types(
-        bag, classification.get("dividend_facts")
-    )
-    evidence.append({"phase": 5, "signal": "concept_bag",
-                     "detail": {"bag": bag}})
+    decided_type = collapse_security_types(bag, classification.get("dividend_facts"))
+    evidence.append({"phase": 5, "signal": "concept_bag", "detail": {"bag": bag}})
     return InstrumentClassification(
-        security_type=decided_type, source="concept_bag", confidence="low",
-        evidence=evidence, conflicts=conflicts, submissions=anchor,
+        security_type=decided_type,
+        source="concept_bag",
+        confidence="low",
+        evidence=evidence,
+        conflicts=conflicts,
+        submissions=anchor,
     )
 
 
-def security_type_for_instrument(ticker, title, classification, dei_titles=None,
-                                 submissions=None):
+def security_type_for_instrument(ticker, title, classification, dei_titles=None, submissions=None):
     """Return the single canonical security_type for one listed instrument.
 
     ``reference.securities`` keeps one row per SEC-listed instrument (each
@@ -716,13 +814,13 @@ def security_type_for_instrument(ticker, title, classification, dei_titles=None,
 def get_security_data_from_tickers():
     """
     Convert SEC company_tickers.json into security reference data.
-    
+
     Returns:
         list: List of security dicts with: ticker, issuer_name, security_name, security_type
     """
     tickers_data = get_company_tickers()
     securities = []
-    
+
     for entry in tickers_data.values():
         security = {
             "ticker": entry.get("ticker"),
@@ -731,10 +829,10 @@ def get_security_data_from_tickers():
             "security_name": entry.get("title", "").strip(),
             "security_type": classify_security_type(entry.get("title")),
             "currency": "USD",
-            "active": True
+            "active": True,
         }
         securities.append(security)
-    
+
     return securities
 
 
@@ -749,7 +847,7 @@ def get_companyfacts(cik):
     if r.status_code == 404:
         raise SECDataUnavailableError(normalized_cik, url, response=r)
     r.raise_for_status()
-    time.sleep(.2)
+    time.sleep(0.2)
     return r.json()
 
 
@@ -769,7 +867,7 @@ def get_companyconcept(cik, taxonomy, concept):
         timeout=(10, 30),
     )
     r.raise_for_status()
-    time.sleep(.2)
+    time.sleep(0.2)
     return r.json()
 
 
@@ -820,15 +918,27 @@ def build_companyfacts_concept_groups(facts):
             groups["dividends"].append(concept_name)
         if any(token in name_lower for token in ("earnings", "income", "eps", "profit", "margin")):
             groups["earnings"].append(concept_name)
-        if any(token in name_lower for token in ("cashflow", "cash_flow", "operatingcashflow", "freecashflow", "fcf")):
+        if any(
+            token in name_lower
+            for token in ("cashflow", "cash_flow", "operatingcashflow", "freecashflow", "fcf")
+        ):
             groups["cash_flow"].append(concept_name)
-        if any(token in name_lower for token in ("asset", "liability", "equity", "balance", "shareholder")):
+        if any(
+            token in name_lower
+            for token in ("asset", "liability", "equity", "balance", "shareholder")
+        ):
             groups["balance_sheet"].append(concept_name)
-        if any(token in name_lower for token in ("debt", "borrow", "liability", "notespayable", "longtermdebt")):
+        if any(
+            token in name_lower
+            for token in ("debt", "borrow", "liability", "notespayable", "longtermdebt")
+        ):
             groups["debt"].append(concept_name)
         if "tax" in name_lower:
             groups["tax"].append(concept_name)
-        if any(token in name_lower for token in ("share", "shares", "stock", "commonstock", "treasurystock")):
+        if any(
+            token in name_lower
+            for token in ("share", "shares", "stock", "commonstock", "treasurystock")
+        ):
             groups["share_counts"].append(concept_name)
 
     return {
@@ -886,9 +996,7 @@ def extract_security_titles(companyfacts):
         for _unit, record in _fact_values(concept):
             title = record.get("val")
             if isinstance(title, str) and title.strip():
-                records.append(
-                    (str(record.get("filed") or record.get("end") or ""), title.strip())
-                )
+                records.append((str(record.get("filed") or record.get("end") or ""), title.strip()))
         records.sort(key=lambda item: item[0], reverse=True)
         for _filed, title in records:
             if title not in seen:
@@ -928,10 +1036,7 @@ def parse_dei_instrument_titles(instance_xml, known_symbols=None):
     except ET.ParseError:
         return pairs, titles
 
-    title_localnames = {
-        name.partition(":")[2]
-        for name in SECURITY_ATTRIBUTE_TAGS["security_name"]
-    }
+    title_localnames = {name.partition(":")[2] for name in SECURITY_ATTRIBUTE_TAGS["security_name"]}
 
     end_dates = {}
     for context in root.iter():
@@ -943,8 +1048,11 @@ def parse_dei_instrument_titles(instance_xml, known_symbols=None):
         for element in context.iter():
             # Cover dei facts sit under an *instant* context (the cover date);
             # duration facts would use endDate.
-            if _xml_localname(element.tag) in ("endDate", "instant") \
-                    and element.text and element.text.strip():
+            if (
+                _xml_localname(element.tag) in ("endDate", "instant")
+                and element.text
+                and element.text.strip()
+            ):
                 end_dates[context_id] = element.text.strip()
                 break
 
@@ -969,25 +1077,17 @@ def parse_dei_instrument_titles(instance_xml, known_symbols=None):
             seen_titles.add(value)
             titles.append(value)
 
-# Pair TradingSymbol <-> security title per period context (both are
+    # Pair TradingSymbol <-> security title per period context (both are
     # declared per registered class on the cover, in the same document order).
-    all_periods = {
-        end_date
-        for end_date, _value in symbol_rows
-        if end_date
-    } | {
-        end_date
-        for _localname, end_date, _value in title_rows
-        if end_date
+    all_periods = {end_date for end_date, _value in symbol_rows if end_date} | {
+        end_date for _localname, end_date, _value in title_rows if end_date
     }
     for period_end in sorted(all_periods, key=str, reverse=True):
-        period_symbols = [
-            value for end_date, value in symbol_rows if end_date == period_end
-        ]
+        period_symbols = [value for end_date, value in symbol_rows if end_date == period_end]
         period_titles = [
-            value for localname, end_date, value in title_rows
-            if end_date == period_end
-            and localname in title_localnames
+            value
+            for localname, end_date, value in title_rows
+            if end_date == period_end and localname in title_localnames
         ]
         clean_symbols = list(dict.fromkeys(period_symbols))
         clean_titles = list(dict.fromkeys(period_titles))
@@ -1051,7 +1151,9 @@ def classify_companyfacts(companyfacts):
     dividend_facts = []
 
     for concept_name, concept in us_gaap.items():
-        normalized_name = "".join(character for character in concept_name.lower() if character.isalnum())
+        normalized_name = "".join(
+            character for character in concept_name.lower() if character.isalnum()
+        )
         matching_types = [
             security_type
             for security_type, terms in SECURITY_FACT_RULES.items()
@@ -1069,12 +1171,14 @@ def classify_companyfacts(companyfacts):
                 except (TypeError, ValueError):
                     is_positive = False
                 if is_positive:
-                    positive_records.append({
-                        "unit": unit,
-                        "val": record.get("val"),
-                        "end": record.get("end"),
-                        "filed": record.get("filed"),
-                    })
+                    positive_records.append(
+                        {
+                            "unit": unit,
+                            "val": record.get("val"),
+                            "end": record.get("end"),
+                            "filed": record.get("filed"),
+                        }
+                    )
             if positive_records:
                 dividend_facts.append({"tag": concept_name, "records": positive_records[-5:]})
 
@@ -1153,7 +1257,8 @@ def extract_preferred_terms_from_companyfacts(companyfacts):
 
 
 def filing_url(cik, accession_no, primary_document):
-    return f"https://www.sec.gov/Archives/edgar/data/{int(cik)}/{accession_no.replace('-','')}/{primary_document}"
+    return f"https://www.sec.gov/Archives/edgar/data/{int(cik)}/{accession_no.replace('-', '')}/{primary_document}"
+
 
 def fetch_filing(url):
     r = SEC_SESSION.get(
@@ -1162,8 +1267,9 @@ def fetch_filing(url):
         timeout=(10, 30),
     )
     r.raise_for_status()
-    text=BeautifulSoup(r.text,"lxml").get_text(" ",strip=True)
+    text = BeautifulSoup(r.text, "lxml").get_text(" ", strip=True)
     return text, hashlib.sha256(text.encode()).hexdigest()
+
 
 def fetch_filing_xml(url):
     """Fetch a filing document as raw text (kept intact for XBRL parsing).
@@ -1221,15 +1327,17 @@ def fetch_archive_index(cik, accession_no):
     plain directory listing is the fallback and the legacy ``index.json`` the
     last resort. Returns ``[(description, name, type), ...]`` or ``[]``.
     """
-    archive = (f"https://www.sec.gov/Archives/edgar/data/{int(cik)}/"
-               f"{accession_no.replace('-', '')}")
+    archive = f"https://www.sec.gov/Archives/edgar/data/{int(cik)}/{accession_no.replace('-', '')}"
 
     for url in (f"{archive}/{accession_no}-index.htm", f"{archive}/"):
         try:
             response = SEC_SESSION.get(url, headers=HEADERS, timeout=(10, 30))
             response.raise_for_status()
-            items = (_parse_archive_index_html(response.text) if "index." in url
-                     else _parse_archive_directory_html(response.text))
+            items = (
+                _parse_archive_index_html(response.text)
+                if "index." in url
+                else _parse_archive_directory_html(response.text)
+            )
             if items:
                 return items
         except requests.HTTPError:
@@ -1238,13 +1346,17 @@ def fetch_archive_index(cik, accession_no):
             continue
 
     try:
-        index_response = SEC_SESSION.get(f"{archive}/index.json",
-                                         headers=HEADERS, timeout=(10, 30))
+        index_response = SEC_SESSION.get(f"{archive}/index.json", headers=HEADERS, timeout=(10, 30))
         index_response.raise_for_status()
         files = index_response.json() or {}
-        return [(str(item.get("description") or ""),
-                 str(item.get("name") or ""), str(item.get("type") or ""))
-                for item in files.get("directory", {}).get("item", []) or []]
+        return [
+            (
+                str(item.get("description") or ""),
+                str(item.get("name") or ""),
+                str(item.get("type") or ""),
+            )
+            for item in files.get("directory", {}).get("item", []) or []
+        ]
     except (requests.HTTPError, ValueError):
         return []
 
@@ -1276,8 +1388,7 @@ def filing_instance_url(cik, accession_no, primary_document):
         pass
 
     for _description, name, _item_type in fetch_archive_index(cik, accession_no):
-        if (name.endswith("_htm.xml") or name.endswith(".instance.xml")) \
-                and "/" not in name:
+        if (name.endswith("_htm.xml") or name.endswith(".instance.xml")) and "/" not in name:
             url = f"{archive}/{name}"
             try:
                 raw, _hash = fetch_filing_xml(url)
@@ -1287,52 +1398,53 @@ def filing_instance_url(cik, accession_no, primary_document):
 
     return None, None, None
 
-#def get_dividend_facts(cik):
+
+# def get_dividend_facts(cik):
 #    """
 #    Fetch dividend-related facts from SEC XBRL company facts API.
-    
+
 #    Args:
 #        cik (int or str): Central Index Key
-    
+
 #    Returns:
 #        dict: Company facts JSON with all reported values
-#    
+#
 #    Example:
 #        >>> facts = get_dividend_facts(320193)  # Apple
-#        >>> dividend_concepts = {k: v for k, v in facts.get('us-gaap', {}).items() 
+#        >>> dividend_concepts = {k: v for k, v in facts.get('us-gaap', {}).items()
 #        ...                     if 'dividend' in k.lower()}
 #    """
 #    return get_companyfacts(cik)
 
 
-#def get_companyfacts_concepts(cik):
- #   """
- #   Fetch the full SEC XBRL companyfacts payload and return all concept families for a company.
+# def get_companyfacts_concepts(cik):
+#   """
+#   Fetch the full SEC XBRL companyfacts payload and return all concept families for a company.
 
- #   This separates the raw SEC fetch from the normalized dividend loader and keeps the
- #   full company facts available for later use in earnings, cash-flow, balance-sheet,
- #   debt, tax, and share-count feature pipelines.
- #   """
- #   facts = get_companyfacts(cik)
- #   if not isinstance(facts, dict):
- #       return {
- #           "cik": str(int(cik)).zfill(10),
- #           "company": None,
- #           "all_concepts": [],
- #           "concept_groups": {
- #               "dividends": [],
- #               "earnings": [],
- #               "cash_flow": [],
- #               "balance_sheet": [],
- #               "debt": [],
- #               "tax": [],
- #               "share_counts": [],
- #           },
- #           "full_facts": facts,
- #       }
+#   This separates the raw SEC fetch from the normalized dividend loader and keeps the
+#   full company facts available for later use in earnings, cash-flow, balance-sheet,
+#   debt, tax, and share-count feature pipelines.
+#   """
+#   facts = get_companyfacts(cik)
+#   if not isinstance(facts, dict):
+#       return {
+#           "cik": str(int(cik)).zfill(10),
+#           "company": None,
+#           "all_concepts": [],
+#           "concept_groups": {
+#               "dividends": [],
+#               "earnings": [],
+#               "cash_flow": [],
+#               "balance_sheet": [],
+#               "debt": [],
+#               "tax": [],
+#               "share_counts": [],
+#           },
+#           "full_facts": facts,
+#       }
 
- #   us_gaap = facts.get("us-gaap", {})
- #   concept_names = sorted(us_gaap.keys())
+#   us_gaap = facts.get("us-gaap", {})
+#   concept_names = sorted(us_gaap.keys())
 
 #    groups = {
 #        "dividends": [],
@@ -1371,7 +1483,7 @@ def filing_instance_url(cik, accession_no, primary_document):
 #    }
 
 
-#def get_companyfacts_for_dividend_securities(tickers=None, limit=None):
+# def get_companyfacts_for_dividend_securities(tickers=None, limit=None):
 #    """
 #    Fetch the full SEC XBRL payload for securities that have dividend-related concepts.
 
@@ -1409,7 +1521,7 @@ def filing_instance_url(cik, accession_no, primary_document):
 #    return results
 
 
-#def get_companyfacts_flow(cik):
+# def get_companyfacts_flow(cik):
 #    """
 #    Fetch the full SEC companyfacts payload for one company and summarize all concepts.
 
@@ -1434,7 +1546,7 @@ def filing_instance_url(cik, accession_no, primary_document):
 #    }
 
 #
-#def companyfacts_flow_for_ticker(ticker):
+# def companyfacts_flow_for_ticker(ticker):
 #    """Resolve a ticker to CIK and inspect the SEC companyfacts payload for dividend concepts."""
 #    cik = ticker_to_cik(ticker)
 #    if cik is None:
@@ -1442,19 +1554,19 @@ def filing_instance_url(cik, accession_no, primary_document):
 #    return get_companyfacts_flow(cik)
 #
 #
-#def extract_dividend_data(cik, facts_json=None):
+# def extract_dividend_data(cik, facts_json=None):
 #    """
 #    Extract dividend payments and declarations from XBRL company facts.
-#    
+#
 #    Args:
 #        cik (int or str): Central Index Key
 #        facts_json (dict): Pre-fetched company facts (optional, will fetch if not provided)
-#    
+#
 #    Returns:
 #        list: List of dividend records with keys:
 #            - ex_dividend_date, declaration_date, record_date, payment_date
 #            - amount, frequency, currency
-#    
+#
 #    Searches for concepts:
 #        - CommonStockDividendsPaid
 #        - CommonStockDividendsPerShareDeclared
@@ -1467,10 +1579,10 @@ def filing_instance_url(cik, accession_no, primary_document):
 #        except Exception as e:
 #            print(f"Error fetching facts for CIK {cik}: {e}")
 #            return []
-#    
+#
 #    dividends = []
 #    us_gaap = facts_json.get("us-gaap", {})
-#    
+#
 #    # Key dividend concepts to extract
 #    dividend_concepts = [
 #        "CommonStockDividendsPaid",
@@ -1480,23 +1592,23 @@ def filing_instance_url(cik, accession_no, primary_document):
 #        "DividendsCommonStockCash",
 #        "StockIssuedDuringPeriodValueCommonStockDividends",
 #    ]
-#    
+#
 #    for concept_name in dividend_concepts:
 #        if concept_name not in us_gaap:
 #            continue
-#        
+#
 #        concept_data = us_gaap[concept_name]
 #        units = concept_data.get("units", {})
-#        
+#
 #        # Extract values from each unit (typically USD or shares)
 #        for unit_type, unit_values in units.items():
 #            if not isinstance(unit_values, list):
 #                unit_values = [unit_values]
-#            
+#
 #            for record in unit_values:
 #                if not isinstance(record, dict):
 #                    continue
-#                
+#
 #                # Parse the record
 #                dividend_record = {
 #                    "cik": str(int(cik)).zfill(10),
@@ -1512,21 +1624,21 @@ def filing_instance_url(cik, accession_no, primary_document):
 #                    "form": record.get("form", ""),
 #                    "accn": record.get("accn", ""),
 #                }
-#                
+#
 #                # Only include records with positive amounts
 #                if dividend_record["amount"] > 0:
 #                    dividends.append(dividend_record)
-#    
+#
 #    return dividends
 #
-#def get_all_dividend_data(limit=None, sample_tickers=None):
+# def get_all_dividend_data(limit=None, sample_tickers=None):
 #    """
 #    Fetch dividend data for companies from SEC XBRL API.
-#    
+#
 #    Args:
 #        limit (int): Maximum number of companies to process (for testing)
 #        sample_tickers (list): List of specific tickers to fetch (e.g., ['AAPL', 'MSFT'])
-#    
+#
 #    Returns:
 #        list: Flattened list of all dividend records from all companies
 #    """
@@ -1543,18 +1655,18 @@ def filing_instance_url(cik, accession_no, primary_document):
 #        ciks = [entry.get("cik_str") for entry in tickers_data.values()]
 #        if limit:
 #            ciks = ciks[:limit]
-#    
+#
 #    all_dividends = []
 #    errors = 0
-#    
+#
 #    for idx, cik in enumerate(ciks):
 #        try:
 #            dividends = extract_dividend_data(cik)
 #            all_dividends.extend(dividends)
-#            
+#
 #            if (idx + 1) % 100 == 0:
 #                print(f"Fetched dividend data for {idx + 1} companies ({len(all_dividends)} records)...")
-#        
+#
 #        except Exception as e:
 #            errors += 1
 #            if errors <= 5:
@@ -1562,6 +1674,6 @@ def filing_instance_url(cik, accession_no, primary_document):
 #            if errors > 10:
 #                print("Too many errors, stopping dividend fetch.")
 #                break
-#    
+#
 #    return all_dividends
 #

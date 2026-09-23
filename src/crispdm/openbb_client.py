@@ -2,23 +2,25 @@ import re
 
 import pandas as pd
 from openbb import obb
+
 from .config import settings
+
 
 def _df(response):
     if hasattr(response, "to_dataframe"):
         return response.to_dataframe()
     if hasattr(response, "results"):
         vals = response.results
-        return pd.DataFrame([
-            x.model_dump() if hasattr(x, "model_dump") else x for x in vals
-        ])
+        return pd.DataFrame([x.model_dump() if hasattr(x, "model_dump") else x for x in vals])
     return pd.DataFrame(response)
+
 
 def _norm_key(key):
     """Normalize profile keys to snake_case (e.g. exDividendDate -> ex_dividend_date)."""
     key = str(key).replace(" ", "_")
     key = re.sub(r"(?<!^)(?=[A-Z])", "_", key)
     return re.sub(r"_+", "_", key).lower().strip("_")
+
 
 def historical_prices(symbol, start_date, end_date=None):
     kw = {"symbol": symbol, "start_date": start_date}
@@ -27,6 +29,7 @@ def historical_prices(symbol, start_date, end_date=None):
     if settings.openbb_provider:
         kw["provider"] = settings.openbb_provider
     return _df(obb.equity.price.historical(**kw))
+
 
 def dividends(symbol, start_date, end_date=None):
     kw = {"symbol": symbol, "start_date": start_date}

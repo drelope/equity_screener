@@ -5,15 +5,9 @@ to SECURITY_TYPE_VOCABULARY. Every classifier that writes reference rows must
 emit only members of that vocabulary, and sql/schema.sql + scripts/init_db.py
 must keep their CHECK lists in sync with the tuple.
 """
+
 from pathlib import Path
 
-import pytest
-
-from src.crispdm.xbrl_tags import (
-    SECURITY_TYPE_ALIASES,
-    SECURITY_TYPE_VOCABULARY,
-    normalize_security_type,
-)
 from src.crispdm.sec_client import (
     SymbolSuffix,
     classify_companyfacts,
@@ -24,6 +18,11 @@ from src.crispdm.sec_client import (
     parse_dei_instrument_titles,
     security_type_for_instrument,
     symbol_suffix_evidence,
+)
+from src.crispdm.xbrl_tags import (
+    SECURITY_TYPE_ALIASES,
+    SECURITY_TYPE_VOCABULARY,
+    normalize_security_type,
 )
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -39,13 +38,30 @@ def _check_literal():
 
 def test_normalize_returns_canonical_members_only():
     samples = [
-        "preferred stock", "Preferred Stock", "PreferredStock",
-        "preferred", "common_stock", "Common Stock", "COMMON_STOCK",
-        "government debt", "GovernmentDebt", "corporate bond", "debenture",
-        "other_debt_and_equity", "other debt and equity", "other_debt",
-        "option", "future", "derivative", "equity", "debt", "other_equity",
-        "other", "Series C Preferred Stock (8.625% Fixed-to-Floating)",
-        "", None,
+        "preferred stock",
+        "Preferred Stock",
+        "PreferredStock",
+        "preferred",
+        "common_stock",
+        "Common Stock",
+        "COMMON_STOCK",
+        "government debt",
+        "GovernmentDebt",
+        "corporate bond",
+        "debenture",
+        "other_debt_and_equity",
+        "other debt and equity",
+        "other_debt",
+        "option",
+        "future",
+        "derivative",
+        "equity",
+        "debt",
+        "other_equity",
+        "other",
+        "Series C Preferred Stock (8.625% Fixed-to-Floating)",
+        "",
+        None,
     ]
     for sample in samples:
         assert normalize_security_type(sample) in SECURITY_TYPE_VOCABULARY, sample
@@ -59,9 +75,17 @@ def test_alias_targets_are_canonical():
 
 def test_classify_security_type_emits_canonical_only():
     titles = [
-        "Apple Common Stock", "AT&T Preferred Shares", "Call Option",
-        "Treasury Bill", "Series A Unit", "Loan Participation Certificate",
-        "Warrant", "Bond", "Equity", "Unknown Instrument", "",
+        "Apple Common Stock",
+        "AT&T Preferred Shares",
+        "Call Option",
+        "Treasury Bill",
+        "Series A Unit",
+        "Loan Participation Certificate",
+        "Warrant",
+        "Bond",
+        "Equity",
+        "Unknown Instrument",
+        "",
     ]
     for title in titles:
         result = classify_security_type(title)
@@ -70,12 +94,33 @@ def test_classify_security_type_emits_canonical_only():
 
 def test_classify_companyfacts_emits_canonical_only():
     cases = [
-        {"full_facts": {"us-gaap": {"CommonStockSharesOutstanding": {
-            "units": {"shares": [{"val": 1, "end": "2026-01-01"}]}}}}},
-        {"full_facts": {"us-gaap": {"PreferredStockSharesOutstanding": {
-            "units": {"shares": [{"val": 1, "end": "2026-01-01"}]}}}}},
-        {"full_facts": {"us-gaap": {"WarrantsAndRightsOutstanding": {
-            "units": {"shares": [{"val": 1, "end": "2026-01-01"}]}}}}},
+        {
+            "full_facts": {
+                "us-gaap": {
+                    "CommonStockSharesOutstanding": {
+                        "units": {"shares": [{"val": 1, "end": "2026-01-01"}]}
+                    }
+                }
+            }
+        },
+        {
+            "full_facts": {
+                "us-gaap": {
+                    "PreferredStockSharesOutstanding": {
+                        "units": {"shares": [{"val": 1, "end": "2026-01-01"}]}
+                    }
+                }
+            }
+        },
+        {
+            "full_facts": {
+                "us-gaap": {
+                    "WarrantsAndRightsOutstanding": {
+                        "units": {"shares": [{"val": 1, "end": "2026-01-01"}]}
+                    }
+                }
+            }
+        },
         {"full_facts": {"us-gaap": {}}},
     ]
     for facts in cases:
@@ -87,12 +132,8 @@ def test_schema_check_list_matches_vocabulary():
     schema_text = (PROJECT_ROOT / "sql" / "schema.sql").read_text()
     start = schema_text.index("CHECK (security_type IN (")
     end = schema_text.index("))", start)
-    block = schema_text[start + len("CHECK (security_type IN ("):end]
-    schema_vocab = {
-        " ".join(v.strip().strip("'").split())
-        for v in block.split(",")
-        if v.strip()
-    }
+    block = schema_text[start + len("CHECK (security_type IN (") : end]
+    schema_vocab = {" ".join(v.strip().strip("'").split()) for v in block.split(",") if v.strip()}
     assert schema_vocab == set(SECURITY_TYPE_VOCABULARY)
 
 
@@ -100,12 +141,8 @@ def test_init_db_check_list_matches_vocabulary():
     init_text = (PROJECT_ROOT / "scripts" / "init_db.py").read_text()
     start = init_text.index("CHECK (security_type IN (")
     end = init_text.index("))", start)
-    block = init_text[start + len("CHECK (security_type IN ("):end]
-    init_vocab = {
-        " ".join(v.strip().strip("'").split())
-        for v in block.split(",")
-        if v.strip()
-    }
+    block = init_text[start + len("CHECK (security_type IN (") : end]
+    init_vocab = {" ".join(v.strip().strip("'").split()) for v in block.split(",") if v.strip()}
     assert init_vocab == set(SECURITY_TYPE_VOCABULARY)
 
 
@@ -118,9 +155,7 @@ def _classification(bag=SUPERSET_BAG, dividend_facts=None, security_titles=None)
     return {
         "security_types": list(bag),
         "security_titles": list(security_titles or []),
-        "dividend_facts": [
-            {"tag": tag} for tag in (dividend_facts or [])
-        ],
+        "dividend_facts": [{"tag": tag} for tag in (dividend_facts or [])],
         "dividend": bool(dividend_facts),
         "status": "available",
     }
@@ -202,10 +237,7 @@ def test_security_type_for_instrument_prefers_dei_titles():
         security_type_for_instrument("WCC-A", "WESCO International Inc", preferred)
         == "preferred stock"
     )
-    assert (
-        security_type_for_instrument("FOO", "Some Issuer", classification)
-        == "common_stock"
-    )
+    assert security_type_for_instrument("FOO", "Some Issuer", classification) == "common_stock"
 
 
 #: Parallel tickers[]/exchanges[] snapshot modeled on the SEC submissions payload.
@@ -233,33 +265,43 @@ def _instrument(symbol, name, classification=None, dei=None, submissions=None):
 
 
 def test_symbol_suffix_evidence_parses_series_letter():
-    assert symbol_suffix_evidence("ACR-PC") == SymbolSuffix(
-        "preferred stock", "PC", "C"
-    )
-    assert symbol_suffix_evidence("BRK-B") == SymbolSuffix(
-        "common_stock", "B", "B"
-    )
+    assert symbol_suffix_evidence("ACR-PC") == SymbolSuffix("preferred stock", "PC", "C")
+    assert symbol_suffix_evidence("BRK-B") == SymbolSuffix("common_stock", "B", "B")
     assert symbol_suffix_evidence("SHLD-W").security_type == "derivative"
     assert symbol_suffix_evidence("ACR-U").security_type == "other_debt_and_equity"
     assert symbol_suffix_evidence("LFMDP") is None
 
 
 def test_classify_instrument_acres_trio():
-    assert _instrument("ACR-PC", "ACRES Commercial Realty Corp.",
-                       dei=ACRES_TITLES, submissions=ACRES_SUBMISSIONS).security_type \
+    assert (
+        _instrument(
+            "ACR-PC",
+            "ACRES Commercial Realty Corp.",
+            dei=ACRES_TITLES,
+            submissions=ACRES_SUBMISSIONS,
+        ).security_type
         == "preferred stock"
-    assert _instrument("ACR-PD", "ACRES Commercial Realty Corp.",
-                       dei=ACRES_TITLES, submissions=ACRES_SUBMISSIONS).security_type \
+    )
+    assert (
+        _instrument(
+            "ACR-PD",
+            "ACRES Commercial Realty Corp.",
+            dei=ACRES_TITLES,
+            submissions=ACRES_SUBMISSIONS,
+        ).security_type
         == "preferred stock"
-    decided = _instrument("ACR", "ACRES Commercial Realty Corp.",
-                          dei=ACRES_TITLES, submissions=ACRES_SUBMISSIONS)
+    )
+    decided = _instrument(
+        "ACR", "ACRES Commercial Realty Corp.", dei=ACRES_TITLES, submissions=ACRES_SUBMISSIONS
+    )
     assert decided.security_type == "common_stock"
     assert decided.source == "submissions_leading"
 
 
 def test_classify_instrument_series_bound_title_overrides_dash_common():
     decided = _instrument(
-        "WCC-A", "WESCO International Inc",
+        "WCC-A",
+        "WESCO International Inc",
         dei=["Series A Perpetual Preferred Stock"],
     )
     assert decided.security_type == "preferred stock"
@@ -280,34 +322,37 @@ ACRES_COVER_TITLES = [
 
 
 def test_classify_instrument_cover_titles_bind_preferred_series():
-    decided_pc = _instrument("ACR-PC", "ACRES Commercial Realty Corp.",
-                             dei=ACRES_COVER_TITLES)
-    decided_pd = _instrument("ACR-PD", "ACRES Commercial Realty Corp.",
-                             dei=ACRES_COVER_TITLES)
+    decided_pc = _instrument("ACR-PC", "ACRES Commercial Realty Corp.", dei=ACRES_COVER_TITLES)
+    decided_pd = _instrument("ACR-PD", "ACRES Commercial Realty Corp.", dei=ACRES_COVER_TITLES)
     assert decided_pc.security_type == "preferred stock"
-    assert decided_pc.matched_title == \
-        "8.625% Fixed-to-Floating Series C Cumulative Redeemable Preferred Stock"
+    assert (
+        decided_pc.matched_title
+        == "8.625% Fixed-to-Floating Series C Cumulative Redeemable Preferred Stock"
+    )
     assert decided_pd.security_type == "preferred stock"
-    assert decided_pd.matched_title == \
-        "7.875% Series D Cumulative Redeemable Preferred Stock"
+    assert decided_pd.matched_title == "7.875% Series D Cumulative Redeemable Preferred Stock"
     bare_type_match = match_security_title(ACRES_COVER_TITLES, "preferred stock")
-    assert bare_type_match == \
-        "8.625% Fixed-to-Floating Series C Cumulative Redeemable Preferred Stock"
+    assert (
+        bare_type_match == "8.625% Fixed-to-Floating Series C Cumulative Redeemable Preferred Stock"
+    )
     assert decided_pd.matched_title != bare_type_match
 
 
 def test_classify_instrument_brk_class_letter_binds_title():
-    decided = _instrument("BRK-B", "BERKSHIRE HATHAWAY INC",
-                          dei=["Class A", "Class B"],
-                          submissions={"order": ["BRK-A", "BRK-B"],
-                                       "exchange_by_symbol": {}})
+    decided = _instrument(
+        "BRK-B",
+        "BERKSHIRE HATHAWAY INC",
+        dei=["Class A", "Class B"],
+        submissions={"order": ["BRK-A", "BRK-B"], "exchange_by_symbol": {}},
+    )
     assert decided.security_type == "common_stock"
     assert decided.matched_title == "Class B"
 
 
 def test_classify_instrument_submissions_mismatch_noted():
-    decided = _instrument("NOPE", "Some Issuer Inc",
-                          dei=["Common Stock"], submissions=ACRES_SUBMISSIONS)
+    decided = _instrument(
+        "NOPE", "Some Issuer Inc", dei=["Common Stock"], submissions=ACRES_SUBMISSIONS
+    )
     signals = [item["signal"] for item in decided.evidence]
     assert "submissions_mismatch" in signals
     assert decided.submissions["anchor_ok"] is True
@@ -316,7 +361,8 @@ def test_classify_instrument_submissions_mismatch_noted():
 
 def test_classify_instrument_dashless_preferred_via_dei_title():
     decided = _instrument(
-        "LFMDP", "LifeMD, Inc.",
+        "LFMDP",
+        "LifeMD, Inc.",
         dei=["Series A Cumulative Perpetual Preferred Stock"],
     )
     assert decided.security_type == "preferred stock"
@@ -324,25 +370,22 @@ def test_classify_instrument_dashless_preferred_via_dei_title():
 
 
 def test_classify_instrument_dividend_facts_preferred():
-    classification = _classification(
-        dividend_facts=["PreferredStockDividendsPerShare"]
-    )
-    decided = _instrument("LFMDP", "Lazard Growth Acquisition Corp",
-                          classification=classification)
+    classification = _classification(dividend_facts=["PreferredStockDividendsPerShare"])
+    decided = _instrument("LFMDP", "Lazard Growth Acquisition Corp", classification=classification)
     assert decided.security_type == "preferred stock"
     assert decided.source == "dividend_facts"
 
 
 def test_classify_instrument_unavailable_is_other():
-    decided = _instrument("ZZZZ", "Nowhere Inc",
-                          classification={"status": "unavailable"})
+    decided = _instrument("ZZZZ", "Nowhere Inc", classification={"status": "unavailable"})
     assert decided.security_type == "other"
     assert decided.source == "unavailable"
 
 
 def test_classify_instrument_conflict_recorded():
     decided = _instrument(
-        "XYZ-B", "Strange Issuer",
+        "XYZ-B",
+        "Strange Issuer",
         dei=["Series A Perpetual Preferred Stock"],
     )
     assert decided.conflicts
@@ -356,8 +399,9 @@ def test_classify_instrument_bag_fallback_common():
 
 
 def test_classify_instrument_evidence_is_ordered():
-    decided = _instrument("ACR", "ACRES Commercial Realty Corp.",
-                          dei=ACRES_TITLES, submissions=ACRES_SUBMISSIONS)
+    decided = _instrument(
+        "ACR", "ACRES Commercial Realty Corp.", dei=ACRES_TITLES, submissions=ACRES_SUBMISSIONS
+    )
     phases = [item["phase"] for item in decided.evidence]
     assert phases == sorted(phases)
 
@@ -393,27 +437,35 @@ def _dei_instance_xml(pairs, period="2024-12-31"):
     return header + "\n".join(contexts) + "\n" + "\n".join(facts) + "\n</xbrli:xbrl>"
 
 
-ACRES_INSTANCE = _dei_instance_xml([
-    ("ACR", "Common Stock, par value $0.01 per share"),
-    ("ACR-PC", "8.50% Series C Cumulative Redeemable Preferred Stock, "
-                "par value $0.01 per share"),
-    ("ACR-PD", "8.25% Series D Cumulative Redeemable Preferred Stock, "
-                "par value $0.01 per share"),
-])
-
-AAPL_INSTANCE = _dei_instance_xml(
-    [("AAPL", "Common Stock, $0.00001 par value per share")]
+ACRES_INSTANCE = _dei_instance_xml(
+    [
+        ("ACR", "Common Stock, par value $0.01 per share"),
+        (
+            "ACR-PC",
+            "8.50% Series C Cumulative Redeemable Preferred Stock, par value $0.01 per share",
+        ),
+        (
+            "ACR-PD",
+            "8.25% Series D Cumulative Redeemable Preferred Stock, par value $0.01 per share",
+        ),
+    ]
 )
+
+AAPL_INSTANCE = _dei_instance_xml([("AAPL", "Common Stock, $0.00001 par value per share")])
 
 
 def test_parse_dei_instrument_titles_pairs_multi_class():
     pairs, titles = parse_dei_instrument_titles(ACRES_INSTANCE)
     assert pairs == [
         ("ACR", "Common Stock, par value $0.01 per share"),
-        ("ACR-PC", "8.50% Series C Cumulative Redeemable Preferred Stock, "
-                   "par value $0.01 per share"),
-        ("ACR-PD", "8.25% Series D Cumulative Redeemable Preferred Stock, "
-                   "par value $0.01 per share"),
+        (
+            "ACR-PC",
+            "8.50% Series C Cumulative Redeemable Preferred Stock, par value $0.01 per share",
+        ),
+        (
+            "ACR-PD",
+            "8.25% Series D Cumulative Redeemable Preferred Stock, par value $0.01 per share",
+        ),
     ]
     assert "Common Stock, par value $0.01 per share" in titles
     assert len(titles) == 3
@@ -426,10 +478,12 @@ def test_parse_dei_instrument_titles_single_class_pairs():
 
 
 def test_parse_dei_instrument_titles_unpaired_keeps_titles():
-    xml = _dei_instance_xml([
-        ("AA", "Common Stock"),
-        ("AA-B", "Common Stock"),
-    ])
+    xml = _dei_instance_xml(
+        [
+            ("AA", "Common Stock"),
+            ("AA-B", "Common Stock"),
+        ]
+    )
     pairs, titles = parse_dei_instrument_titles(xml)
     assert pairs == []
     assert titles == ["Common Stock"]
@@ -449,7 +503,8 @@ def test_parse_dei_instrument_titles_known_symbols_fallback():
 
 def test_classify_instrument_exact_dei_title_hits_common():
     decided = _instrument(
-        "AAPL", "APPLE INC",
+        "AAPL",
+        "APPLE INC",
         classification=_classification(dividend_facts=["CommonStockDividendsPerShareDeclared"]),
         dei=["Common Stock, $0.00001 par value per share"],
         submissions={"order": ["AAPL"], "exchange_by_symbol": {"AAPL": "Nasdaq"}},
@@ -462,12 +517,13 @@ def test_classify_instrument_exact_dei_title_hits_common():
 
 def test_classify_instrument_exact_dei_title_series_binds_suffix():
     decided = _instrument(
-        "ACR-PC", "ACRES Commercial Realty Corp.",
-        dei=["8.50% Series C Cumulative Redeemable Preferred Stock, "
-             "par value $0.01 per share"],
+        "ACR-PC",
+        "ACRES Commercial Realty Corp.",
+        dei=["8.50% Series C Cumulative Redeemable Preferred Stock, par value $0.01 per share"],
     )
     assert decided.security_type == "preferred stock"
     # Phase 1 (suffix) still decides, but the exact cover title is attached.
     assert decided.source == "symbol_suffix"
-    assert decided.matched_title == ("8.50% Series C Cumulative Redeemable "
-                                     "Preferred Stock, par value $0.01 per share")
+    assert decided.matched_title == (
+        "8.50% Series C Cumulative Redeemable Preferred Stock, par value $0.01 per share"
+    )

@@ -17,6 +17,7 @@ Usage:
     python -m scripts.sec_xbrl_dividend_tags --preferred-only --csv out.csv
     python -m scripts.sec_xbrl_dividend_tags --max 100 --lookback-days 1096
 """
+
 import argparse
 import json
 import sys
@@ -99,16 +100,18 @@ def extract_dividend_facts(facts, lookback_days=548):
                     if cutoff is not None and end_as_date < cutoff:
                         continue
 
-                    evidence.append({
-                        "xbrl_tag": full_tag,
-                        "security_type_from_tag": inferred_type,
-                        "value": numeric_value,
-                        "unit": unit_name,
-                        "period_end": end_date,
-                        "filed": filed_date,
-                        "form": observation.get("form"),
-                        "fp": observation.get("fp"),
-                    })
+                    evidence.append(
+                        {
+                            "xbrl_tag": full_tag,
+                            "security_type_from_tag": inferred_type,
+                            "value": numeric_value,
+                            "unit": unit_name,
+                            "period_end": end_date,
+                            "filed": filed_date,
+                            "form": observation.get("form"),
+                            "fp": observation.get("fp"),
+                        }
+                    )
 
     return evidence
 
@@ -175,10 +178,7 @@ def analyze_security(row, lookback_days=548):
             return None
 
         cutoff = date.today() - timedelta(days=lookback_days)
-        active = any(
-            (_parse_date(ev.get("period_end")) or date.min) >= cutoff
-            for ev in evidence
-        )
+        active = any((_parse_date(ev.get("period_end")) or date.min) >= cutoff for ev in evidence)
 
         latest = sorted(
             evidence,
@@ -244,11 +244,7 @@ def load_companyfacts_rows(tickers=None, preferred_only=False, max_companies=Non
     unchanged.
     """
     clauses = ["s.active = TRUE"]
-    params = {
-        "needed_tags": sorted(
-            {tag.split(":", 1)[1] for tag in DIVIDEND_TAGS}
-        )
-    }
+    params = {"needed_tags": sorted({tag.split(":", 1)[1] for tag in DIVIDEND_TAGS})}
     if tickers:
         clauses.append("UPPER(s.ticker) = ANY(:tickers)")
         params["tickers"] = [ticker.upper() for ticker in tickers]
@@ -261,7 +257,9 @@ def load_companyfacts_rows(tickers=None, preferred_only=False, max_companies=Non
         params["max_companies"] = max_companies
 
     with engine.connect() as conn:
-        rows = conn.execute(text(f"""
+        rows = (
+            conn.execute(
+                text(f"""
             SELECT DISTINCT ON (s.ticker)
                    s.security_id, s.ticker,
                    COALESCE(NULLIF(s.cik, ''), slim.cik) AS cik,
@@ -292,11 +290,18 @@ def load_companyfacts_rows(tickers=None, preferred_only=False, max_companies=Non
             WHERE {where}
             ORDER BY s.ticker, s.updated_at DESC NULLS LAST
             {limit_sql}
-        """), params).mappings().all()
+        """),
+                params,
+            )
+            .mappings()
+            .all()
+        )
     return rows
 
 
-def build_preferred_dividend_dataset(tickers=None, preferred_only=False, max_companies=None, lookback_days=548):
+def build_preferred_dividend_dataset(
+    tickers=None, preferred_only=False, max_companies=None, lookback_days=548
+):
     """
     Build one unique row per security from raw.companyfacts.
 
@@ -340,7 +345,8 @@ def persist_preferred_dividend_dataset(df, replace=False):
     ]
 
     with engine.begin() as conn:
-        conn.execute(text("""
+        conn.execute(
+            text("""
             INSERT INTO preferred.dividend_snapshot
                 (security_id, ticker, cik, preferred_flag, pays_dividend,
                  active, dividend_evidence_tag, latest_dividend_period_end,
@@ -359,33 +365,56 @@ def persist_preferred_dividend_dataset(df, replace=False):
                 latest_dividend_filed = EXCLUDED.latest_dividend_filed,
                 latest_dividend_form = EXCLUDED.latest_dividend_form,
                 retrieved_at = now()
-        """), rows)
+        """),
+            rows,
+        )
         if replace:
-            conn.execute(text(
-                "DELETE FROM preferred.dividend_snapshot "
-                "WHERE NOT (security_id = ANY(CAST(:ids AS uuid[])))"
-            ), {"ids": df["security_id"].tolist()})
+            conn.execute(
+                text(
+                    "DELETE FROM preferred.dividend_snapshot "
+                    "WHERE NOT (security_id = ANY(CAST(:ids AS uuid[])))"
+                ),
+                {"ids": df["security_id"].tolist()},
+            )
     return len(rows)
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--tickers", help="Comma-separated tickers, e.g. 'ACR-PD,ACR-PC'")
-    parser.add_argument("--preferred-only", dest="preferred_only", action="store_true", default=True,
-                        help="Only analyze securities whose reference type is preferred stock (default)")
-    parser.add_argument("--all-types", dest="preferred_only", action="store_false",
-                        help="Also analyze non-preferred securities")
-    parser.add_argument("--max", type=int, default=None,
-                        help="Limit to the first N securities (for testing)")
-    parser.add_argument("--lookback-days", type=int, default=548,
-                        help="Ignore dividend evidence older than this many days")
-    parser.add_argument("--csv", default=None,
-                        help="Write the dataset to this CSV path (default: none)")
-    parser.add_argument("--no-db", action="store_true",
-                        help="Do not write to preferred.dividend_snapshot")
+    parser.add_argument(
+        "--preferred-only",
+        dest="preferred_only",
+        action="store_true",
+        default=True,
+        help="Only analyze securities whose reference type is preferred stock (default)",
+    )
+    parser.add_argument(
+        "--all-types",
+        dest="preferred_only",
+        action="store_false",
+        help="Also analyze non-preferred securities",
+    )
+    parser.add_argument(
+        "--max", type=int, default=None, help="Limit to the first N securities (for testing)"
+    )
+    parser.add_argument(
+        "--lookback-days",
+        type=int,
+        default=548,
+        help="Ignore dividend evidence older than this many days",
+    )
+    parser.add_argument(
+        "--csv", default=None, help="Write the dataset to this CSV path (default: none)"
+    )
+    parser.add_argument(
+        "--no-db", action="store_true", help="Do not write to preferred.dividend_snapshot"
+    )
     args = parser.parse_args()
 
-    tickers = [t.strip().upper() for t in args.tickers.split(",") if t.strip()] if args.tickers else None
+    tickers = (
+        [t.strip().upper() for t in args.tickers.split(",") if t.strip()] if args.tickers else None
+    )
 
     df = build_preferred_dividend_dataset(
         tickers=tickers,
@@ -404,8 +433,10 @@ def main():
     if not args.no_db:
         full_sweep = tickers is None and args.max is None
         persisted = persist_preferred_dividend_dataset(df, replace=full_sweep)
-        print(f"Upserted {persisted} rows into preferred.dividend_snapshot" +
-              (" (full sweep: removed stale securities)" if full_sweep else ""))
+        print(
+            f"Upserted {persisted} rows into preferred.dividend_snapshot"
+            + (" (full sweep: removed stale securities)" if full_sweep else "")
+        )
     return 0
 
 

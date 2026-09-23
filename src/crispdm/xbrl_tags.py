@@ -332,8 +332,6 @@ PERIODIC_FINANCIAL_CONCEPT_TAGS: dict[str, tuple[str, ...]] = {
 #: slice the stored companyfacts payload down to the tags the extractor reads.
 PERIODIC_FINANCIAL_CONCEPTS: tuple[str, ...] = tuple(
     dict.fromkeys(
-        concept
-        for concepts in PERIODIC_FINANCIAL_CONCEPT_TAGS.values()
-        for concept in concepts
+        concept for concepts in PERIODIC_FINANCIAL_CONCEPT_TAGS.values() for concept in concepts
     )
 )

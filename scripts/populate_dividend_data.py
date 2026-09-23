@@ -37,11 +37,12 @@ Examples:
     python -m scripts.populate_dividend_data --limit 10 --sources sec
     python -m scripts.populate_dividend_data --sources openbb --tickers ACR-PC,ACR-PD
 """
+
 import argparse
 import json
 import re
 import sys
-from datetime import datetime, date, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 
 import pandas as pd
@@ -51,13 +52,13 @@ from sqlalchemy import text
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from scripts.populate_companyfacts import upsert_companyfacts
 from src.crispdm.db import engine
 from src.crispdm.sec_client import (
     build_companyfacts_concept_groups,
-    get_companyfacts,
     get_company_tickers,
+    get_companyfacts,
 )
-from scripts.populate_companyfacts import upsert_companyfacts
 
 try:
     from src.crispdm.openbb_client import dividends as openbb_dividends
@@ -126,9 +127,9 @@ def _companyfacts_for_dividends(cik, conn):
     the same SEC JSON a second time.
     """
     cik = str(int(cik)).zfill(10)
-    stored = conn.execute(text(
-        "SELECT raw_payload FROM raw.companyfacts WHERE cik = :cik"
-    ), {"cik": cik}).scalar()
+    stored = conn.execute(
+        text("SELECT raw_payload FROM raw.companyfacts WHERE cik = :cik"), {"cik": cik}
+    ).scalar()
     if stored is not None:
         return stored
 
@@ -184,20 +185,22 @@ def extract_sec_dividend_data(cik, conn=None):
                     if amount <= 0:
                         continue
                     end = record.get("end")
-                    rows.append({
-                        "cik": str(int(cik)).zfill(10),
-                        "concept": concept_name,
-                        "ex_dividend_date": end,
-                        "declaration_date": None,
-                        "record_date": None,
-                        "payment_date": end,
-                        "amount": amount,
-                        "frequency": "Annual",
-                        "currency": "USD" if "USD" in unit_type else unit_type,
-                        "filed_date": record.get("filed"),
-                        "form": record.get("form", ""),
-                        "accn": record.get("accn", ""),
-                    })
+                    rows.append(
+                        {
+                            "cik": str(int(cik)).zfill(10),
+                            "concept": concept_name,
+                            "ex_dividend_date": end,
+                            "declaration_date": None,
+                            "record_date": None,
+                            "payment_date": end,
+                            "amount": amount,
+                            "frequency": "Annual",
+                            "currency": "USD" if "USD" in unit_type else unit_type,
+                            "filed_date": record.get("filed"),
+                            "form": record.get("form", ""),
+                            "accn": record.get("accn", ""),
+                        }
+                    )
     except Exception as exc:
         print(f"Error extracting company facts for CIK {cik}: {exc}")
     finally:
@@ -212,19 +215,21 @@ def normalize_sec_dividend_rows(ticker, sec_rows):
         amount = safe_float(row.get("amount"))
         if amount is None or amount <= 0:
             continue
-        normalized.append({
-            "ticker": ticker,
-            "provider": "SEC_XBRL",
-            "cik": row.get("cik"),
-            "ex_dividend_date": parse_date(row.get("ex_dividend_date")),
-            "declaration_date": parse_date(row.get("declaration_date")),
-            "record_date": parse_date(row.get("record_date")),
-            "payment_date": parse_date(row.get("payment_date")),
-            "amount": amount,
-            "adjusted_amount": safe_float(row.get("adjusted_amount")),
-            "frequency": (row.get("frequency") or "Annual").strip() or "Annual",
-            "currency": (row.get("currency") or "USD").upper(),
-        })
+        normalized.append(
+            {
+                "ticker": ticker,
+                "provider": "SEC_XBRL",
+                "cik": row.get("cik"),
+                "ex_dividend_date": parse_date(row.get("ex_dividend_date")),
+                "declaration_date": parse_date(row.get("declaration_date")),
+                "record_date": parse_date(row.get("record_date")),
+                "payment_date": parse_date(row.get("payment_date")),
+                "amount": amount,
+                "adjusted_amount": safe_float(row.get("adjusted_amount")),
+                "frequency": (row.get("frequency") or "Annual").strip() or "Annual",
+                "currency": (row.get("currency") or "USD").upper(),
+            }
+        )
     return normalized
 
 
@@ -247,26 +252,27 @@ def normalize_openbb_dividend_rows(ticker, data_frame):
         if amount is None or amount <= 0:
             continue
 
-        normalized.append({
-            "ticker": ticker,
-            "provider": "OPENBB",
-            "ex_dividend_date": parse_date(
-                row.get("ex_dividend_date")
-                or row.get("date")
-                or row.get("payment_date")
-            ),
-            "declaration_date": parse_date(row.get("declaration_date")),
-            "record_date": parse_date(row.get("record_date")),
-            "payment_date": parse_date(row.get("payment_date") or row.get("date")),
-            "amount": amount,
-            "adjusted_amount": (
-                safe_float(row.get("adjusted_amount"))
-                or safe_float(row.get("adj_amount"))
-                or safe_float(row.get("adjusted_dividend"))
-            ),
-            "frequency": (row.get("frequency") or row.get("period") or "Annual").strip() or "Annual",
-            "currency": (row.get("currency") or "USD").upper(),
-        })
+        normalized.append(
+            {
+                "ticker": ticker,
+                "provider": "OPENBB",
+                "ex_dividend_date": parse_date(
+                    row.get("ex_dividend_date") or row.get("date") or row.get("payment_date")
+                ),
+                "declaration_date": parse_date(row.get("declaration_date")),
+                "record_date": parse_date(row.get("record_date")),
+                "payment_date": parse_date(row.get("payment_date") or row.get("date")),
+                "amount": amount,
+                "adjusted_amount": (
+                    safe_float(row.get("adjusted_amount"))
+                    or safe_float(row.get("adj_amount"))
+                    or safe_float(row.get("adjusted_dividend"))
+                ),
+                "frequency": (row.get("frequency") or row.get("period") or "Annual").strip()
+                or "Annual",
+                "currency": (row.get("currency") or "USD").upper(),
+            }
+        )
 
     return normalized
 
@@ -328,12 +334,19 @@ def get_target_dividend_tickers(conn, tickers=None, dividend_only=True, limit=No
     if dividend_only:
         filters.append("s.dividend = TRUE")
     where = " AND ".join(filters)
-    rows = conn.execute(text(f"""
+    rows = (
+        conn.execute(
+            text(f"""
         SELECT DISTINCT ON (s.ticker) s.ticker
         FROM reference.securities s
         WHERE {where}
         ORDER BY s.ticker, s.updated_at DESC NULLS LAST
-    """), params).mappings().all()
+    """),
+            params,
+        )
+        .mappings()
+        .all()
+    )
     universe = [row["ticker"] for row in rows]
 
     if tickers:
@@ -383,12 +396,14 @@ def fetch_dividend_data(tickers=None, limit=None, sources=None, start_date=None,
 
 def load_security_ids(conn):
     """Load active ticker and CIK mappings once for the entire database write."""
-    rows = conn.execute(text("""
+    rows = conn.execute(
+        text("""
         SELECT DISTINCT ON (s.ticker) s.ticker, s.security_id, s.cik
         FROM reference.securities s
         WHERE s.active = TRUE
         ORDER BY s.ticker, s.updated_at DESC NULLS LAST, s.security_id
-    """)).mappings()
+    """)
+    ).mappings()
     by_ticker = {}
     by_cik = {}
     for row in rows:
@@ -400,27 +415,30 @@ def load_security_ids(conn):
 
 def get_latest_dividend_rate(conn, security_id):
     """Return the most recent positive dividend amount for a security."""
-    return conn.execute(text("""
+    return conn.execute(
+        text("""
         SELECT amount
         FROM raw.dividend_data
         WHERE security_id = :security_id AND amount > 0
         ORDER BY ex_dividend_date DESC NULLS LAST, payment_date DESC NULLS LAST
         LIMIT 1
-    """), {"security_id": security_id}).scalar()
+    """),
+        {"security_id": security_id},
+    ).scalar()
 
 
 SERIES_RE = re.compile(r"\bSeries\b.*", re.IGNORECASE | re.DOTALL)
 PERCENT_RE = re.compile(r"(\d+(?:\.\d+)?)\s*%")
-CALL_DATE_RE = re.compile(
-    r"(\d{1,2})[/-](\d{1,2})[/-](\d{2,4})|(\d{2,4})-(\d{1,2})-(\d{1,2})"
-)
+CALL_DATE_RE = re.compile(r"(\d{1,2})[/-](\d{1,2})[/-](\d{2,4})|(\d{2,4})-(\d{1,2})-(\d{1,2})")
 LIQUIDATION_RE = re.compile(
     r"(?:liquidation\s+(?:preference|value)|par\s+value)"
     r"(?:\s+of)?\s*\$?\s*([\d,]+(?:\.\d+)?)",
     re.IGNORECASE,
 )
 FIXED_TO_FLOATING_RE = re.compile(r"fixed[- ]to[- ]floating|\bfixed/floating\b", re.IGNORECASE)
-COUPON_FLOATING_RE = re.compile(r"\bfloating\b|\bfloat(?:ing)? rate\b|\bvariable\b|\badjustable\b", re.IGNORECASE)
+COUPON_FLOATING_RE = re.compile(
+    r"\bfloating\b|\bfloat(?:ing)? rate\b|\bvariable\b|\badjustable\b", re.IGNORECASE
+)
 FLOATING_SPREAD_RE = re.compile(
     r"(?:\+|plus)\s*([\d,]+(?:\.\d+)?)\s*%",
     re.IGNORECASE,
@@ -541,8 +559,7 @@ def fetch_ticker_profile(ticker, security_name=None, security_type=None):
     """
     data = openbb_stock_summary(ticker) if openbb_stock_summary is not None else {}
     text_source = " ".join(
-        part for part in (security_name, data.get("short_name"), data.get("long_name"))
-        if part
+        part for part in (security_name, data.get("short_name"), data.get("long_name")) if part
     )
 
     coupon_rate = parse_percent(security_name) or parse_percent(data.get("short_name"))
@@ -587,7 +604,9 @@ def get_dividend_paying_securities(conn, limit=None, tickers=None):
     limit_sql = " LIMIT :limit" if limit else ""
     if limit is not None:
         params["limit"] = limit
-    return conn.execute(text(f"""
+    return (
+        conn.execute(
+            text(f"""
         SELECT DISTINCT ON (ct.ticker)
                s.security_id, ct.ticker AS ticker, s.security_name, s.security_type
         FROM raw.company_ticker ct
@@ -596,7 +615,12 @@ def get_dividend_paying_securities(conn, limit=None, tickers=None):
         WHERE {where}
         ORDER BY ct.ticker, s.updated_at DESC NULLS LAST, s.security_id
         {limit_sql}
-    """), params).mappings().all()
+    """),
+            params,
+        )
+        .mappings()
+        .all()
+    )
 
 
 def populate_ticker_profiles(conn, limit=None, tickers=None):
@@ -618,7 +642,8 @@ def populate_ticker_profiles(conn, limit=None, tickers=None):
                 security_name=candidate["security_name"],
                 security_type=candidate["security_type"],
             )
-            conn.execute(text("""
+            conn.execute(
+                text("""
                 INSERT INTO raw.ticker_profile
                     (security_id, ticker, provider, sector, industry, security_type,
                      coupon_type, coupon_rate, fixed_period_end, floating_spread,
@@ -642,8 +667,11 @@ def populate_ticker_profiles(conn, limit=None, tickers=None):
                     liquidation_preference = EXCLUDED.liquidation_preference,
                     raw_payload = EXCLUDED.raw_payload,
                     retrieved_at = now()
-            """), {**candidate, **summary})
-            conn.execute(text("""
+            """),
+                {**candidate, **summary},
+            )
+            conn.execute(
+                text("""
                 UPDATE reference.securities
                 SET coupon_rate = COALESCE(:coupon_rate, coupon_rate),
                     liquidation_preference = COALESCE(
@@ -652,7 +680,9 @@ def populate_ticker_profiles(conn, limit=None, tickers=None):
                     call_date = COALESCE(:call_date, call_date),
                     updated_at = now()
                 WHERE security_id = :security_id
-            """), {**candidate, **summary})
+            """),
+                {**candidate, **summary},
+            )
             inserted += 1
         except Exception as exc:
             errors += 1
@@ -676,7 +706,9 @@ def _populate_preferred_terms(conn, limit=None):
     """
     limit_sql = " LIMIT :limit" if limit else ""
     params = {"limit": limit} if limit else {}
-    candidates = conn.execute(text(f"""
+    candidates = (
+        conn.execute(
+            text(f"""
         SELECT DISTINCT s.security_id, s.ticker, s.security_name
         FROM reference.securities s
         JOIN raw.dividend_data d ON d.security_id = s.security_id
@@ -688,25 +720,33 @@ def _populate_preferred_terms(conn, limit=None):
                     ))
         ORDER BY s.ticker
         {limit_sql}
-    """), params).mappings().all()
+    """),
+            params,
+        )
+        .mappings()
+        .all()
+    )
 
     inserted = existing = errors = 0
     for candidate in candidates:
         try:
             series = (candidate["security_name"] or "")[:127]
             dividend_rate = get_latest_dividend_rate(conn, candidate["security_id"])
-            result = conn.execute(text("""
+            result = conn.execute(
+                text("""
                 INSERT INTO preferred.security_terms
                     (security_id, preferred_series, dividend_rate,
                      confidence_score, reviewed_by, reviewed_at)
                 VALUES (:security_id, :series, :dividend_rate, 0.3,
                         'auto_dividend_screen', now())
                 ON CONFLICT (security_id) DO NOTHING
-            """), {
-                "security_id": candidate["security_id"],
-                "series": series,
-                "dividend_rate": dividend_rate,
-            })
+            """),
+                {
+                    "security_id": candidate["security_id"],
+                    "series": series,
+                    "dividend_rate": dividend_rate,
+                },
+            )
             if result.rowcount:
                 inserted += 1
             else:
@@ -727,7 +767,16 @@ def _populate_preferred_terms(conn, limit=None):
 populate_preferred_terms = _populate_preferred_terms
 
 
-def populate_dividend_data(limit=None, tickers=None, sources=None, start_date=None, end_date=None, populate_preferred_terms=True, populate_profiles=True, include_non_dividend=False):
+def populate_dividend_data(
+    limit=None,
+    tickers=None,
+    sources=None,
+    start_date=None,
+    end_date=None,
+    populate_preferred_terms=True,
+    populate_profiles=True,
+    include_non_dividend=False,
+):
     """Populate raw.dividend_data and raw.ticker_profile with normalized dividends and stock summaries."""
     normalized_sources = set((sources or ["sec", "openbb"]))
     print(f"Fetching dividend data from: {', '.join(sorted(normalized_sources))}")
@@ -740,7 +789,9 @@ def populate_dividend_data(limit=None, tickers=None, sources=None, start_date=No
             limit=limit,
         )
     if include_non_dividend is False and not dividend_tickers:
-        print("No dividend-flagged securities found. Run populate_raw_tables and populate_reference_tables first.")
+        print(
+            "No dividend-flagged securities found. Run populate_raw_tables and populate_reference_tables first."
+        )
         return 0
 
     dividend_data = fetch_dividend_data(
@@ -776,22 +827,25 @@ def populate_dividend_data(limit=None, tickers=None, sources=None, start_date=No
                     print(f"  Warning: No security found for ticker {ticker or 'unknown'}")
                 continue
 
-            insert_rows.append({
-                "sec_id": security_id,
-                "ex_date": ex_div_date,
-                "decl_date": div.get("declaration_date"),
-                "rec_date": div.get("record_date"),
-                "pay_date": div.get("payment_date"),
-                "amount": float(div.get("amount", 0)),
-                "adjusted_amount": div.get("adjusted_amount"),
-                "frequency": div.get("frequency", "Annual"),
-                "currency": div.get("currency", "USD"),
-                "provider": div.get("provider", "SEC_XBRL"),
-                "retrieved_at": datetime.now(timezone.utc),
-            })
+            insert_rows.append(
+                {
+                    "sec_id": security_id,
+                    "ex_date": ex_div_date,
+                    "decl_date": div.get("declaration_date"),
+                    "rec_date": div.get("record_date"),
+                    "pay_date": div.get("payment_date"),
+                    "amount": float(div.get("amount", 0)),
+                    "adjusted_amount": div.get("adjusted_amount"),
+                    "frequency": div.get("frequency", "Annual"),
+                    "currency": div.get("currency", "USD"),
+                    "provider": div.get("provider", "SEC_XBRL"),
+                    "retrieved_at": datetime.now(timezone.utc),
+                }
+            )
 
         if insert_rows:
-            conn.execute(text("""
+            conn.execute(
+                text("""
                 INSERT INTO raw.dividend_data
                 (security_id, ex_dividend_date, declaration_date, record_date,
                  payment_date, amount, adjusted_amount, frequency, currency, provider, retrieved_at)
@@ -806,7 +860,9 @@ def populate_dividend_data(limit=None, tickers=None, sources=None, start_date=No
                     frequency = EXCLUDED.frequency,
                     currency = EXCLUDED.currency,
                     retrieved_at = EXCLUDED.retrieved_at
-            """), insert_rows)
+            """),
+                insert_rows,
+            )
             inserted = len(insert_rows)
 
     print("\n✓ Populated raw.dividend_data:")
@@ -827,17 +883,36 @@ def populate_dividend_data(limit=None, tickers=None, sources=None, start_date=No
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--limit", type=int, default=None, help="Limit to first N companies for testing")
-    parser.add_argument("--tickers", type=str, default=None, help="Comma-separated tickers, e.g. 'AAPL,MSFT,JNJ'")
-    parser.add_argument("--sources", type=str, default="all", choices=["all", "sec", "openbb"], help="Data source(s) to use")
+    parser.add_argument(
+        "--limit", type=int, default=None, help="Limit to first N companies for testing"
+    )
+    parser.add_argument(
+        "--tickers", type=str, default=None, help="Comma-separated tickers, e.g. 'AAPL,MSFT,JNJ'"
+    )
+    parser.add_argument(
+        "--sources",
+        type=str,
+        default="all",
+        choices=["all", "sec", "openbb"],
+        help="Data source(s) to use",
+    )
     parser.add_argument("--start-date", type=str, default="2000-01-01", help="OpenBB start date")
     parser.add_argument("--end-date", type=str, default=None, help="OpenBB end date")
-    parser.add_argument("--skip-preferred-terms", action="store_true",
-                        help="Do not populate preferred.security_terms after loading dividends")
-    parser.add_argument("--skip-profiles", action="store_true",
-                        help="Do not fetch/store raw.ticker_profile summaries for dividend payers")
-    parser.add_argument("--include-non-dividend", action="store_true",
-                        help="Also fetch dividend events for securities not flagged as dividend payers")
+    parser.add_argument(
+        "--skip-preferred-terms",
+        action="store_true",
+        help="Do not populate preferred.security_terms after loading dividends",
+    )
+    parser.add_argument(
+        "--skip-profiles",
+        action="store_true",
+        help="Do not fetch/store raw.ticker_profile summaries for dividend payers",
+    )
+    parser.add_argument(
+        "--include-non-dividend",
+        action="store_true",
+        help="Also fetch dividend events for securities not flagged as dividend payers",
+    )
 
     args = parser.parse_args()
 
@@ -863,6 +938,7 @@ def main():
     except Exception as exc:
         print(f"\n✗ Error populating dividend data: {exc}", file=sys.stderr)
         import traceback
+
         traceback.print_exc()
         return 1
 

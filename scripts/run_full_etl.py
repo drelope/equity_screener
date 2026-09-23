@@ -21,6 +21,7 @@ Usage:
     python -m scripts.run_full_etl --skip-companyfacts --skip-sec-documents
     python -m scripts.run_full_etl --skip-derived
 """
+
 import argparse
 import subprocess
 import sys
@@ -47,23 +48,43 @@ def run_module(name, args, skip=False):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--limit", type=int, default=None,
-                        help="Limit reference/dividend/companyfacts ingestion to first N (testing)")
-    parser.add_argument("--tickers", type=str, default=None,
-                        help="Comma-separated tickers; restricted to dividend payers unless --all")
-    parser.add_argument("--sources", type=str, default="all", choices=["all", "sec", "openbb"],
-                        help="Sources for the dividend-data stage")
+    parser.add_argument(
+        "--limit",
+        type=int,
+        default=None,
+        help="Limit reference/dividend/companyfacts ingestion to first N (testing)",
+    )
+    parser.add_argument(
+        "--tickers",
+        type=str,
+        default=None,
+        help="Comma-separated tickers; restricted to dividend payers unless --all",
+    )
+    parser.add_argument(
+        "--sources",
+        type=str,
+        default="all",
+        choices=["all", "sec", "openbb"],
+        help="Sources for the dividend-data stage",
+    )
     parser.add_argument("--skip-reference", action="store_true", help="Skip stage 1")
     parser.add_argument("--skip-raw", action="store_true", help="Skip stage 0")
     parser.add_argument("--skip-dividend-data", action="store_true", help="Skip stage 2")
     parser.add_argument("--skip-companyfacts", action="store_true", help="Skip stage 3")
     parser.add_argument("--skip-sec-documents", action="store_true", help="Skip stage 4")
-    parser.add_argument("--skip-derived", action="store_true",
-                        help="Do not run offline derived stages 5 (fundamentals) and 6 (audit)")
-    parser.add_argument("--skip-profiles", action="store_true",
-                        help="Do not refresh raw.ticker_profile in stage 2")
-    parser.add_argument("--all", action="store_true",
-                        help="Include non-dividend securities in stages 2-4 (not recommended)")
+    parser.add_argument(
+        "--skip-derived",
+        action="store_true",
+        help="Do not run offline derived stages 5 (fundamentals) and 6 (audit)",
+    )
+    parser.add_argument(
+        "--skip-profiles", action="store_true", help="Do not refresh raw.ticker_profile in stage 2"
+    )
+    parser.add_argument(
+        "--all",
+        action="store_true",
+        help="Include non-dividend securities in stages 2-4 (not recommended)",
+    )
     args = parser.parse_args()
 
     base = []
@@ -106,7 +127,9 @@ def main():
 
     if args.all:
         sec_documents_args += ["--all"]
-    ok = run_module("scripts.populate_sec_documents", sec_documents_args, skip=args.skip_sec_documents)
+    ok = run_module(
+        "scripts.populate_sec_documents", sec_documents_args, skip=args.skip_sec_documents
+    )
     if not ok:
         return 1
 

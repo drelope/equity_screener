@@ -17,6 +17,7 @@ Usage:
     python -m scripts.populate_audit --securities "0001090872"
     python -m scripts.populate_audit --as-of 2026-09-21
 """
+
 import argparse
 import sys
 from datetime import date
@@ -44,12 +45,13 @@ def source_lineage(conn, as_of):
     Re-runs replace the prior provenance view for the backfilled fields rather
     than appending duplicate rows.
     """
-    params = {"as_of": as_of}
-    conn.execute(text("""
+    conn.execute(
+        text("""
         DELETE FROM audit.source_lineage
         WHERE field_name IN ('security_type', 'coupon_rate',
                              'liquidation_preference', 'issuer_name', 'dividend')
-    """))
+    """)
+    )
     sql = """
         INSERT INTO audit.source_lineage
             (security_id, field_name, field_value, source, source_document,
@@ -102,10 +104,13 @@ def source_lineage(conn, as_of):
         WHERE :as_of IS NOT NULL
         ORDER BY security_id, field_name
     """
-    result = conn.execute(text(sql), {
-        "as_of": as_of,
-        "reliability": PROVIDER_RELIABILITY.get("SEC_XBRL", 0.7),
-    })
+    result = conn.execute(
+        text(sql),
+        {
+            "as_of": as_of,
+            "reliability": PROVIDER_RELIABILITY.get("SEC_XBRL", 0.7),
+        },
+    )
     return result.rowcount
 
 
@@ -176,10 +181,13 @@ def data_quality(conn, as_of):
             quality_score = EXCLUDED.quality_score,
             status = EXCLUDED.status
     """
-    result = conn.execute(text(sql), {
-        "as_of": as_of,
-        "reliability": PROVIDER_RELIABILITY.get("SEC_XBRL", 0.7),
-    })
+    result = conn.execute(
+        text(sql),
+        {
+            "as_of": as_of,
+            "reliability": PROVIDER_RELIABILITY.get("SEC_XBRL", 0.7),
+        },
+    )
     return result.rowcount
 
 
@@ -197,8 +205,9 @@ def populate_audit(as_of=None):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--as-of", type=date.fromisoformat, default=None,
-                        help="Scoring date (default: today)")
+    parser.add_argument(
+        "--as-of", type=date.fromisoformat, default=None, help="Scoring date (default: today)"
+    )
     args = parser.parse_args()
 
     try:

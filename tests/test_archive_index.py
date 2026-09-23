@@ -1,15 +1,11 @@
 """Tests for SEC archive index parsing and Certificate-of-Designation exhibit
 resolution (the live-leg of the contract-clause pipeline)."""
 
-import pytest
-
+from scripts.populate_contract_terms import find_certificate_exhibit
 from src.crispdm.sec_client import (
     _parse_archive_directory_html,
     _parse_archive_index_html,
 )
-
-from scripts.populate_contract_terms import find_certificate_exhibit
-
 
 INDEX_HTML = """<!DOCTYPE html><html><head><title>Filing Detail</title></head>
 <body>
@@ -59,41 +55,53 @@ def test_parse_archive_directory_html():
 
 
 def test_find_certificate_exhibit_prefers_ex3_1(monkeypatch):
-    archive = [("8-K", "acr-20260831.htm", "iXBRL 8-K"),
-               ("EX-3.1", "ex31_seriesd.htm", "EX-3.1"),
-               ("EX-3.2", "ex32_amendment.htm", "EX-3.2"),
-               ("EX-5.1", "ex51.htm", "EX-5.1"),
-               ("GRAPHIC", "img00001.jpg", "GRAPHIC")]
-    monkeypatch.setattr("scripts.populate_contract_terms.fetch_archive_index",
-                        lambda cik, acc: archive)
+    archive = [
+        ("8-K", "acr-20260831.htm", "iXBRL 8-K"),
+        ("EX-3.1", "ex31_seriesd.htm", "EX-3.1"),
+        ("EX-3.2", "ex32_amendment.htm", "EX-3.2"),
+        ("EX-5.1", "ex51.htm", "EX-5.1"),
+        ("GRAPHIC", "img00001.jpg", "GRAPHIC"),
+    ]
+    monkeypatch.setattr(
+        "scripts.populate_contract_terms.fetch_archive_index", lambda cik, acc: archive
+    )
     result = find_certificate_exhibit("0001332551", "0001193125-26-382349")
     assert result["name"] == "ex31_seriesd.htm"
     assert result["exhibit_type"] == "EX-3.1"
 
 
 def test_find_certificate_exhibit_description_certificate_name(monkeypatch):
-    archive = [("8-K", "primary.htm", "iXBRL 8-K"),
-               ("Certificate of Designation of Series D Preferred Stock",
-                "exhibits232.htm", "EXHIBIT 3.2"),
-               ("EX-1.1", "underwriting.htm", "EX-1.1")]
-    monkeypatch.setattr("scripts.populate_contract_terms.fetch_archive_index",
-                        lambda cik, acc: archive)
+    archive = [
+        ("8-K", "primary.htm", "iXBRL 8-K"),
+        (
+            "Certificate of Designation of Series D Preferred Stock",
+            "exhibits232.htm",
+            "EXHIBIT 3.2",
+        ),
+        ("EX-1.1", "underwriting.htm", "EX-1.1"),
+    ]
+    monkeypatch.setattr(
+        "scripts.populate_contract_terms.fetch_archive_index", lambda cik, acc: archive
+    )
     result = find_certificate_exhibit("0001332551", "0001193125-26-382349")
     assert result["name"] == "exhibits232.htm"
 
 
 def test_find_certificate_exhibit_none(monkeypatch):
-    monkeypatch.setattr("scripts.populate_contract_terms.fetch_archive_index",
-                        lambda cik, acc: [
-                            ("8-K", "primary.htm", "iXBRL 8-K"),
-                            ("EX-1.1", "a.htm", "EX-1.1"),
-                            ("GRAPHIC", "img.jpg", "GRAPHIC"),
-                        ])
+    monkeypatch.setattr(
+        "scripts.populate_contract_terms.fetch_archive_index",
+        lambda cik, acc: [
+            ("8-K", "primary.htm", "iXBRL 8-K"),
+            ("EX-1.1", "a.htm", "EX-1.1"),
+            ("GRAPHIC", "img.jpg", "GRAPHIC"),
+        ],
+    )
     assert find_certificate_exhibit("0001332551", "0001193125-26-382349") is None
 
 
 def test_find_certificate_exhibit_fetch_error(monkeypatch):
     def boom(_cik, _acc):
         raise RuntimeError("network down")
+
     monkeypatch.setattr("scripts.populate_contract_terms.fetch_archive_index", boom)
     assert find_certificate_exhibit("0001332551", "0001193125-26-382349") is None

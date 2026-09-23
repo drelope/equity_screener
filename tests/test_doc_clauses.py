@@ -8,8 +8,9 @@ Fixtures mirror the real documents:
 Extractors must surface the *per-share* amount, never the aggregate offering
 size ("$1,500,000,000").
 """
-from decimal import Decimal
+
 import re
+from decimal import Decimal
 
 from src.crispdm.doc_clauses import (
     extract_liquidation_preference,
@@ -109,15 +110,14 @@ def test_prospectus_aggregate_amount_not_mistaken_for_per_share():
 
 
 def test_no_liquidation_clause_returns_none():
-    assert extract_liquidation_preference(
-        "This filing contains no liquidation language."
-    ) is None
+    assert extract_liquidation_preference("This filing contains no liquidation language.") is None
 
 
 def test_no_redemption_clause_returns_none():
-    assert extract_redemption(
-        "No optional redemption features are described in this document."
-    ) is None
+    assert (
+        extract_redemption("No optional redemption features are described in this document.")
+        is None
+    )
 
 
 def test_html_to_text_flattens_whitespace():
@@ -127,8 +127,10 @@ def test_html_to_text_flattens_whitespace():
 
 
 def test_liquidation_preference_defined_term_after_amount():
-    document = ("An amount equal to $50.00 per share on any liquidation "
-                "(" + 'the "Liquidation Preference"' + ").")
+    document = (
+        "An amount equal to $50.00 per share on any liquidation "
+        "(" + 'the "Liquidation Preference"' + ")."
+    )
     result = extract_liquidation_preference(document)
     assert result["amount"] == Decimal("50.00")
 
@@ -162,10 +164,14 @@ TWO_SERIES_PROSPECTUS = (
 
 
 def test_series_scoped_liquidation_picks_own_series():
-    each = (extract_liquidation_preference(TWO_SERIES_PROSPECTUS,
-                                           re.compile(r"\bseries\s*[-.]?\s*A\b", re.I)),
-            extract_liquidation_preference(TWO_SERIES_PROSPECTUS,
-                                           re.compile(r"\bseries\s*[-.]?\s*B\b", re.I)))
+    each = (
+        extract_liquidation_preference(
+            TWO_SERIES_PROSPECTUS, re.compile(r"\bseries\s*[-.]?\s*A\b", re.I)
+        ),
+        extract_liquidation_preference(
+            TWO_SERIES_PROSPECTUS, re.compile(r"\bseries\s*[-.]?\s*B\b", re.I)
+        ),
+    )
     assert each[0] is not None and each[1] is not None
     assert each[0]["amount"] == each[1]["amount"] == Decimal("25.00")
     assert "Series A" in each[0]["snippet"]
@@ -173,10 +179,12 @@ def test_series_scoped_liquidation_picks_own_series():
 
 
 def test_series_scoped_redemption_picks_own_series():
-    series_a = extract_redemption(TWO_SERIES_PROSPECTUS,
-                                  re.compile(r"\bseries\s*[-.]?\s*A\b", re.I))
-    series_b = extract_redemption(TWO_SERIES_PROSPECTUS,
-                                  re.compile(r"\bseries\s*[-.]?\s*B\b", re.I))
+    series_a = extract_redemption(
+        TWO_SERIES_PROSPECTUS, re.compile(r"\bseries\s*[-.]?\s*A\b", re.I)
+    )
+    series_b = extract_redemption(
+        TWO_SERIES_PROSPECTUS, re.compile(r"\bseries\s*[-.]?\s*B\b", re.I)
+    )
     assert series_a is not None and series_b is not None
     assert series_a["call_price"] == Decimal("25.00")
     assert series_a["first_call_date"] is None

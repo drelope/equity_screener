@@ -13,8 +13,9 @@ def test_facts_returns_stable_not_found_for_unavailable_sec_dataset(monkeypatch)
         "https://data.sec.gov/api/xbrl/companyfacts/CIK0001776073.json",
     )
 
-    with patch("api.main._company_entry", return_value={"cik_str": 1776073}), patch(
-        "api.main.sec_client.get_companyfacts", side_effect=error
+    with (
+        patch("api.main._company_entry", return_value={"cik_str": 1776073}),
+        patch("api.main.sec_client.get_companyfacts", side_effect=error),
     ):
         response = TestClient(app).get(
             "/facts/TEST",

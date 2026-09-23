@@ -15,6 +15,7 @@ Usage:
     python -m scripts.populate_fundamentals --tickers ACR-PD,ACR-PC
     python -m scripts.populate_fundamentals --limit 25
 """
+
 import argparse
 import sys
 from pathlib import Path
@@ -47,7 +48,9 @@ def load_candidates(conn, tickers=None, limit=None):
     if limit is not None:
         params["limit"] = limit
 
-    return conn.execute(text(f"""
+    return (
+        conn.execute(
+            text(f"""
         SELECT s.security_id, s.ticker, s.cik,
                facts.us_gaap AS us_gaap
         FROM raw.companyfacts cf
@@ -62,14 +65,20 @@ def load_candidates(conn, tickers=None, limit=None):
         WHERE {where}
         ORDER BY s.security_id
         {limit_sql}
-    """), params).mappings().all()
+    """),
+            params,
+        )
+        .mappings()
+        .all()
+    )
 
 
 def upsert_periodic_financials(conn, security_id, rows):
     """Upsert one fundamentals.periodic_financials row per fiscal period."""
     inserted = 0
     for row in rows:
-        result = conn.execute(text("""
+        result = conn.execute(
+            text("""
             INSERT INTO fundamentals.periodic_financials
                 (security_id, period_end, fiscal_year, fiscal_period,
                  revenue, operating_income, net_income, eps, cash, assets,
@@ -96,25 +105,27 @@ def upsert_periodic_financials(conn, security_id, rows):
                 free_cash_flow = EXCLUDED.free_cash_flow,
                 source = EXCLUDED.source,
                 retrieved_at = now()
-        """), {
-            "security_id": security_id,
-            "period_end": row.get("period_end"),
-            "fiscal_year": row.get("fiscal_year"),
-            "fiscal_period": row.get("fiscal_period") or "FY",
-            "revenue": row.get("revenue"),
-            "operating_income": row.get("operating_income"),
-            "net_income": row.get("net_income"),
-            "eps": row.get("eps"),
-            "cash": row.get("cash"),
-            "assets": row.get("assets"),
-            "liabilities": row.get("liabilities"),
-            "debt": row.get("debt"),
-            "equity": row.get("equity"),
-            "operating_cash_flow": row.get("operating_cash_flow"),
-            "capital_expenditures": row.get("capital_expenditures"),
-            "free_cash_flow": row.get("free_cash_flow"),
-            "source": row.get("source") or "SEC_XBRL",
-        })
+        """),
+            {
+                "security_id": security_id,
+                "period_end": row.get("period_end"),
+                "fiscal_year": row.get("fiscal_year"),
+                "fiscal_period": row.get("fiscal_period") or "FY",
+                "revenue": row.get("revenue"),
+                "operating_income": row.get("operating_income"),
+                "net_income": row.get("net_income"),
+                "eps": row.get("eps"),
+                "cash": row.get("cash"),
+                "assets": row.get("assets"),
+                "liabilities": row.get("liabilities"),
+                "debt": row.get("debt"),
+                "equity": row.get("equity"),
+                "operating_cash_flow": row.get("operating_cash_flow"),
+                "capital_expenditures": row.get("capital_expenditures"),
+                "free_cash_flow": row.get("free_cash_flow"),
+                "source": row.get("source") or "SEC_XBRL",
+            },
+        )
         inserted += max(result.rowcount, 0)
     return inserted
 
@@ -147,11 +158,14 @@ def populate_fundamentals(tickers=None, limit=None):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--tickers", help="Comma-separated tickers, e.g. 'AAPL,MSFT'")
-    parser.add_argument("--limit", type=int, default=None,
-                        help="Limit to the first N securities (for testing)")
+    parser.add_argument(
+        "--limit", type=int, default=None, help="Limit to the first N securities (for testing)"
+    )
     args = parser.parse_args()
 
-    tickers = [t.strip().upper() for t in args.tickers.split(",") if t.strip()] if args.tickers else None
+    tickers = (
+        [t.strip().upper() for t in args.tickers.split(",") if t.strip()] if args.tickers else None
+    )
 
     try:
         populate_fundamentals(tickers=tickers, limit=args.limit)

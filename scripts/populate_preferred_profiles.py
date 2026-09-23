@@ -18,6 +18,7 @@ Usage:
     python -m scripts.populate_preferred_profiles --tickers ACR-PD,ACR-PC
     python -m scripts.populate_preferred_profiles --limit 100
 """
+
 import argparse
 import json
 import sys
@@ -28,6 +29,7 @@ from sqlalchemy import text
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from scripts.populate_dividend_data import extract_security_series
 from src.crispdm.db import engine
 from src.crispdm.sec_client import (
     PREFERRED_COUPON_CONCEPTS,
@@ -35,14 +37,11 @@ from src.crispdm.sec_client import (
     PREFERRED_PAR_VALUE_CONCEPTS,
     extract_preferred_terms_from_companyfacts,
 )
-from scripts.populate_dividend_data import extract_security_series
 
 DEFAULT_PROVIDER = "SEC_XBRL"
 
 PREFERRED_CONCEPTS = (
-    PREFERRED_COUPON_CONCEPTS
-    + PREFERRED_LIQUIDATION_CONCEPTS
-    + PREFERRED_PAR_VALUE_CONCEPTS
+    PREFERRED_COUPON_CONCEPTS + PREFERRED_LIQUIDATION_CONCEPTS + PREFERRED_PAR_VALUE_CONCEPTS
 )
 
 
@@ -76,7 +75,9 @@ def load_preferred_candidates(conn, tickers=None, limit=None):
     if limit is not None:
         params["limit"] = limit
 
-    return conn.execute(text(f"""
+    return (
+        conn.execute(
+            text(f"""
         SELECT DISTINCT ON (s.ticker)
                s.security_id, s.ticker, s.cik, s.security_name, s.security_type,
                slim.raw_payload
@@ -106,7 +107,12 @@ def load_preferred_candidates(conn, tickers=None, limit=None):
         WHERE {where}
         ORDER BY s.ticker, s.updated_at DESC NULLS LAST, s.security_id
         {limit_sql}
-    """), params).mappings().all()
+    """),
+            params,
+        )
+        .mappings()
+        .all()
+    )
 
 
 def upsert_preferred_profile(conn, candidate):
@@ -135,7 +141,8 @@ def upsert_preferred_profile(conn, candidate):
         "liquidation_preference": sec_terms.get("liquidation_preference"),
         "raw_payload": json.dumps({"sec_xbrl": sec_terms}),
     }
-    result = conn.execute(text("""
+    result = conn.execute(
+        text("""
         INSERT INTO raw.ticker_profile
             (security_id, ticker, provider, sector, industry, security_type,
              coupon_type, coupon_rate, fixed_period_end, floating_spread,
@@ -159,8 +166,11 @@ def upsert_preferred_profile(conn, candidate):
             liquidation_preference = EXCLUDED.liquidation_preference,
             raw_payload = EXCLUDED.raw_payload,
             retrieved_at = now()
-            """), row).rowcount
-    conn.execute(text("""
+            """),
+        row,
+    ).rowcount
+    conn.execute(
+        text("""
         UPDATE reference.securities
         SET coupon_rate = COALESCE(:coupon_rate, coupon_rate),
             liquidation_preference = COALESCE(
@@ -168,7 +178,9 @@ def upsert_preferred_profile(conn, candidate):
             ),
             updated_at = now()
         WHERE security_id = :security_id
-    """), row)
+    """),
+        row,
+    )
     return result
 
 
@@ -203,11 +215,14 @@ def populate_preferred_profiles(tickers=None, limit=None):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--tickers", help="Comma-separated tickers, e.g. 'ACR-PD,ACR-PC'")
-    parser.add_argument("--limit", type=int, default=None,
-                        help="Limit to the first N securities (for testing)")
+    parser.add_argument(
+        "--limit", type=int, default=None, help="Limit to the first N securities (for testing)"
+    )
     args = parser.parse_args()
 
-    tickers = [t.strip().upper() for t in args.tickers.split(",") if t.strip()] if args.tickers else None
+    tickers = (
+        [t.strip().upper() for t in args.tickers.split(",") if t.strip()] if args.tickers else None
+    )
 
     try:
         populate_preferred_profiles(tickers=tickers, limit=args.limit)

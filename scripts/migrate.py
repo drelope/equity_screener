@@ -19,6 +19,7 @@ Usage:
     python -m scripts.migrate              # plan + apply pending migrations
     python -m scripts.migrate --plan       # print pending migrations only
 """
+
 import argparse
 import re
 import sys
@@ -39,27 +40,34 @@ FILENAME_RE = re.compile(r"^V(\d+)_([a-z0-9_]+)\.sql$", re.IGNORECASE)
 
 
 def tracking_table_exists(conn):
-    return conn.execute(text(
-        "SELECT 1 FROM information_schema.tables "
-        "WHERE table_schema = 'schema_migrations' OR table_name = 'schema_migrations'"
-    )).scalar() is not None
+    return (
+        conn.execute(
+            text(
+                "SELECT 1 FROM information_schema.tables "
+                "WHERE table_schema = 'schema_migrations' OR table_name = 'schema_migrations'"
+            )
+        ).scalar()
+        is not None
+    )
 
 
 def ensure_tracking_table(conn):
-    conn.execute(text("""
+    conn.execute(
+        text("""
         CREATE TABLE IF NOT EXISTS public.schema_migrations (
             version INTEGER PRIMARY KEY,
             name TEXT NOT NULL,
             applied_at TIMESTAMPTZ NOT NULL DEFAULT now()
         )
-    """))
+    """)
+    )
 
 
 def applied_versions(conn):
     try:
-        rows = conn.execute(text(
-            "SELECT version, name FROM public.schema_migrations ORDER BY version"
-        )).fetchall()
+        rows = conn.execute(
+            text("SELECT version, name FROM public.schema_migrations ORDER BY version")
+        ).fetchall()
     except ProgrammingError:
         return {}
     return {row[0]: row[1] for row in rows}
@@ -75,10 +83,13 @@ def adopt_current_state_as_baseline(conn, applied):
         return False
     baseline_marker = "baseline: sql/schema.sql + scripts/init_db.py migrations"
     try:
-        conn.execute(text(
-            "INSERT INTO public.schema_migrations (version, name) "
-            "VALUES (:v, :name) ON CONFLICT (version) DO NOTHING"
-        ), {"v": BASELINE_VERSION, "name": baseline_marker})
+        conn.execute(
+            text(
+                "INSERT INTO public.schema_migrations (version, name) "
+                "VALUES (:v, :name) ON CONFLICT (version) DO NOTHING"
+            ),
+            {"v": BASELINE_VERSION, "name": baseline_marker},
+        )
     except ProgrammingError:
         return False
     print(f"  adopted current schema as baseline V{BASELINE_VERSION}")
@@ -101,10 +112,13 @@ def discover_migrations():
 
 def apply_migration(conn, version, name, sql_text):
     conn.execute(text(sql_text))
-    conn.execute(text(
-        "INSERT INTO public.schema_migrations (version, name) VALUES (:v, :name) "
-        "ON CONFLICT (version) DO NOTHING"
-    ), {"v": version, "name": name})
+    conn.execute(
+        text(
+            "INSERT INTO public.schema_migrations (version, name) VALUES (:v, :name) "
+            "ON CONFLICT (version) DO NOTHING"
+        ),
+        {"v": version, "name": name},
+    )
 
 
 def migrate(plan_only=False):
@@ -133,8 +147,9 @@ def migrate(plan_only=False):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--plan", action="store_true",
-                        help="Only list pending migrations, do not apply")
+    parser.add_argument(
+        "--plan", action="store_true", help="Only list pending migrations, do not apply"
+    )
     args = parser.parse_args()
     try:
         return migrate(plan_only=args.plan)

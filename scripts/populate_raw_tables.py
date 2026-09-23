@@ -24,30 +24,32 @@ Options:
     --limit N          Limit to first N tickers (for testing)
     --skip-profiles    Only populate raw.company_ticker; do not fetch ticker profiles
 """
+
 import argparse
 import hashlib
 import json
 import os
-from pathlib import Path
 import sys
 import uuid
+from pathlib import Path
 
 # Allow direct execution from the repository root as well as `python -m`.
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from sqlalchemy import text
+
+from scripts.populate_dividend_data import fetch_ticker_profile
 from src.crispdm.db import engine
 from src.crispdm.sec_client import (
     classify_companyfacts,
     extract_preferred_terms_from_companyfacts,
     extract_security_titles,
-    get_companyfacts_concepts,
     get_company_tickers,
+    get_companyfacts_concepts,
     match_security_title,
     security_type_for_instrument,
 )
-from scripts.populate_dividend_data import fetch_ticker_profile
 
 
 def _offline_enabled():
@@ -59,36 +61,41 @@ OFFLINE_ON = _offline_enabled()
 
 def _refresh_company_tickers(conn, entries):
     """Apply the raw.company_ticker snapshot: FK guard + per-ticker upsert."""
-    conn.execute(text(
-        "ALTER TABLE raw.company_ticker "
-        "DROP CONSTRAINT IF EXISTS company_ticker_cik_key"
-    ))
-    conn.execute(text(
-        "CREATE UNIQUE INDEX IF NOT EXISTS "
-        "ux_company_ticker_ticker_cik ON raw.company_ticker(ticker, cik)"
-    ))
-    conn.execute(text(
-        "ALTER TABLE reference.securities "
-        "DROP CONSTRAINT IF EXISTS securities_cik_fkey"
-    ))
-    conn.execute(text(
-        "ALTER TABLE reference.securities "
-        "DROP CONSTRAINT IF EXISTS fk_securities_company_ticker"
-    ))
-    conn.execute(text("""
+    conn.execute(
+        text("ALTER TABLE raw.company_ticker DROP CONSTRAINT IF EXISTS company_ticker_cik_key")
+    )
+    conn.execute(
+        text(
+            "CREATE UNIQUE INDEX IF NOT EXISTS "
+            "ux_company_ticker_ticker_cik ON raw.company_ticker(ticker, cik)"
+        )
+    )
+    conn.execute(
+        text("ALTER TABLE reference.securities DROP CONSTRAINT IF EXISTS securities_cik_fkey")
+    )
+    conn.execute(
+        text(
+            "ALTER TABLE reference.securities "
+            "DROP CONSTRAINT IF EXISTS fk_securities_company_ticker"
+        )
+    )
+    conn.execute(
+        text("""
         ALTER TABLE reference.securities
         ADD CONSTRAINT fk_securities_company_ticker
         FOREIGN KEY (ticker, cik)
         REFERENCES raw.company_ticker(ticker, cik)
         NOT VALID
-    """))
+    """)
+    )
 
     for entry in entries:
         ticker = (entry.get("ticker") or "").strip().upper()
         if not ticker or entry.get("cik_str") is None:
             continue
         cik = str(int(entry["cik_str"])).zfill(10)
-        conn.execute(text("""
+        conn.execute(
+            text("""
             INSERT INTO raw.company_ticker
                 (ticker, cik, title, raw_payload, retrieved_at)
             VALUES (:ticker, :cik, :title, CAST(:raw_payload AS jsonb), now())
@@ -97,12 +104,14 @@ def _refresh_company_tickers(conn, entries):
                 title = EXCLUDED.title,
                 raw_payload = EXCLUDED.raw_payload,
                 retrieved_at = EXCLUDED.retrieved_at
-        """), {
-            "ticker": ticker,
-            "cik": cik,
-            "title": (entry.get("title") or "").strip(),
-            "raw_payload": json.dumps(entry),
-        })
+        """),
+            {
+                "ticker": ticker,
+                "cik": cik,
+                "title": (entry.get("title") or "").strip(),
+                "raw_payload": json.dumps(entry),
+            },
+        )
 
 
 def populate_company_tickers(limit=None):
@@ -116,12 +125,15 @@ def populate_company_tickers(limit=None):
     if OFFLINE_ON:
         print("  OFFLINE: re-normalizing stored raw.company_ticker rows (no SEC fetch).")
         with engine.begin() as conn:
-            rows = conn.execute(text(
-                "SELECT ticker, cik, title FROM raw.company_ticker ORDER BY ticker"
-            )).mappings().all()
+            rows = (
+                conn.execute(
+                    text("SELECT ticker, cik, title FROM raw.company_ticker ORDER BY ticker")
+                )
+                .mappings()
+                .all()
+            )
             entries = [
-                {"ticker": r["ticker"], "cik_str": r["cik"], "title": r["title"]}
-                for r in rows
+                {"ticker": r["ticker"], "cik_str": r["cik"], "title": r["title"]} for r in rows
             ]
             if limit:
                 entries = entries[:limit]
@@ -144,12 +156,19 @@ def _load_raw_tickers(conn, limit=None):
     """Load ticker/cik/title rows from raw.company_ticker."""
     limit_sql = " LIMIT :limit" if limit else ""
     params = {"limit": limit} if limit else {}
-    return conn.execute(text(f"""
+    return (
+        conn.execute(
+            text(f"""
         SELECT ticker, cik, title
         FROM raw.company_ticker
         ORDER BY ticker
         {limit_sql}
-    """), params).mappings().all()
+    """),
+            params,
+        )
+        .mappings()
+        .all()
+    )
 
 
 def _persist_classification_cache(conn, entries):
@@ -161,7 +180,8 @@ def _persist_classification_cache(conn, entries):
     storage inefficient.
     """
     for cik, ticker, title, classification in entries:
-        conn.execute(text("""
+        conn.execute(
+            text("""
             INSERT INTO raw.company_classification
                 (cik, ticker, company_name, security_types, security_titles,
                  security_facts, dividend_facts, dividend, status, content_hash,
@@ -181,22 +201,22 @@ def _persist_classification_cache(conn, entries):
                 status = EXCLUDED.status,
                 content_hash = EXCLUDED.content_hash,
                 retrieved_at = now()
-        """), {
-            "cik": cik,
-            "ticker": ticker,
-            "company_name": title,
-            "security_types": json.dumps(classification["security_types"]),
-            "security_titles": json.dumps(classification.get("security_titles", [])),
-            "security_facts": json.dumps(classification["security_facts"]),
-            "dividend_facts": json.dumps(classification["dividend_facts"]),
-            "dividend": classification["dividend"],
-            "status": classification["status"],
-            "content_hash": hashlib.sha256(
-                json.dumps(
-                    classification["dividend_facts"], sort_keys=True
-                ).encode("utf-8")
-            ).hexdigest(),
-        })
+        """),
+            {
+                "cik": cik,
+                "ticker": ticker,
+                "company_name": title,
+                "security_types": json.dumps(classification["security_types"]),
+                "security_titles": json.dumps(classification.get("security_titles", [])),
+                "security_facts": json.dumps(classification["security_facts"]),
+                "dividend_facts": json.dumps(classification["dividend_facts"]),
+                "dividend": classification["dividend"],
+                "status": classification["status"],
+                "content_hash": hashlib.sha256(
+                    json.dumps(classification["dividend_facts"], sort_keys=True).encode("utf-8")
+                ).hexdigest(),
+            },
+        )
 
 
 def _identify_dividend_payers(limit=None):
@@ -215,13 +235,15 @@ def _identify_dividend_payers(limit=None):
 
     with engine.connect() as conn:
         titles_by_cik = {}
-        for title_row in conn.execute(text("""
+        for title_row in conn.execute(
+            text("""
             SELECT cik, ticker, title
             FROM raw.sec_instrument_titles
-        """)).mappings():
-            titles_by_cik.setdefault(title_row["cik"], {})[
-                str(title_row["ticker"]).upper()
-            ] = title_row["title"]
+        """)
+        ).mappings():
+            titles_by_cik.setdefault(title_row["cik"], {})[str(title_row["ticker"]).upper()] = (
+                title_row["title"]
+            )
 
         for row in _load_raw_tickers(conn, limit):
             cik = row["cik"]
@@ -272,19 +294,17 @@ def _identify_dividend_payers(limit=None):
                             "dividend_facts": [],
                             "status": "unavailable",
                         }
-                cache_entries.append(
-                    (cik, row["ticker"], row["title"], facts_by_cik[cik])
-                )
+                cache_entries.append((cik, row["ticker"], row["title"], facts_by_cik[cik]))
 
             classification = facts_by_cik[cik]
             if not classification["dividend"]:
                 continue
 
-            exact_title = (titles_by_cik.get(cik) or {}).get(
-                str(row["ticker"]).upper()
-            )
+            exact_title = (titles_by_cik.get(cik) or {}).get(str(row["ticker"]).upper())
             security_type = security_type_for_instrument(
-                row["ticker"], row["title"], classification,
+                row["ticker"],
+                row["title"],
+                classification,
                 dei_titles=[exact_title] if exact_title else None,
             )
             security_types = [security_type]
@@ -295,18 +315,21 @@ def _identify_dividend_payers(limit=None):
                 )
                 for security_type in security_types
             }
-            payers.append({
-                "ticker": row["ticker"],
-                "cik": cik,
-                "title": row["title"],
-                "classification": classification,
-                "companyfacts": companyfacts_by_cik.get(cik),
-                "security_titles": classification.get("security_titles")
-                or extract_security_titles(companyfacts_by_cik[cik])
-                if companyfacts_by_cik.get(cik) else [],
-                "security_types": security_types,
-                "security_ids": security_ids,
-            })
+            payers.append(
+                {
+                    "ticker": row["ticker"],
+                    "cik": cik,
+                    "title": row["title"],
+                    "classification": classification,
+                    "companyfacts": companyfacts_by_cik.get(cik),
+                    "security_titles": classification.get("security_titles")
+                    or extract_security_titles(companyfacts_by_cik[cik])
+                    if companyfacts_by_cik.get(cik)
+                    else [],
+                    "security_types": security_types,
+                    "security_ids": security_ids,
+                }
+            )
 
         _persist_classification_cache(conn, cache_entries)
         conn.commit()
@@ -323,7 +346,8 @@ def _upsert_minimal_securities(conn, payer):
             security_type,
             fallback=payer["title"],
         )
-        conn.execute(text("""
+        conn.execute(
+            text("""
             INSERT INTO reference.securities
             (ticker, cik, security_id, security_name,
              security_type, dividend, sec_data_status, currency, active)
@@ -335,15 +359,17 @@ def _upsert_minimal_securities(conn, payer):
                 currency = EXCLUDED.currency,
                 active = EXCLUDED.active,
                 updated_at = now()
-        """), {
-            "ticker": payer["ticker"],
-            "cik": payer["cik"],
-            "id": payer["security_ids"][security_type],
-            "security_name": security_name,
-            "type": security_type,
-            "dividend": classification["dividend"],
-            "status": classification["status"],
-        })
+        """),
+            {
+                "ticker": payer["ticker"],
+                "cik": payer["cik"],
+                "id": payer["security_ids"][security_type],
+                "security_name": security_name,
+                "type": security_type,
+                "dividend": classification["dividend"],
+                "status": classification["status"],
+            },
+        )
 
 
 def populate_ticker_profiles(limit=None):
@@ -371,7 +397,8 @@ def populate_ticker_profiles(limit=None):
                         "sector": None,
                         "industry": None,
                         "security_type": payer["security_types"][0]
-                        if payer["security_types"] else None,
+                        if payer["security_types"]
+                        else None,
                         "coupon_type": None,
                         "coupon_rate": None,
                         "fixed_period_end": None,
@@ -386,7 +413,8 @@ def populate_ticker_profiles(limit=None):
                         payer["ticker"],
                         security_name=payer["title"],
                         security_type=payer["security_types"][0]
-                        if payer["security_types"] else None,
+                        if payer["security_types"]
+                        else None,
                     )
                 sec_terms = {"coupon_rate": None, "liquidation_preference": None}
                 companyfacts = payer["companyfacts"]
@@ -414,14 +442,20 @@ def populate_ticker_profiles(limit=None):
 
                 if not OFFLINE_ON:
                     summary["provider"] = "SEC_XBRL+OPENBB_YFINANCE"
-                summary["raw_payload"] = json.dumps({
-                    "sec_xbrl": sec_terms,
-                    "openbb": json.loads(summary["raw_payload"]) if summary.get("raw_payload") else None,
-                }, default=str)
+                summary["raw_payload"] = json.dumps(
+                    {
+                        "sec_xbrl": sec_terms,
+                        "openbb": json.loads(summary["raw_payload"])
+                        if summary.get("raw_payload")
+                        else None,
+                    },
+                    default=str,
+                )
 
                 _upsert_minimal_securities(conn, payer)
                 row = {"security_id": payer["security_ids"][payer["security_types"][0]], **summary}
-                conn.execute(text("""
+                conn.execute(
+                    text("""
                     INSERT INTO raw.ticker_profile
                         (security_id, ticker, provider, sector, industry, security_type,
                          coupon_type, coupon_rate, fixed_period_end, floating_spread,
@@ -445,8 +479,11 @@ def populate_ticker_profiles(limit=None):
                         liquidation_preference = EXCLUDED.liquidation_preference,
                         raw_payload = EXCLUDED.raw_payload,
                         retrieved_at = now()
-                """), row)
-                conn.execute(text("""
+                """),
+                    row,
+                )
+                conn.execute(
+                    text("""
                     UPDATE reference.securities
                     SET coupon_rate = COALESCE(:coupon_rate, coupon_rate),
                         liquidation_preference = COALESCE(
@@ -455,7 +492,9 @@ def populate_ticker_profiles(limit=None):
                         call_date = COALESCE(:call_date, call_date),
                         updated_at = now()
                     WHERE security_id = :security_id
-                """), row)
+                """),
+                    row,
+                )
                 inserted += 1
             except Exception as exc:
                 errors += 1
@@ -471,10 +510,14 @@ def populate_ticker_profiles(limit=None):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--limit", type=int, default=None,
-                        help="Limit to first N records (for testing)")
-    parser.add_argument("--skip-profiles", action="store_true",
-                        help="Only populate raw.company_ticker; skip ticker profiles")
+    parser.add_argument(
+        "--limit", type=int, default=None, help="Limit to first N records (for testing)"
+    )
+    parser.add_argument(
+        "--skip-profiles",
+        action="store_true",
+        help="Only populate raw.company_ticker; skip ticker profiles",
+    )
 
     args = parser.parse_args()
 
@@ -490,6 +533,7 @@ def main():
     except Exception as e:
         print(f"\n✗ Error populating raw tables: {e}", file=sys.stderr)
         return 1
+
 
 if __name__ == "__main__":
     sys.exit(main())

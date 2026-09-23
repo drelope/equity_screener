@@ -24,9 +24,9 @@ Usage:
 import argparse
 import hashlib
 import json
-from pathlib import Path
 import sys
 from datetime import datetime, timezone
+from pathlib import Path
 
 import requests
 
@@ -48,7 +48,6 @@ from src.crispdm.xbrl_tags import (
     PREFERRED_STOCK_TAXONOMY_CONCEPTS,
 )
 
-
 # Preferred-stock concepts fetched per taxonomy via the XBRL Data API
 # companyconcept endpoint. Each name has been verified against the live SEC
 # taxonomy; concepts an individual issuer never filed return 404 and are
@@ -63,6 +62,7 @@ PREFERRED_TAXONOMY_CONCEPTS = {
     "ifrs-full": [],
     "srt": [],
 }
+
 
 def normalize_cik(cik):
     return str(int(str(cik).strip())).zfill(10)
@@ -87,12 +87,19 @@ def load_securities(conn, tickers=None, dividend_only=True):
         clauses.append("UPPER(s.ticker) = ANY(:tickers)")
         params["tickers"] = [ticker.upper() for ticker in tickers]
 
-    return conn.execute(text(f"""
+    return (
+        conn.execute(
+            text(f"""
         SELECT s.security_id, s.ticker
         FROM reference.securities s
-        WHERE {' AND '.join(clauses)}
+        WHERE {" AND ".join(clauses)}
         ORDER BY s.ticker
-    """), params).mappings().all()
+    """),
+            params,
+        )
+        .mappings()
+        .all()
+    )
 
 
 def load_companyfacts_targets(conn, tickers=None, dividend_only=True):
@@ -128,13 +135,20 @@ def load_preferred_securities(conn, tickers=None):
         clauses.append("UPPER(s.ticker) = ANY(:tickers)")
         params["tickers"] = [ticker.upper() for ticker in tickers]
 
-    return conn.execute(text(f"""
+    return (
+        conn.execute(
+            text(f"""
         SELECT s.security_id, s.ticker, s.cik,
                s.security_name AS title
         FROM reference.securities s
-        WHERE {' AND '.join(clauses)}
+        WHERE {" AND ".join(clauses)}
         ORDER BY s.ticker
-    """), params).mappings().all()
+    """),
+            params,
+        )
+        .mappings()
+        .all()
+    )
 
 
 def load_ticker_profile_targets(conn, tickers=None):
@@ -145,8 +159,7 @@ def load_ticker_profile_targets(conn, tickers=None):
     carries a preferred-stock type) and that resolves to an SEC CIK.
     """
     clauses = [
-        "(UPPER(tp.security_type) LIKE '%PREFERRED%' "
-        "OR s.security_type = 'preferred stock')",
+        "(UPPER(tp.security_type) LIKE '%PREFERRED%' OR s.security_type = 'preferred stock')",
         "s.active = TRUE",
         "COALESCE(NULLIF(s.cik, ''), t.cik) IS NOT NULL",
     ]
@@ -155,7 +168,9 @@ def load_ticker_profile_targets(conn, tickers=None):
         clauses.append("UPPER(tp.ticker) = ANY(:tickers)")
         params["tickers"] = [ticker.upper() for ticker in tickers]
 
-    return conn.execute(text(f"""
+    return (
+        conn.execute(
+            text(f"""
         SELECT DISTINCT ON (tp.ticker)
                tp.security_id,
                tp.ticker,
@@ -164,9 +179,14 @@ def load_ticker_profile_targets(conn, tickers=None):
         FROM raw.ticker_profile tp
         JOIN reference.securities s ON s.security_id = tp.security_id
         LEFT JOIN raw.company_ticker t ON UPPER(t.ticker) = UPPER(tp.ticker)
-        WHERE {' AND '.join(clauses)}
+        WHERE {" AND ".join(clauses)}
         ORDER BY tp.ticker, s.updated_at DESC NULLS LAST
-    """), params).mappings().all()
+    """),
+            params,
+        )
+        .mappings()
+        .all()
+    )
 
 
 def populate_preferred_stocks():
@@ -174,17 +194,24 @@ def populate_preferred_stocks():
     stored = 0
 
     with engine.begin() as conn:
-        securities = conn.execute(text("""
+        securities = (
+            conn.execute(
+                text("""
             SELECT security_id, ticker, security_name
             FROM reference.securities
             WHERE active = TRUE
               AND LOWER(security_type) IN ('preferred', 'preferred stock')
             ORDER BY ticker
-        """)).mappings().all()
+        """)
+            )
+            .mappings()
+            .all()
+        )
 
         for security in securities:
             ticker = security["ticker"]
-            conn.execute(text("""
+            conn.execute(
+                text("""
                 INSERT INTO preferred.security_terms AS existing
                     (security_id, preferred_series, dividend_rate,
                      liquidation_preference, confidence_score, reviewed_by,
@@ -196,10 +223,12 @@ def populate_preferred_stocks():
                                                 EXCLUDED.preferred_series),
                     reviewed_by = EXCLUDED.reviewed_by,
                     reviewed_at = EXCLUDED.reviewed_at
-            """), {
-                "security_id": security["security_id"],
-                "preferred_series": security["security_name"] or ticker,
-            })
+            """),
+                {
+                    "security_id": security["security_id"],
+                    "preferred_series": security["security_name"] or ticker,
+                },
+            )
             stored += 1
 
     print(f"Completed preferred-stock population: {stored} records")
@@ -217,7 +246,8 @@ def upsert_classification(conn, cik, ticker, companyfacts):
     if companyfacts is None:
         return
     classification = classify_companyfacts(companyfacts)
-    conn.execute(text("""
+    conn.execute(
+        text("""
         INSERT INTO raw.company_classification
             (cik, ticker, company_name, security_types, security_titles,
              security_facts, dividend_facts, dividend, status, content_hash,
@@ -237,22 +267,25 @@ def upsert_classification(conn, cik, ticker, companyfacts):
             status = EXCLUDED.status,
             content_hash = EXCLUDED.content_hash,
             retrieved_at = now()
-    """), {
-        "cik": cik,
-        "ticker": ticker,
-        "company_name": companyfacts.get("company"),
-        "security_types": json.dumps(classification["security_types"]),
-        "security_titles": json.dumps(classification.get("security_titles", [])),
-        "security_facts": json.dumps(classification["security_facts"]),
-        "dividend_facts": json.dumps(classification["dividend_facts"]),
-        "dividend": classification["dividend"],
-        "status": classification["status"],
-        "content_hash": payload_hash(classification["dividend_facts"]),
-    })
+    """),
+        {
+            "cik": cik,
+            "ticker": ticker,
+            "company_name": companyfacts.get("company"),
+            "security_types": json.dumps(classification["security_types"]),
+            "security_titles": json.dumps(classification.get("security_titles", [])),
+            "security_facts": json.dumps(classification["security_facts"]),
+            "dividend_facts": json.dumps(classification["dividend_facts"]),
+            "dividend": classification["dividend"],
+            "status": classification["status"],
+            "content_hash": payload_hash(classification["dividend_facts"]),
+        },
+    )
 
 
 def upsert_submissions(conn, cik, title, submissions):
-    conn.execute(text("""
+    conn.execute(
+        text("""
         INSERT INTO raw.sec_submissions
             (cik, company_name, raw_payload, content_hash, provider, retrieved_at)
         VALUES (:cik, :company_name, CAST(:raw_payload AS jsonb),
@@ -263,18 +296,21 @@ def upsert_submissions(conn, cik, title, submissions):
             content_hash = EXCLUDED.content_hash,
             provider = EXCLUDED.provider,
             retrieved_at = EXCLUDED.retrieved_at
-    """), {
-        "cik": cik,
-        "company_name": submissions.get("name") or title,
-        "raw_payload": json.dumps(submissions),
-        "content_hash": payload_hash(submissions),
-        "retrieved_at": datetime.now(timezone.utc),
-    })
+    """),
+        {
+            "cik": cik,
+            "company_name": submissions.get("name") or title,
+            "raw_payload": json.dumps(submissions),
+            "content_hash": payload_hash(submissions),
+            "retrieved_at": datetime.now(timezone.utc),
+        },
+    )
 
 
 def upsert_companyfacts(conn, cik, companyfacts):
     facts = companyfacts["full_facts"]
-    conn.execute(text("""
+    conn.execute(
+        text("""
         INSERT INTO raw.companyfacts
             (cik, company_name, concept_groups, raw_payload,
              content_hash, provider, retrieved_at)
@@ -287,14 +323,16 @@ def upsert_companyfacts(conn, cik, companyfacts):
             content_hash = EXCLUDED.content_hash,
             provider = EXCLUDED.provider,
             retrieved_at = EXCLUDED.retrieved_at
-    """), {
-        "cik": cik,
-        "company_name": companyfacts["company"],
-        "concept_groups": json.dumps(companyfacts["concept_groups"]),
-        "raw_payload": json.dumps(facts),
-        "content_hash": payload_hash(facts),
-        "retrieved_at": datetime.now(timezone.utc),
-    })
+    """),
+        {
+            "cik": cik,
+            "company_name": companyfacts["company"],
+            "concept_groups": json.dumps(companyfacts["concept_groups"]),
+            "raw_payload": json.dumps(facts),
+            "content_hash": payload_hash(facts),
+            "retrieved_at": datetime.now(timezone.utc),
+        },
+    )
 
 
 def upsert_company_taxonomy(conn, cik, company_name, taxonomy_payload):
@@ -307,20 +345,14 @@ def upsert_company_taxonomy(conn, cik, company_name, taxonomy_payload):
     per CIK: every listed security of the issuer shares the payload through
     ``reference.securities.cik``.
     """
-    available = {
-        taxonomy: sorted(concepts)
-        for taxonomy, concepts in taxonomy_payload.items()
-    }
+    available = {taxonomy: sorted(concepts) for taxonomy, concepts in taxonomy_payload.items()}
     concept_groups = {
         "preferred_stock": sorted(
-            {
-                concept
-                for concepts in available.values()
-                for concept in concepts
-            }
+            {concept for concepts in available.values() for concept in concepts}
         )
     }
-    conn.execute(text("""
+    conn.execute(
+        text("""
         INSERT INTO raw.company_taxonomy
             (cik, company_name, taxonomies, concept_groups,
              raw_payload, content_hash, provider, retrieved_at)
@@ -335,15 +367,17 @@ def upsert_company_taxonomy(conn, cik, company_name, taxonomy_payload):
             content_hash = EXCLUDED.content_hash,
             provider = EXCLUDED.provider,
             retrieved_at = EXCLUDED.retrieved_at
-    """), {
-        "cik": cik,
-        "company_name": company_name,
-        "taxonomies": json.dumps(available),
-        "concept_groups": json.dumps(concept_groups),
-        "raw_payload": json.dumps(taxonomy_payload),
-        "content_hash": payload_hash(taxonomy_payload),
-        "retrieved_at": datetime.now(timezone.utc),
-    })
+    """),
+        {
+            "cik": cik,
+            "company_name": company_name,
+            "taxonomies": json.dumps(available),
+            "concept_groups": json.dumps(concept_groups),
+            "raw_payload": json.dumps(taxonomy_payload),
+            "content_hash": payload_hash(taxonomy_payload),
+            "retrieved_at": datetime.now(timezone.utc),
+        },
+    )
 
 
 def existing_facts_ciks(conn):
@@ -357,9 +391,9 @@ def existing_facts_ciks(conn):
     """
     return {
         row[0]
-        for row in conn.execute(text(
-            "SELECT DISTINCT cik FROM raw.companyfacts WHERE cik IS NOT NULL"
-        ))
+        for row in conn.execute(
+            text("SELECT DISTINCT cik FROM raw.companyfacts WHERE cik IS NOT NULL")
+        )
     }
 
 
@@ -380,7 +414,11 @@ def _ingest_cik(conn, cik, linked_entries, stats):
         upsert_submissions(conn, cik, title, submissions)
         stats["stored_submissions"] += 1
     except Exception as exc:
-        if isinstance(exc, requests.exceptions.HTTPError) and exc.response is not None and exc.response.status_code == 404:
+        if (
+            isinstance(exc, requests.exceptions.HTTPError)
+            and exc.response is not None
+            and exc.response.status_code == 404
+        ):
             stats["unavailable"] += 1
         else:
             stats["errors"] += 1
@@ -392,7 +430,11 @@ def _ingest_cik(conn, cik, linked_entries, stats):
         stats["stored_facts"] += 1
         upsert_classification(conn, cik, ticker, facts)
     except Exception as exc:
-        if isinstance(exc, requests.exceptions.HTTPError) and exc.response is not None and exc.response.status_code == 404:
+        if (
+            isinstance(exc, requests.exceptions.HTTPError)
+            and exc.response is not None
+            and exc.response.status_code == 404
+        ):
             stats["unavailable"] += 1
         else:
             stats["errors"] += 1
@@ -415,7 +457,9 @@ def populate_companyfacts(tickers=None, dividend_only=True, max_ciks=None):
     }
     if tickers:
         requested = {ticker.upper() for ticker in tickers}
-        ticker_entries = {ticker: entry for ticker, entry in ticker_entries.items() if ticker in requested}
+        ticker_entries = {
+            ticker: entry for ticker, entry in ticker_entries.items() if ticker in requested
+        }
 
     stats = {
         "fetched": 0,
@@ -499,17 +543,15 @@ def populate_preferred_companyfacts(tickers=None, max_ciks=None):
         targets = load_ticker_profile_targets(conn, tickers=tickers)
         entries_by_cik = {}
         for row in targets:
-            entries_by_cik.setdefault(row["cik"], []).append(
-                (row["ticker"], row["title"], row)
-            )
-        print(f"  Found {len(targets)} preferred-stock tickers ({len(entries_by_cik)} unique CIKs).")
+            entries_by_cik.setdefault(row["cik"], []).append((row["ticker"], row["title"], row))
+        print(
+            f"  Found {len(targets)} preferred-stock tickers ({len(entries_by_cik)} unique CIKs)."
+        )
 
         existing = existing_facts_ciks(conn)
         pending = [cik for cik in entries_by_cik if cik not in existing]
         stats["skipped"] = len(entries_by_cik) - len(pending)
-        print(
-            f"  Skipping {stats['skipped']} CIKs already stored; fetching {len(pending)}."
-        )
+        print(f"  Skipping {stats['skipped']} CIKs already stored; fetching {len(pending)}.")
         if max_ciks:
             pending = pending[:max_ciks]
             print(f"  Batch limited to {len(pending)} CIKs.")
@@ -633,15 +675,12 @@ def populate_preferred_taxonomy(tickers=None, taxonomies=None):
         entries_by_cik = {}
         for row in targets:
             normalized_cik = normalize_cik(row["cik"])
-            entries_by_cik.setdefault(normalized_cik, []).append(
-                (row["ticker"], row["title"], row)
-            )
+            entries_by_cik.setdefault(normalized_cik, []).append((row["ticker"], row["title"], row))
         if tickers:
             selected_tickers = {row["ticker"].upper() for row in targets}
             stats["missing"] = len({ticker.upper() for ticker in tickers} - selected_tickers)
         print(
-            f"  Found {len(targets)} preferred-stock tickers "
-            f"({len(entries_by_cik)} unique CIKs)."
+            f"  Found {len(targets)} preferred-stock tickers ({len(entries_by_cik)} unique CIKs)."
         )
         concepts_per_cik = sum(len(concepts) for concepts in taxonomies.values())
         planned_requests = len(entries_by_cik) * concepts_per_cik
@@ -693,17 +732,21 @@ def main():
     parser.add_argument(
         "--taxonomies",
         help="Comma-separated taxonomies to fetch for --preferred-taxonomy "
-             "(default: us-gaap,dei; e.g. us-gaap,ifrs-full,dei,srt)",
+        "(default: us-gaap,dei; e.g. us-gaap,ifrs-full,dei,srt)",
     )
     parser.add_argument(
         "--max-ciks",
         type=int,
         default=None,
         help="Bound a single --preferred-facts / --all run to this many CIKs "
-             "(resume-safe: already-fetched CIKs are skipped on re-run)",
+        "(resume-safe: already-fetched CIKs are skipped on re-run)",
     )
     args = parser.parse_args()
-    tickers = [value.strip().upper() for value in args.tickers.split(",") if value.strip()] if args.tickers else None
+    tickers = (
+        [value.strip().upper() for value in args.tickers.split(",") if value.strip()]
+        if args.tickers
+        else None
+    )
     dividend_only = not args.all
     try:
         if args.preferred:
@@ -713,7 +756,9 @@ def main():
             return 0
         if args.preferred_taxonomy:
             if args.taxonomies:
-                taxonomies = [value.strip() for value in args.taxonomies.split(",") if value.strip()]
+                taxonomies = [
+                    value.strip() for value in args.taxonomies.split(",") if value.strip()
+                ]
             else:
                 taxonomies = None
             result = populate_preferred_taxonomy(tickers=tickers, taxonomies=taxonomies)

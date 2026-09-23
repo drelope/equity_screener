@@ -1,6 +1,8 @@
 import numpy as np
-from .db import read_df, engine
 from sqlalchemy import text
+
+from .db import engine, read_df
+
 
 def build_features():
     sql = """
@@ -33,25 +35,51 @@ def build_features():
       ORDER BY ex_dividend_date DESC LIMIT 1
     ) d ON TRUE
     """
-    df=read_df(sql)
-    for c in ["dividend_growth","earnings_payout","fcf_payout","dividend_coverage",
-              "debt_to_ebitda","interest_coverage","liquidation_discount",
-              "legal_rights_score","data_quality_score"]:
-        df[c]=np.nan
-    df["target_sustainable_dividend"]=np.nan
-    return df.replace([np.inf,-np.inf],np.nan)
+    df = read_df(sql)
+    for c in [
+        "dividend_growth",
+        "earnings_payout",
+        "fcf_payout",
+        "dividend_coverage",
+        "debt_to_ebitda",
+        "interest_coverage",
+        "liquidation_discount",
+        "legal_rights_score",
+        "data_quality_score",
+    ]:
+        df[c] = np.nan
+    df["target_sustainable_dividend"] = np.nan
+    return df.replace([np.inf, -np.inf], np.nan)
+
 
 def persist_features(df):
-    if df.empty: return
-    cols=["security_id","as_of_date","current_price","annual_dividend","dividend_yield",
-          "dividend_growth","earnings_payout","fcf_payout","dividend_coverage",
-          "debt_to_ebitda","interest_coverage","volatility_252d","momentum_252d",
-          "momentum_63d","liquidation_discount","legal_rights_score","data_quality_score",
-          "target_sustainable_dividend"]
+    if df.empty:
+        return
+    cols = [
+        "security_id",
+        "as_of_date",
+        "current_price",
+        "annual_dividend",
+        "dividend_yield",
+        "dividend_growth",
+        "earnings_payout",
+        "fcf_payout",
+        "dividend_coverage",
+        "debt_to_ebitda",
+        "interest_coverage",
+        "volatility_252d",
+        "momentum_252d",
+        "momentum_63d",
+        "liquidation_discount",
+        "legal_rights_score",
+        "data_quality_score",
+        "target_sustainable_dividend",
+    ]
     with engine.begin() as c:
-        for _,r in df.iterrows():
-            p={x:r.get(x) for x in cols}
-            c.execute(text("""
+        for _, r in df.iterrows():
+            p = {x: r.get(x) for x in cols}
+            c.execute(
+                text("""
               INSERT INTO model.features
               (security_id,as_of_date,current_price,annualized_dividend,dividend_yield,
                dividend_growth,earnings_payout,fcf_payout,dividend_coverage,
@@ -71,4 +99,6 @@ def persist_features(df):
                volatility_252d=EXCLUDED.volatility_252d,
                momentum_252d=EXCLUDED.momentum_252d,
                momentum_63d=EXCLUDED.momentum_63d
-            """),p)
+            """),
+                p,
+            )

@@ -4,10 +4,11 @@ Analyze SEC XBRL security type and dividend-related tags for all tickers.
 Output is intentionally slim: for each ticker, only the security type and
 dividend information are returned (ticker is kept as the row identifier).
 """
+
+import sys
 import time
 from datetime import date, timedelta
 from pathlib import Path
-import sys
 
 import pandas as pd
 import requests
@@ -17,15 +18,16 @@ if __package__ in (None, ""):
 
 from src.crispdm.xbrl_tags import DIVIDEND_TAGS as _REGISTRY_DIVIDEND_TAGS
 
-
 SEC_USER_AGENT = "andylopes1@gmail.com"
 
 session = requests.Session()
-session.headers.update({
-    "User-Agent": SEC_USER_AGENT,
-    "Accept-Encoding": "gzip, deflate",
-    "Host": "www.sec.gov",
-})
+session.headers.update(
+    {
+        "User-Agent": SEC_USER_AGENT,
+        "Accept-Encoding": "gzip, deflate",
+        "Host": "www.sec.gov",
+    }
+)
 
 # Dividend-related SEC XBRL tags (canonical set in src.crispdm.xbrl_tags).
 # Some tags may not exist for every company.
@@ -68,21 +70,20 @@ def get_sec_tickers():
 
     rows = []
     for item in data.values():
-        rows.append({
-            "cik": str(item["cik_str"]).zfill(10),
-            "ticker": item["ticker"].upper(),
-            "company_name": item["title"],
-        })
+        rows.append(
+            {
+                "cik": str(item["cik_str"]).zfill(10),
+                "ticker": item["ticker"].upper(),
+                "company_name": item["title"],
+            }
+        )
 
     return pd.DataFrame(rows).drop_duplicates(["cik", "ticker"])
 
 
 def get_company_facts(cik):
     """Download Company Facts JSON for one SEC CIK."""
-    url = (
-        "https://data.sec.gov/api/xbrl/companyfacts/"
-        f"CIK{str(cik).zfill(10)}.json"
-    )
+    url = f"https://data.sec.gov/api/xbrl/companyfacts/CIK{str(cik).zfill(10)}.json"
     return sec_get(url)
 
 
@@ -133,12 +134,14 @@ def extract_dividend_facts(company_facts, lookback_days=5480):
                     if end_as_date < cutoff:
                         continue
 
-                    evidence.append({
-                        "xbrl_tag": full_tag,
-                        "security_type_from_tag": inferred_type,
-                        "value": numeric_value,
-                        "period_end": end_date,
-                    })
+                    evidence.append(
+                        {
+                            "xbrl_tag": full_tag,
+                            "security_type_from_tag": inferred_type,
+                            "value": numeric_value,
+                            "period_end": end_date,
+                        }
+                    )
 
     return evidence
 

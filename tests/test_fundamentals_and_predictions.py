@@ -1,16 +1,19 @@
 import uuid
+
 import pandas as pd
 
 from src.crispdm.fundamentals import extract_periodic_financials
-from src.crispdm.scoring import score, predictions, rankings
+from src.crispdm.scoring import predictions, rankings
 
 
 def _scores_df():
-    x = pd.DataFrame({
-        "security_id": ["a", "b", "c"],
-        "as_of_date": pd.to_datetime(["2026-01-01", "2026-01-01", "2026-01-01"]),
-        "composite_score": [0.9, 0.5, 0.2],
-    })
+    x = pd.DataFrame(
+        {
+            "security_id": ["a", "b", "c"],
+            "as_of_date": pd.to_datetime(["2026-01-01", "2026-01-01", "2026-01-01"]),
+            "composite_score": [0.9, 0.5, 0.2],
+        }
+    )
     return x
 
 
@@ -22,44 +25,69 @@ def test_fundamentals_extracts_canonical_metrics():
                     "RevenueFromContractWithCustomerExcludingAssessedTax": {
                         "units": {
                             "USD": [
-                                {"val": 1000, "start": "2025-01-01",
-                                 "end": "2025-12-31", "fy": 2025, "fp": "FY",
-                                 "filed": "2026-02-01"},
+                                {
+                                    "val": 1000,
+                                    "start": "2025-01-01",
+                                    "end": "2025-12-31",
+                                    "fy": 2025,
+                                    "fp": "FY",
+                                    "filed": "2026-02-01",
+                                },
                             ]
                         }
                     },
                     "NetIncomeLoss": {
                         "units": {
                             "USD": [
-                                {"val": 120, "start": "2025-01-01",
-                                 "end": "2025-12-31", "fy": 2025, "fp": "FY",
-                                 "filed": "2026-02-01"},
+                                {
+                                    "val": 120,
+                                    "start": "2025-01-01",
+                                    "end": "2025-12-31",
+                                    "fy": 2025,
+                                    "fp": "FY",
+                                    "filed": "2026-02-01",
+                                },
                             ]
                         }
                     },
                     "NetCashProvidedByUsedInOperatingActivities": {
                         "units": {
                             "USD": [
-                                {"val": 80, "start": "2025-01-01",
-                                 "end": "2025-12-31", "fy": 2025, "fp": "FY",
-                                 "filed": "2026-02-01"},
+                                {
+                                    "val": 80,
+                                    "start": "2025-01-01",
+                                    "end": "2025-12-31",
+                                    "fy": 2025,
+                                    "fp": "FY",
+                                    "filed": "2026-02-01",
+                                },
                             ]
                         }
                     },
                     "PaymentsToAcquirePropertyPlantAndEquipment": {
                         "units": {
                             "USD": [
-                                {"val": 30, "start": "2025-01-01",
-                                 "end": "2025-12-31", "fy": 2025, "fp": "FY",
-                                 "filed": "2026-02-01"},
+                                {
+                                    "val": 30,
+                                    "start": "2025-01-01",
+                                    "end": "2025-12-31",
+                                    "fy": 2025,
+                                    "fp": "FY",
+                                    "filed": "2026-02-01",
+                                },
                             ]
                         }
                     },
                     "Assets": {
                         "units": {
                             "USD": [
-                                {"val": 5000, "end": "2025-12-31",
-                                 "fy": 2025, "fp": "FY", "filed": "2026-02-01"},
+                                {
+                                    "val": 5000,
+                                    "end": "2025-12-31",
+                                    "fy": 2025,
+                                    "fp": "FY",
+                                    "filed": "2026-02-01",
+                                },
                             ]
                         }
                     },
@@ -87,14 +115,30 @@ def test_fundamentals_prefers_canonical_concept_over_fallback():
             "facts": {
                 "us-gaap": {
                     "RevenueFromContractWithCustomerExcludingAssessedTax": {
-                        "units": {"USD": [{"val": 100, "end": "2025-12-31",
-                                           "fy": 2025, "fp": "FY",
-                                           "filed": "2026-02-01"}]}
+                        "units": {
+                            "USD": [
+                                {
+                                    "val": 100,
+                                    "end": "2025-12-31",
+                                    "fy": 2025,
+                                    "fp": "FY",
+                                    "filed": "2026-02-01",
+                                }
+                            ]
+                        }
                     },
                     "SalesRevenueNet": {
-                        "units": {"USD": [{"val": 999, "end": "2025-12-31",
-                                           "fy": 2025, "fp": "FY",
-                                           "filed": "2026-02-01"}]}
+                        "units": {
+                            "USD": [
+                                {
+                                    "val": 999,
+                                    "end": "2025-12-31",
+                                    "fy": 2025,
+                                    "fp": "FY",
+                                    "filed": "2026-02-01",
+                                }
+                            ]
+                        }
                     },
                 }
             }

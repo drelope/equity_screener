@@ -9,11 +9,12 @@ Run from the repository root:
     python3 scripts/populate_sec_documents.py --tickers AAPL,MSFT
     python3 scripts/populate_sec_documents.py --all   # include non-dividend payers
 """
+
 import argparse
 import hashlib
 import json
-from pathlib import Path
 import sys
+from pathlib import Path
 
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -21,7 +22,6 @@ if __package__ in (None, ""):
 from sqlalchemy import text
 
 from src.crispdm.db import engine
-
 
 CONCEPT_GROUPS = (
     "dividends",
@@ -47,11 +47,16 @@ def classify_concept(concept_name):
         groups.append("dividends")
     if any(token in name for token in ("earnings", "income", "eps", "profit", "margin")):
         groups.append("earnings")
-    if any(token in name for token in ("cashflow", "cash_flow", "operatingcashflow", "freecashflow", "fcf")):
+    if any(
+        token in name
+        for token in ("cashflow", "cash_flow", "operatingcashflow", "freecashflow", "fcf")
+    ):
         groups.append("cash_flow")
     if any(token in name for token in ("asset", "liability", "equity", "balance", "shareholder")):
         groups.append("balance_sheet")
-    if any(token in name for token in ("debt", "borrow", "liability", "notespayable", "longtermdebt")):
+    if any(
+        token in name for token in ("debt", "borrow", "liability", "notespayable", "longtermdebt")
+    ):
         groups.append("debt")
     if "tax" in name:
         groups.append("tax")
@@ -102,14 +107,21 @@ def load_companyfacts(conn, tickers=None, dividend_only=True):
         ticker_clause = "AND UPPER(s.ticker) = ANY(:tickers)"
         params["tickers"] = [ticker.upper() for ticker in tickers]
 
-    return conn.execute(text(f"""
+    return (
+        conn.execute(
+            text(f"""
         SELECT s.security_id, cf.cik, cf.raw_payload, s.ticker
         FROM raw.companyfacts cf
         JOIN reference.securities s ON s.cik = cf.cik
-        WHERE {' AND '.join(clauses)}
+        WHERE {" AND ".join(clauses)}
           {ticker_clause}
         ORDER BY s.ticker
-    """), params).mappings().all()
+    """),
+            params,
+        )
+        .mappings()
+        .all()
+    )
 
 
 def populate_concept_groups(tickers=None, dividend_only=True):
@@ -121,7 +133,8 @@ def populate_concept_groups(tickers=None, dividend_only=True):
         for row in rows:
             try:
                 groups = extract_company_concepts(row["raw_payload"])
-                conn.execute(text("""
+                conn.execute(
+                    text("""
                     INSERT INTO raw.sec_documents
                         (security_id, cik, concept_groups, content_hash, retrieved_at)
                     VALUES (:security_id, :cik,
@@ -132,14 +145,16 @@ def populate_concept_groups(tickers=None, dividend_only=True):
                         concept_groups = EXCLUDED.concept_groups,
                         content_hash = EXCLUDED.content_hash,
                         retrieved_at = now()
-                """), {
-                    "security_id": row["security_id"],
-                    "cik": row["cik"],
-                    "concept_groups": json.dumps(groups),
-                    "content_hash": hashlib.sha256(
-                        json.dumps(groups, sort_keys=True).encode("utf-8")
-                    ).hexdigest(),
-                })
+                """),
+                    {
+                        "security_id": row["security_id"],
+                        "cik": row["cik"],
+                        "concept_groups": json.dumps(groups),
+                        "content_hash": hashlib.sha256(
+                            json.dumps(groups, sort_keys=True).encode("utf-8")
+                        ).hexdigest(),
+                    },
+                )
                 updated += 1
             except Exception as exc:
                 errors += 1
@@ -158,7 +173,11 @@ def main():
         help="Include non-dividend securities (by default only dividend payers are indexed)",
     )
     args = parser.parse_args()
-    tickers = [value.strip().upper() for value in args.tickers.split(",") if value.strip()] if args.tickers else None
+    tickers = (
+        [value.strip().upper() for value in args.tickers.split(",") if value.strip()]
+        if args.tickers
+        else None
+    )
     try:
         populate_concept_groups(tickers=tickers, dividend_only=not args.all)
     except Exception as exc:

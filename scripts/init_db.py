@@ -1,6 +1,6 @@
-from pathlib import Path
 import re
 import sys
+from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
@@ -8,6 +8,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from sqlalchemy import create_engine, text  # noqa: E402
 from sqlalchemy.exc import OperationalError  # noqa: E402
+
 from src.crispdm.db import engine  # noqa: E402
 
 sql = (PROJECT_ROOT / "sql" / "schema.sql").read_text()
@@ -81,6 +82,7 @@ def ensure_database_exists():
     finally:
         admin_engine.dispose()
 
+
 # CREATE TABLE IF NOT EXISTS does not evolve an already initialized database.
 # Keep this small compatibility migration here until a versioned migration
 # system is introduced.
@@ -131,7 +133,7 @@ migrations = [
         DROP COLUMN IF EXISTS current_price,
         DROP COLUMN IF EXISTS ex_dividend_date
     """,
-        """
+    """
         CREATE TABLE IF NOT EXISTS raw.sec_submissions (
             security_id UUID PRIMARY KEY REFERENCES reference.securities(security_id),
             cik VARCHAR(20) NOT NULL,
@@ -165,7 +167,7 @@ migrations = [
     END $$;
     """,
     "ALTER TABLE reference.securities ADD COLUMN IF NOT EXISTS cik VARCHAR(10)",
-        """
+    """
         ALTER TABLE reference.securities
                 ADD COLUMN IF NOT EXISTS coupon_rate NUMERIC,
                 ADD COLUMN IF NOT EXISTS liquidation_preference NUMERIC,
@@ -227,7 +229,7 @@ migrations = [
         END IF;
     END $$;
     """,
-        """
+    """
         COMMENT ON COLUMN reference.securities.ticker IS
             'dei:TradingSymbol; listed ticker symbol, for example ACR, ACR-PC, or ACR-PD';
         COMMENT ON COLUMN reference.securities.cik IS
@@ -311,7 +313,7 @@ migrations = [
       AND s.cik IS NULL
       AND i.cik IS NOT NULL
     """,
-"""
+    """
     UPDATE reference.securities s
     SET cik = t.cik
     FROM raw.company_ticker t

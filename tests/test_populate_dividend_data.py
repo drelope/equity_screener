@@ -16,19 +16,25 @@ def test_extract_sec_dividend_data_unwraps_live_facts_shape():
         "facts": {
             "us-gaap": {
                 "CommonStockDividendsPerShareDeclared": {
-                    "units": {"USD/shares": [
-                        {"val": 0, "end": "2025-09-27"},
-                        {"val": 0.25, "end": "2025-06-01"},
-                    ]}
+                    "units": {
+                        "USD/shares": [
+                            {"val": 0, "end": "2025-09-27"},
+                            {"val": 0.25, "end": "2025-06-01"},
+                        ]
+                    }
                 },
                 "DividendsCommonStockCash": {
-                    "units": {"USD": [{
-                        "val": 15000000000,
-                        "end": "2025-09-27",
-                        "filed": "2025-11-03",
-                        "form": "10-K",
-                        "accn": "0000320193-25-000001",
-                    }]}
+                    "units": {
+                        "USD": [
+                            {
+                                "val": 15000000000,
+                                "end": "2025-09-27",
+                                "filed": "2025-11-03",
+                                "form": "10-K",
+                                "accn": "0000320193-25-000001",
+                            }
+                        ]
+                    }
                 },
             }
         },
@@ -74,7 +80,13 @@ def test_extract_sec_dividend_data_returns_empty_on_fetch_error():
 
 def test_normalize_sec_dividend_rows_preserves_cik_and_drops_bad_amounts():
     sec_rows = [
-        {"cik": "0000320193", "amount": 1.5, "ex_dividend_date": "2025-01-01", "payment_date": "2025-02-01", "currency": "USD"},
+        {
+            "cik": "0000320193",
+            "amount": 1.5,
+            "ex_dividend_date": "2025-01-01",
+            "payment_date": "2025-02-01",
+            "currency": "USD",
+        },
         {"cik": "0000320193", "amount": 0, "ex_dividend_date": "2025-01-01"},
         {"cik": "0000320193", "amount": None},
         {"cik": "0000320193", "amount": "bad"},
@@ -160,19 +172,23 @@ def test_populate_preferred_terms_inserts_gaps_and_keeps_existing():
         {"security_id": "uuid-1", "ticker": "ACR-PC", "security_name": "Series C Preferred Stock"},
         {"security_id": "uuid-2", "ticker": "ACR-PD", "security_name": "Series D Preferred Stock"},
     ]
-    conn = _QueueConn([
-        _Result(rows=candidates),
-        _Result(scalar_value=2.40),
-        _Result(rowcount=1),
-        _Result(scalar_value=None),
-        _Result(rowcount=0),
-    ])
+    conn = _QueueConn(
+        [
+            _Result(rows=candidates),
+            _Result(scalar_value=2.40),
+            _Result(rowcount=1),
+            _Result(scalar_value=None),
+            _Result(rowcount=0),
+        ]
+    )
 
     inserted = populate_preferred_terms(conn)
 
     assert inserted == 1
-    insert_calls = [sql for sql, _ in conn.executed if sql.strip().startswith(
-        "INSERT INTO preferred.security_terms"
-    )]
+    insert_calls = [
+        sql
+        for sql, _ in conn.executed
+        if sql.strip().startswith("INSERT INTO preferred.security_terms")
+    ]
     assert len(insert_calls) == 2
     assert "ON CONFLICT (security_id) DO NOTHING" in insert_calls[0]

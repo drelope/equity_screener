@@ -14,14 +14,24 @@ the dollar amounts next to the standard contractual phrases:
 Every extractor returns the matched value together with the section heading
 and a short evidence snippet, so the stored terms stay auditable.
 """
+
 import re
 from decimal import Decimal, InvalidOperation
 
 from bs4 import BeautifulSoup
 
 MONTHS = {
-    "january": 1, "february": 2, "march": 3, "april": 4, "may": 5, "june": 6,
-    "july": 7, "august": 8, "september": 9, "october": 10, "november": 11,
+    "january": 1,
+    "february": 2,
+    "march": 3,
+    "april": 4,
+    "may": 5,
+    "june": 6,
+    "july": 7,
+    "august": 8,
+    "september": 9,
+    "october": 10,
+    "november": 11,
     "december": 12,
 }
 _MONTH_JOIN = "|".join(sorted(MONTHS, key=len, reverse=True))
@@ -32,9 +42,7 @@ BARE_PER_SHARE_RE = re.compile(
     re.IGNORECASE,
 )
 PER_SHARE_RE = re.compile(r"per\s+(?:depositary\s+)?share", re.IGNORECASE)
-DATE_RE = re.compile(
-    rf"\b({_MONTH_JOIN})\s+([0-9]{{1,2}}),?\s+([0-9]{{4}})\b", re.IGNORECASE
-)
+DATE_RE = re.compile(rf"\b({_MONTH_JOIN})\s+([0-9]{{1,2}}),?\s+([0-9]{{4}})\b", re.IGNORECASE)
 ON_OR_AFTER_RE = re.compile(
     rf"(?:on\s+or\s+after|at\s+any\s+time\s+on\s+or\s+after|on\s+and\s+after|beginning\s*(?:on)?)\s+({_MONTH_JOIN})\s+([0-9]{{1,2}}),?\s+([0-9]{{4}})",
     re.IGNORECASE,
@@ -101,8 +109,7 @@ def _dollar_values(text, near=None, span=0):
 
 def _per_share_vicinity(text, value_offset):
     """True when a per-share term sits within 80 chars of the money value."""
-    per_share = PER_SHARE_RE.search(text, max(0, value_offset - 80),
-                                    value_offset + 80)
+    per_share = PER_SHARE_RE.search(text, max(0, value_offset - 80), value_offset + 80)
     return per_share is not None
 
 
@@ -121,8 +128,7 @@ def _month_day_year(match):
 
 def _heading_at(text, position):
     """Best-effort section heading appearing right before ``position``."""
-    candidates = [match for match in HEADING_RE.finditer(text)
-                  if match.start() < position]
+    candidates = [match for match in HEADING_RE.finditer(text) if match.start() < position]
     if not candidates:
         return None
     heading = candidates[-1].group(0).strip(" .:;-")
@@ -130,7 +136,7 @@ def _heading_at(text, position):
 
 
 def _snippet(text, start, width=180):
-    return text[max(0, start - width // 2):start + width].strip()
+    return text[max(0, start - width // 2) : start + width].strip()
 
 
 # --- clause extractors --------------------------------------------------------
@@ -149,7 +155,7 @@ def _extract_liquidation_preference(text):
         window_right = min(len(text), start + 1500)
         window = text[window_left:window_right]
         near = start - window_left
-        reference = text[max(0, start - 40):start]
+        reference = text[max(0, start - 40) : start]
         if "%" in reference or "percent" in reference:
             continue
         for offset, value, match in _dollar_values(window, near=near, span=1000):
@@ -163,10 +169,11 @@ def _extract_liquidation_preference(text):
                 "confidence": 0.8 if per_share else 0.5,
                 "match": match.group(0).strip(),
             }
-            if (best is None
-                    or (per_share and not best["per_share"])
-                    or (per_share == best["per_share"]
-                        and candidate["distance"] < best["distance"])):
+            if (
+                best is None
+                or (per_share and not best["per_share"])
+                or (per_share == best["per_share"] and candidate["distance"] < best["distance"])
+            ):
                 best = {
                     **candidate,
                     "heading": _heading_at(text, window_left + offset) or "Liquidation Preference",
@@ -199,10 +206,9 @@ def _extract_redemption(text):
     best = None
     for anchor in REDEMPTION_ANCHOR.finditer(text):
         start = anchor.start()
-        window = text[start:min(len(text), start + 2200)]
-        window_pre = text[max(0, start - 160):start]
-        optional = (OPTION_RE.search(window) is not None
-                    or OPTION_RE.search(window_pre) is not None)
+        window = text[start : min(len(text), start + 2200)]
+        window_pre = text[max(0, start - 160) : start]
+        optional = OPTION_RE.search(window) is not None or OPTION_RE.search(window_pre) is not None
 
         call_date = None
         call_match = ON_OR_AFTER_RE.search(window)
@@ -222,15 +228,13 @@ def _extract_redemption(text):
             effective = _month_day_year(step)
             if not effective:
                 continue
-            after = window[step.end():step.end() + 260]
+            after = window[step.end() : step.end() + 260]
             for _offset, price, _m in _dollar_values(after):
                 if MIN_PER_SHARE <= price <= MAX_PER_SHARE:
-                    schedule.append({"effective_date": effective,
-                                     "price": float(price)})
+                    schedule.append({"effective_date": effective, "price": float(price)})
                     break
         if call_date:
-            schedule = [entry for entry in schedule
-                        if entry["effective_date"] >= call_date]
+            schedule = [entry for entry in schedule if entry["effective_date"] >= call_date]
 
         candidate = {
             "call_price": call_price,
@@ -248,15 +252,15 @@ def _extract_redemption(text):
             confidence += 0.2
         candidate["confidence"] = round(confidence, 2)
 
-        if best is None and (candidate["call_price"] is not None
-                             or candidate["first_call_date"] is not None):
+        if best is None and (
+            candidate["call_price"] is not None or candidate["first_call_date"] is not None
+        ):
             best = {
                 **candidate,
                 "heading": _heading_at(text, start) or "Redemption",
                 "snippet": _snippet(text, start, width=220),
             }
-        elif (candidate["call_price"] is not None
-              and candidate["confidence"] > best["confidence"]):
+        elif candidate["call_price"] is not None and candidate["confidence"] > best["confidence"]:
             best = {
                 **candidate,
                 "heading": _heading_at(text, start) or "Redemption",
@@ -268,9 +272,7 @@ def _extract_redemption(text):
 # --- series-scoped extraction -------------------------------------------------
 
 SERIES_WINDOW = 2800
-SERIES_TOKEN_RE = re.compile(
-    r"\bseries\s*[-.]?\s*[A-Za-z0-9]+\b", re.IGNORECASE
-)
+SERIES_TOKEN_RE = re.compile(r"\bseries\s*[-.]?\s*[A-Za-z0-9]+\b", re.IGNORECASE)
 
 
 def _series_regions(text, series_pattern):

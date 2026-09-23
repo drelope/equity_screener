@@ -29,6 +29,7 @@ Usage:
 SEC_ETL_OFFLINE=1 makes the run consume only raw.contract_documents already
 stored (no data.sec.gov requests).
 """
+
 import argparse
 import json
 import os
@@ -49,8 +50,6 @@ from src.crispdm.doc_clauses import (
     html_to_text,
 )
 from src.crispdm.sec_client import (
-    SEC_SESSION,
-    HEADERS,
     fetch_archive_index,
     fetch_filing,
     filing_url,
@@ -65,14 +64,37 @@ OFFLINE_ON = _offline_enabled()
 
 CERTIFICATE_FORMS = ("8-K", "8-K/A")
 PROSPECTUS_FORMS = (
-    "424B5", "424B5/A", "424B3", "424B3/A", "424B7", "424B4",
-    "424B2", "424B1", "S-1", "S-1/A", "S-3", "S-3/A",
+    "424B5",
+    "424B5/A",
+    "424B3",
+    "424B3/A",
+    "424B7",
+    "424B4",
+    "424B2",
+    "424B1",
+    "S-1",
+    "S-1/A",
+    "S-3",
+    "S-3/A",
 )
 PROSPECTUS_PRIORITY = {
-    form: index for index, form in enumerate((
-        "424B5", "424B5/A", "424B3", "424B3/A", "424B7", "424B4",
-        "424B2", "424B1", "S-1/A", "S-1", "S-3/A", "S-3",
-    ))
+    form: index
+    for index, form in enumerate(
+        (
+            "424B5",
+            "424B5/A",
+            "424B3",
+            "424B3/A",
+            "424B7",
+            "424B4",
+            "424B2",
+            "424B1",
+            "S-1/A",
+            "S-1",
+            "S-3/A",
+            "S-3",
+        )
+    )
 }
 
 EXHIBIT_RE = re.compile(
@@ -94,9 +116,11 @@ def _filings(submissions_payload, forms):
     index = range(len(filings.get("accessionNumber") or []))
     rows = []
     for i in index:
+
         def value(key, i=i):
             seq = filings.get(key) or []
             return seq[i] if i < len(seq) else None
+
         if not value("accessionNumber"):
             continue
         entry = {key: value(key) for key in keys}
@@ -136,8 +160,7 @@ def pick_certificate_filings(submissions_payload, limit=3):
     missing or abbreviated).
     """
     filings = _filings(submissions_payload, CERTIFICATE_FORMS)
-    cod_filings = [f for f in filings
-                   if set(_filing_items(f)) & set(COD_ITEMS)]
+    cod_filings = [f for f in filings if set(_filing_items(f)) & set(COD_ITEMS)]
     return (cod_filings or filings)[:limit]
 
 
@@ -178,10 +201,19 @@ def find_certificate_exhibit(cik, accession_no):
             score += 2
         if re.search(r"\bex[-_.]?3[-_.]?[12]\b", haystack):
             score += 2
-        if any(term in haystack for term in (
-                "articles of amendment", "amendment to the", "bylaws",
-                "ownership limit", "share ownership", "purchase contract",
-                "waiver", "supplemental indenture")):
+        if any(
+            term in haystack
+            for term in (
+                "articles of amendment",
+                "amendment to the",
+                "bylaws",
+                "ownership limit",
+                "share ownership",
+                "purchase contract",
+                "waiver",
+                "supplemental indenture",
+            )
+        ):
             score -= 5
         scored.append((score, name, item_type))
     scored.sort(key=lambda item: item[0], reverse=True)
@@ -192,21 +224,34 @@ def find_certificate_exhibit(cik, accession_no):
 
 
 def _document_found(conn, security_id, form_type, accession_no, primary_document):
-    return conn.execute(text(
-        "SELECT document_id FROM raw.contract_documents "
-        "WHERE security_id = :sid AND form_type = :form "
-        "AND accession_no = :acc AND primary_document = :doc"
-    ), {"sid": security_id, "form": form_type, "acc": accession_no,
-        "doc": primary_document}).scalar()
+    return conn.execute(
+        text(
+            "SELECT document_id FROM raw.contract_documents "
+            "WHERE security_id = :sid AND form_type = :form "
+            "AND accession_no = :acc AND primary_document = :doc"
+        ),
+        {"sid": security_id, "form": form_type, "acc": accession_no, "doc": primary_document},
+    ).scalar()
 
 
-def _store_document(conn, security_id, cik, form_type, filing_date, accession_no,
-                    primary_document, exhibit_type, source_url, raw_text, doc_hash):
-    existing = _document_found(conn, security_id, form_type, accession_no,
-                               primary_document)
+def _store_document(
+    conn,
+    security_id,
+    cik,
+    form_type,
+    filing_date,
+    accession_no,
+    primary_document,
+    exhibit_type,
+    source_url,
+    raw_text,
+    doc_hash,
+):
+    existing = _document_found(conn, security_id, form_type, accession_no, primary_document)
     if existing:
         return existing, False
-    return conn.execute(text("""
+    return conn.execute(
+        text("""
         INSERT INTO raw.contract_documents
             (security_id, cik, form_type, filing_date, accession_no,
              primary_document, exhibit_type, source_url, raw_text,
@@ -214,12 +259,20 @@ def _store_document(conn, security_id, cik, form_type, filing_date, accession_no
         VALUES (:sid, :cik, :form, :filing_date, :acc, :doc,
                 :exhibit, :url, :raw_text, :hash, now())
         RETURNING document_id
-    """), {
-        "sid": security_id, "cik": cik, "form": form_type,
-        "filing_date": filing_date, "acc": accession_no, "doc": primary_document,
-        "exhibit": exhibit_type, "url": source_url, "raw_text": raw_text,
-        "hash": doc_hash,
-    }).scalar(), True
+    """),
+        {
+            "sid": security_id,
+            "cik": cik,
+            "form": form_type,
+            "filing_date": filing_date,
+            "acc": accession_no,
+            "doc": primary_document,
+            "exhibit": exhibit_type,
+            "url": source_url,
+            "raw_text": raw_text,
+            "hash": doc_hash,
+        },
+    ).scalar(), True
 
 
 def fetch_source_documents(conn, security, force=False):
@@ -239,8 +292,10 @@ def fetch_source_documents(conn, security, force=False):
         exhibit = find_certificate_exhibit(cik, candidate["accessionNumber"])
         if not exhibit:
             continue
-        url = (f"https://www.sec.gov/Archives/edgar/data/{int(cik)}/"
-               f"{candidate['accessionNumber'].replace('-', '')}/{exhibit['name']}")
+        url = (
+            f"https://www.sec.gov/Archives/edgar/data/{int(cik)}/"
+            f"{candidate['accessionNumber'].replace('-', '')}/{exhibit['name']}"
+        )
         try:
             raw_text, doc_hash = fetch_filing(url)
         except Exception:
@@ -251,45 +306,79 @@ def fetch_source_documents(conn, security, force=False):
         if not COD_SIGNALS_RE.search(normalized):
             continue
         document_id, _new = _store_document(
-            conn, security["security_id"], cik, candidate["form"],
-            candidate.get("filingDate"), candidate["accessionNumber"],
-            exhibit["name"], exhibit["exhibit_type"], url, normalized, doc_hash,
+            conn,
+            security["security_id"],
+            cik,
+            candidate["form"],
+            candidate.get("filingDate"),
+            candidate["accessionNumber"],
+            exhibit["name"],
+            exhibit["exhibit_type"],
+            url,
+            normalized,
+            doc_hash,
         )
-        docs.append({"document_id": document_id,
-                     "form_type": candidate["form"],
-                     "exhibit_type": exhibit["exhibit_type"],
-                     "raw_text": normalized})
+        docs.append(
+            {
+                "document_id": document_id,
+                "form_type": candidate["form"],
+                "exhibit_type": exhibit["exhibit_type"],
+                "raw_text": normalized,
+            }
+        )
         break
 
     prospectus = pick_prospectus_file(submissions)
     if prospectus:
         if REQUEST_DELAY:
             time.sleep(REQUEST_DELAY)
-        url = filing_url(cik, prospectus["accessionNumber"],
-                         prospectus["primaryDocument"])
+        url = filing_url(cik, prospectus["accessionNumber"], prospectus["primaryDocument"])
         raw_text, doc_hash = fetch_filing(url)
         normalized = html_to_text(raw_text)
         document_id, _new = _store_document(
-            conn, security["security_id"], cik, prospectus["form"],
-            prospectus.get("filingDate"), prospectus["accessionNumber"],
-            prospectus["primaryDocument"], None, url, normalized, doc_hash,
+            conn,
+            security["security_id"],
+            cik,
+            prospectus["form"],
+            prospectus.get("filingDate"),
+            prospectus["accessionNumber"],
+            prospectus["primaryDocument"],
+            None,
+            url,
+            normalized,
+            doc_hash,
         )
-        docs.append({"document_id": document_id,
-                     "form_type": prospectus["form"],
-                     "exhibit_type": None,
-                     "raw_text": normalized})
+        docs.append(
+            {
+                "document_id": document_id,
+                "form_type": prospectus["form"],
+                "exhibit_type": None,
+                "raw_text": normalized,
+            }
+        )
     return docs
 
 
 def load_stored_documents(conn, security_id):
-    rows = conn.execute(text("""
+    rows = (
+        conn.execute(
+            text("""
         SELECT document_id, form_type, exhibit_type, raw_text
         FROM raw.contract_documents
         WHERE security_id = :sid ORDER BY document_id
-    """), {"sid": security_id}).mappings().all()
+    """),
+            {"sid": security_id},
+        )
+        .mappings()
+        .all()
+    )
     return [
-        {"document_id": row["document_id"], "form_type": row["form_type"],
-         "exhibit_type": row["exhibit_type"], "raw_text": row["raw_text"]}
+        {
+            "document_id": row["document_id"],
+            "form_type": row["form_type"],
+            "exhibit_type": row["exhibit_type"],
+            "raw_text": row["raw_text"],
+        }
         for row in rows
     ]
 
@@ -307,57 +396,76 @@ def extract_from_documents(docs, series_pattern=None):
         text = doc.get("raw_text") or ""
         liquidation = extract_liquidation_preference(text, series_pattern)
         redemption = extract_redemption(text, series_pattern)
-        results.append({
-            "document_id": doc["document_id"],
-            "form_type": doc["form_type"],
-            "exhibit_type": doc["exhibit_type"],
-            "liquidation": liquidation,
-            "redemption": redemption,
-        })
+        results.append(
+            {
+                "document_id": doc["document_id"],
+                "form_type": doc["form_type"],
+                "exhibit_type": doc["exhibit_type"],
+                "liquidation": liquidation,
+                "redemption": redemption,
+            }
+        )
 
     def is_certificate(result):
         return bool(result["exhibit_type"]) or result["form_type"] in CERTIFICATE_FORMS
 
-    results.sort(key=lambda result: (is_certificate(result), result["document_id"]),
-                 reverse=True)
+    results.sort(key=lambda result: (is_certificate(result), result["document_id"]), reverse=True)
 
     liquidation_result = next((r for r in results if r["liquidation"]), None)
     redemption_result = next((r for r in results if r["redemption"]), None)
-    source = (liquidation_result or redemption_result
-              or (next((r for r in results if is_certificate(r)), None)
-                  or (results[0] if results else None)))
+    source = (
+        liquidation_result
+        or redemption_result
+        or (
+            next((r for r in results if is_certificate(r)), None)
+            or (results[0] if results else None)
+        )
+    )
 
     sections = []
     if liquidation_result:
         liquidation = liquidation_result["liquidation"]
-        sections.append({"clause": "liquidation_preference",
-                         "source_document_id": liquidation_result["document_id"],
-                         "form_type": liquidation_result["form_type"],
-                         "exhibit_type": liquidation_result["exhibit_type"],
-                         "heading": liquidation.get("heading"),
-                         "snippet": liquidation.get("snippet"),
-                         "match": liquidation.get("match"),
-                         "amount": str(liquidation["amount"])})
+        sections.append(
+            {
+                "clause": "liquidation_preference",
+                "source_document_id": liquidation_result["document_id"],
+                "form_type": liquidation_result["form_type"],
+                "exhibit_type": liquidation_result["exhibit_type"],
+                "heading": liquidation.get("heading"),
+                "snippet": liquidation.get("snippet"),
+                "match": liquidation.get("match"),
+                "amount": str(liquidation["amount"]),
+            }
+        )
     if redemption_result:
         redemption = redemption_result["redemption"]
-        sections.append({"clause": "redemption",
-                         "source_document_id": redemption_result["document_id"],
-                         "form_type": redemption_result["form_type"],
-                         "exhibit_type": redemption_result["exhibit_type"],
-                         "heading": redemption.get("heading"),
-                         "snippet": redemption.get("snippet"),
-                         "match": redemption.get("match"),
-                         "first_call_date": redemption.get("first_call_date"),
-                         "call_price": (str(redemption["call_price"])
-                                        if redemption.get("call_price") is not None else None)})
+        sections.append(
+            {
+                "clause": "redemption",
+                "source_document_id": redemption_result["document_id"],
+                "form_type": redemption_result["form_type"],
+                "exhibit_type": redemption_result["exhibit_type"],
+                "heading": redemption.get("heading"),
+                "snippet": redemption.get("snippet"),
+                "match": redemption.get("match"),
+                "first_call_date": redemption.get("first_call_date"),
+                "call_price": (
+                    str(redemption["call_price"])
+                    if redemption.get("call_price") is not None
+                    else None
+                ),
+            }
+        )
 
     redemption = redemption_result["redemption"] if redemption_result else None
     liquidation = liquidation_result["liquidation"] if liquidation_result else None
     confidence_values = [
-        value for value in (
+        value
+        for value in (
             (liquidation or {}).get("confidence"),
             (redemption or {}).get("confidence"),
-        ) if value is not None
+        )
+        if value is not None
     ]
     return {
         "liquidation_preference": (liquidation["amount"] if liquidation else None),
@@ -367,8 +475,9 @@ def extract_from_documents(docs, series_pattern=None):
         "optional_redemption": bool(redemption and redemption["optional"]),
         "source_document_id": (source["document_id"] if source else None),
         "sections": sections,
-        "confidence": (round(sum(confidence_values) / len(confidence_values), 2)
-                       if confidence_values else None),
+        "confidence": (
+            round(sum(confidence_values) / len(confidence_values), 2) if confidence_values else None
+        ),
     }
 
 
@@ -397,14 +506,15 @@ def series_pattern_from_security(security):
     letters = list(dict.fromkeys(letters))
     rate = re.search(r"(\d+(?:\.\d+)?)\s*%", name)
     tokens = letters + ([rate.group(1)] if rate else [])
-    pattern = (r"\bseries\s*[-.]?\s*(?:" + "|".join(re.escape(token) for token in tokens)
-               + r")\b")
-    single = [letter for letter in letters if len(letter) <= 2 and \
-              not re.search(r"\d", letter)]
+    pattern = r"\bseries\s*[-.]?\s*(?:" + "|".join(re.escape(token) for token in tokens) + r")\b"
+    single = [letter for letter in letters if len(letter) <= 2 and not re.search(r"\d", letter)]
     if single:
-        pattern += (r"|\b(?:" + "|".join(re.escape(letter) for letter in single)
-                    + r")\s+(?:cumulative\s+)?(?:fixed\s*-?\s*to\s*-?\s*floating\s+)?"
-                      r"(?:preferred|redeemable)")
+        pattern += (
+            r"|\b(?:"
+            + "|".join(re.escape(letter) for letter in single)
+            + r")\s+(?:cumulative\s+)?(?:fixed\s*-?\s*to\s*-?\s*floating\s+)?"
+            r"(?:preferred|redeemable)"
+        )
     return re.compile(pattern, re.IGNORECASE)
 
 
@@ -419,7 +529,9 @@ def load_preferred_securities(conn, tickers=None, cik=None, limit=None):
         params["cik"] = normalize_cik(cik)
     where = " AND ".join(clauses)
     limit_sql = " LIMIT :limit" if limit else ""
-    return conn.execute(text(f"""
+    return (
+        conn.execute(
+            text(f"""
         SELECT s.security_id, s.ticker, s.cik, s.security_name,
                sub.raw_payload
         FROM reference.securities s
@@ -427,25 +539,30 @@ def load_preferred_securities(conn, tickers=None, cik=None, limit=None):
         WHERE {where}
         ORDER BY s.ticker
         {limit_sql}
-    """), {**params, **({"limit": limit} if limit else {})}).mappings().all()
+    """),
+            {**params, **({"limit": limit} if limit else {})},
+        )
+        .mappings()
+        .all()
+    )
 
 
-def populate_contract_terms(tickers=None, cik=None, limit=None, force=False,
-                            discover_only=False):
+def populate_contract_terms(tickers=None, cik=None, limit=None, force=False, discover_only=False):
     """Run the mine: fetch/load documents, extract clauses, upsert terms."""
     processed = errors = 0
     updated = 0
     with engine.begin() as conn:
-        securities = load_preferred_securities(conn, tickers=tickers, cik=cik,
-                                               limit=limit)
+        securities = load_preferred_securities(conn, tickers=tickers, cik=cik, limit=limit)
         for security in securities:
             try:
                 if discover_only:
                     certs = pick_certificate_filings(security["raw_payload"])
                     prospectus = pick_prospectus_file(security["raw_payload"])
-                    print(f"{security['ticker']}: 8-K cert candidates="
-                          f"{[c['accessionNumber'] for c in certs]} "
-                          f"prospectus={prospectus and prospectus['accessionNumber']}")
+                    print(
+                        f"{security['ticker']}: 8-K cert candidates="
+                        f"{[c['accessionNumber'] for c in certs]} "
+                        f"prospectus={prospectus and prospectus['accessionNumber']}"
+                    )
                     continue
 
                 if OFFLINE_ON:
@@ -463,8 +580,7 @@ def populate_contract_terms(tickers=None, cik=None, limit=None, force=False,
                 )
                 if terms["liquidation_preference"] is None and terms["call_price"] is None:
                     if not OFFLINE_ON:
-                        print(f"  No liquidation/redemption clause found for "
-                              f"{security['ticker']}")
+                        print(f"  No liquidation/redemption clause found for {security['ticker']}")
                     processed += 1
                     continue
 
@@ -483,7 +599,8 @@ def populate_contract_terms(tickers=None, cik=None, limit=None, force=False,
 
 
 def _persist_contract_terms(conn, security_id, terms):
-    conn.execute(text("""
+    conn.execute(
+        text("""
         INSERT INTO preferred.contract_terms
             (security_id, liquidation_preference, call_price, first_call_date,
              redemption_schedule, optional_redemption, source_document_id,
@@ -500,36 +617,47 @@ def _persist_contract_terms(conn, security_id, terms):
             sections = EXCLUDED.sections,
             confidence = EXCLUDED.confidence,
             updated_at = now()
-    """), {
-        "sid": security_id,
-        "liq": terms["liquidation_preference"],
-        "call": terms["call_price"],
-        "date": terms["first_call_date"],
-        "schedule": json.dumps(terms["redemption_schedule"] or []),
-        "optional": terms["optional_redemption"],
-        "doc_id": terms["source_document_id"],
-        "sections": json.dumps(terms["sections"]),
-        "confidence": terms["confidence"],
-    })
+    """),
+        {
+            "sid": security_id,
+            "liq": terms["liquidation_preference"],
+            "call": terms["call_price"],
+            "date": terms["first_call_date"],
+            "schedule": json.dumps(terms["redemption_schedule"] or []),
+            "optional": terms["optional_redemption"],
+            "doc_id": terms["source_document_id"],
+            "sections": json.dumps(terms["sections"]),
+            "confidence": terms["confidence"],
+        },
+    )
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--tickers", help="Comma-separated ticker symbols")
     parser.add_argument("--cik", help="Single issuer CIK (10-digit form optional)")
-    parser.add_argument("--max", type=int, default=None,
-                        help="Limit to the first N preferred securities")
-    parser.add_argument("--force", action="store_true",
-                        help="Re-fetch documents even when already cached")
-    parser.add_argument("--discover", action="store_true",
-                        help="Report planned document sources without fetching")
+    parser.add_argument(
+        "--max", type=int, default=None, help="Limit to the first N preferred securities"
+    )
+    parser.add_argument(
+        "--force", action="store_true", help="Re-fetch documents even when already cached"
+    )
+    parser.add_argument(
+        "--discover", action="store_true", help="Report planned document sources without fetching"
+    )
     args = parser.parse_args()
 
-    tickers = [value.strip().upper() for value in args.tickers.split(",")
-               if value.strip()] if args.tickers else None
+    tickers = (
+        [value.strip().upper() for value in args.tickers.split(",") if value.strip()]
+        if args.tickers
+        else None
+    )
     try:
         populate_contract_terms(
-            tickers=tickers, cik=args.cik, limit=args.max, force=args.force,
+            tickers=tickers,
+            cik=args.cik,
+            limit=args.max,
+            force=args.force,
             discover_only=args.discover,
         )
     except Exception as exc:

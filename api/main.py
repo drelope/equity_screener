@@ -11,7 +11,6 @@ from src.crispdm import openbb_client, sec_client
 from src.crispdm.config import settings
 from src.crispdm.db import read_df
 
-
 app = FastAPI(title="Dividend Equity Data API", version="1.0.0")
 
 
@@ -54,7 +53,9 @@ def _json_value(value: Any) -> Any:
 def _records(frame: pd.DataFrame) -> list[dict[str, Any]]:
     if frame is None or frame.empty:
         return []
-    return [{key: _json_value(value) for key, value in row.items()} for row in frame.to_dict("records")]
+    return [
+        {key: _json_value(value) for key, value in row.items()} for row in frame.to_dict("records")
+    ]
 
 
 def _company_entry(ticker: str) -> dict[str, Any]:
@@ -74,7 +75,11 @@ def _openbb_call(*paths: str, ticker: str) -> list[dict[str, Any]]:
     try:
         for path in paths:
             target = getattr(target, path)
-        response = target(symbol=ticker, provider=settings.openbb_provider) if settings.openbb_provider else target(symbol=ticker)
+        response = (
+            target(symbol=ticker, provider=settings.openbb_provider)
+            if settings.openbb_provider
+            else target(symbol=ticker)
+        )
         return _records(openbb_client._df(response))
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"OpenBB request failed: {exc}") from exc
@@ -110,7 +115,13 @@ def filings(ticker: str, limit: int = Query(default=100, ge=1, le=1000)) -> dict
     recent = payload.get("filings", {}).get("recent", {})
     items = []
     for index in range(min(limit, len(recent.get("form", [])))):
-        items.append({key: values[index] for key, values in recent.items() if isinstance(values, list) and index < len(values)})
+        items.append(
+            {
+                key: values[index]
+                for key, values in recent.items()
+                if isinstance(values, list) and index < len(values)
+            }
+        )
     return {"ticker": ticker, "cik": payload.get("cik"), "items": items}
 
 
@@ -161,13 +172,19 @@ def financials(ticker: str, limit: int = Query(default=100, ge=1, le=1000)) -> d
 @app.get("/openbb/ratios/{ticker}", dependencies=[Depends(require_api_key)])
 def ratios(ticker: str) -> dict[str, Any]:
     ticker = _ticker(ticker)
-    return {"ticker": ticker, "items": _openbb_call("equity", "fundamental", "ratios", ticker=ticker)}
+    return {
+        "ticker": ticker,
+        "items": _openbb_call("equity", "fundamental", "ratios", ticker=ticker),
+    }
 
 
 @app.get("/openbb/valuation/{ticker}", dependencies=[Depends(require_api_key)])
 def valuation(ticker: str) -> dict[str, Any]:
     ticker = _ticker(ticker)
-    return {"ticker": ticker, "items": _openbb_call("equity", "fundamental", "overview", ticker=ticker)}
+    return {
+        "ticker": ticker,
+        "items": _openbb_call("equity", "fundamental", "overview", ticker=ticker),
+    }
 
 
 @app.get("/openbb/profile/{ticker}", dependencies=[Depends(require_api_key)])
@@ -179,7 +196,10 @@ def profile(ticker: str) -> dict[str, Any]:
 @app.get("/openbb/analysts/{ticker}", dependencies=[Depends(require_api_key)])
 def analysts(ticker: str) -> dict[str, Any]:
     ticker = _ticker(ticker)
-    return {"ticker": ticker, "items": _openbb_call("equity", "estimates", "consensus", ticker=ticker)}
+    return {
+        "ticker": ticker,
+        "items": _openbb_call("equity", "estimates", "consensus", ticker=ticker),
+    }
 
 
 @app.get("/openbb/fundamentals/{ticker}", dependencies=[Depends(require_api_key)])
