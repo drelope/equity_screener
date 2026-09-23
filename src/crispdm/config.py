@@ -9,5 +9,14 @@ class Settings(BaseSettings):
     min_recall: float = 0.30
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
+    def require_sec_user_agent(self) -> None:
+        ua = (self.sec_user_agent or "").strip()
+        if not ua or "your.email" in ua.lower() or "@" not in ua:
+            raise RuntimeError(
+                "SEC_USER_AGENT must be a real contact string like "
+                "'Name name@example.com' (SEC fair-access policy). Set it in .env "
+                "before any SEC request."
+            )
+
 
 settings = Settings()

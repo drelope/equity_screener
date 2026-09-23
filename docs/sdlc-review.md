@@ -9,9 +9,13 @@ Basis of review: repository contents at
 `docker-compose.yml`, `azure/`).
 
 **Update 2026-09-23:** the notable absences identified below (no VCS, no CI,
-no lint config, unpinned stack) were addressed the same day. Git history,
-ruff configuration, a GitHub Actions CI pipeline, and pinned dependencies are
-now in place; each affected section below marks what changed and what remains.
+no lint config, unpinned stack) were addressed the same day. A follow-up pass
+same-day closed the remaining open items: branch/PR flow (`CONTRIBUTING.md`),
+walk-forward evaluation checkpoint (`scripts/evaluate_walk_forward`, persisted
+to `audit.model_runs`), the offline labeling plan, the requirements artifact,
+postgres digest pinning + a deployment/rollback runbook, and security/ops
+hygiene (SEC-UA enforcement, key rotation guidance, Airflow/systemd schedulers).
+Each affected section below marks what changed and what remains.
 
 ## 1. Purpose and scope
 
@@ -44,7 +48,10 @@ Evaluation → Deployment stage order.
 | Lint | **ruff** configured (`ruff.toml`, E/F/W/I, line-length 100); check + format clean | `ruff.toml`, `ruff check .` |
 | Tests | 84 passing pytest cases (12 modules, mock-based); enforced by CI | `tests/`, `pytest -q` |
 | Cloud readiness | Azure pilot *mapped*, explicitly deferred | `azure/README.md:12` |
-| Operations | Nightly ETL aspiration; staged orchestration via `scripts.run_full_etl`; Airflow *optional* | `README.md:24`, `scripts/run_full_etl.py` |
+| ML evaluation | `scripts/evaluate_walk_forward` records the walk-forward checkpoint in `audit.model_runs` + JSON; gates on `MIN_RECALL` | `scripts/evaluate_walk_forward.py`, `docs/model-labeling-plan.md` |
+| Requirements | Light requirements artifact (universe, weights, acceptance) | `docs/requirements.md` |
+| Scheduling | Nightly ETL: Airflow DAG + systemd timer templates | `airflow/dags/dividend_etl_dag.py`, `ops/systemd/` |
+| Operations | Local Docker Compose: `postgres`, `migrate`, `streamlit`, `api`; **dependencies pinned** | `docker-compose.yml`, `requirements.txt` |
 
 ## 3. Phase-by-phase assessment (as-is)
 
@@ -200,18 +207,18 @@ Today **one person fills every role**. Coverage is labeled:
 
 | Role | Primary responsibilities | Phase(s) | Coverage |
 |---|---|---|---|
-| **Product Owner / Business Analyst** | Own screening objectives, the weighting scheme (Income 25 / Sustainability 20 / Legal-Rights 25 / Appreciation 15 / Risk 10 / Valuation 5), the dividend-universe definition, and priority order of stages | Requirements | ◐ Weighted rules and universe defined; no formal PRD or acceptance criteria recorded |
-| **Data Scientist / ML Engineer** | Feature engineering, rule+ML composite scoring (`src/crispdm/scoring.py`, `WEIGHTS` sum to 1), walk-forward evaluation, offline target labeling for future dividend outcomes | Requirements, Design, Testing | ◐ Scoring implemented and unit-tested; **walk-forward not shown passing**; labels deliberately not fabricated — target population is open work (`README.md:666`) |
+| **Product Owner / Business Analyst** | Own screening objectives, the weighting scheme (Income 25 / Sustainability 20 / Legal-Rights 25 / Appreciation 15 / Risk 10 / Valuation 5), the dividend-universe definition, and priority order of stages | Requirements | ◐ Weighted rules and universe recorded in a light requirements artifact; acceptance criteria now codified (`docs/requirements.md`); still no PRD-level user stories |
+| **Data Scientist / ML Engineer** | Feature engineering, rule+ML composite scoring (`src/crispdm/scoring.py`, `WEIGHTS` sum to 1), walk-forward evaluation, offline target labeling for future dividend outcomes | Requirements, Design, Testing | ◐ Scoring implemented + tested; **walk-forward checkpoint mechanism now exists** (`scripts.evaluate_walk_forward`, persists to `audit.model_runs`, gates on `MIN_RECALL`); labeling plan authored — labels themselves still open work (`docs/model-labeling-plan.md`) |
 | **Data Engineer** | SEC EDGAR/XBRL + OpenBB ingestion, normalization against the XBRL tag registry, `raw→reference` classification, per-CIK de-duplication, audit lineage | Design, Development, Ops | ✓ Strong: staged scripts, CIK-keyed payloads, dividend gating, `raw_payload` retention |
 | **DBA / Data Modeler** | 8-schema data model, `reference.securities` hub, indexes (`ix_securities_dividend_active`), Flyway-style migrations + `init_db` compat, Compose-hosted Postgres with `pg_stat_statements` | Design, Deployment, Ops | ✓ Strong: schema documented with per-column `COMMENT`, migration discipline present |
 | **Backend / API Developer** | FastAPI service, `X-API-Key` auth, query serialization, expected `404`/error-code behavior for missing SEC datasets | Development, Deployment | ✓ Filled; API-key handling and ticker validation present |
 | **Frontend / Analytics Developer** | Streamlit dashboard over `model.features`/`model.scores`, Plotly visualizations, screening sliders/type filters | Development, Ops | ✓ Filled (thin view over the ranked model) |
-| **QA / Test Engineer** | Mock-based pytest suites, ETL verification against live Postgres, `MIN_RECALL` acceptance hygiene | Testing | ◐ 12 suites (84 cases) now enforced by CI; still no integration harness or walk-forward checkpoint |
-| **DevOps / SRE / Release Engineer** | Docker Compose services, container health/heartbeat, image reproducibility, CI/CD, Azure migration (Container Apps, Azure DB for Postgres, Blob, Functions jobs, Key Vault, App Insights) | Deployment, Ops | ◐ Compose + CI pipeline functional; **no rollback, no image digests, cloud deferred** |
-| **Security / Compliance** | API-key auth, SEC User-Agent policy, secrets management, auditability (`audit.*`) | Requirements, Deployment, Ops | ◐ Auth + lineage sound; secrets live in `.env`; SEC rate-limit/UA policy not codified as enforced checks |
-| **Release / Change Management** | Version control, code review, changelog, tagged releases, rollback | Development, Deployment | ◐ Git history established (baseline commit); **no PR/review flow, no tags, no rollback** |
-| **Project Manager / Coordinator** | Backlog, sprint/phase tracking, Go/No-Go decision for Azure gate ("walk-forward passing") | All | ✗ Absent; tasks driven ad hoc |
-| **Technical Writer** | README (666 lines, thorough), Azure mapping, schema comments | All | ✓ README/documentation is a strength of the project |
+| **QA / Test Engineer** | Mock-based pytest suites, ETL verification against live Postgres, `MIN_RECALL` acceptance hygiene | Testing | ◐ 13 suites, all cases enforced by CI (incl. walk-forward gate + SEC-UA tests); still no integration harness; walk-forward not yet demonstrated **passing** (needs labels) |
+| **DevOps / SRE / Release Engineer** | Docker Compose services, container health/heartbeat, image reproducibility, CI/CD, Azure migration (Container Apps, Azure DB for Postgres, Blob, Functions jobs, Key Vault, App Insights) | Deployment, Ops | ◐ Compose + CI functional; **postgres image digest-pinned**, rollback runbook written, nightly scheduler defined (Airflow DAG + systemd); cloud migration still deferred |
+| **Security / Compliance** | API-key auth, SEC User-Agent policy, secrets management, auditability (`audit.*`) | Requirements, Deployment, Ops | ◐ **SEC_USER_AGENT now enforced** before any SEC request; key-rotation + vault guidance in runbook; secrets still live in `.env` locally |
+| **Release / Change Management** | Version control, code review, changelog, tagged releases, rollback | Development, Deployment | ◐ Git history + **documented branch/PR flow** (`CONTRIBUTING.md`), tag/release + rollback procedure defined; **no PRs merged yet, no tags cut** (linear history on `main` so far) |
+| **Project Manager / Coordinator** | Backlog, sprint/phase tracking, Go/No-Go decision for Azure gate ("walk-forward passing") | All | ✗ Absent; tasks driven ad hoc — the Go/No-Go *record* now exists as `audit.model_runs` checkpoints, but no coordinator owns it |
+| **Technical Writer** | README, Azure mapping, schema comments, docs index | All | ✓ README + new docs (`requirements`, `model-labeling-plan`, `deployment-runbook`, `CONTRIBUTING`) |
 
 ## 5. Phase × role coverage matrix
 
@@ -227,12 +234,14 @@ Legend: ✓ covered today · ◐ partial · ✗ gap · — not applicable.
 | Ops/Maintenance | — | ◐ | ✓ | ✓ | — | ✓ | — | ◐ | ◐ | ◐ | ✗ |
 
 Reading: the **library/data disciplines (Data Engineering, DBA, Backend,
-Frontend, docs) are genuinely covered today**, and the 2026-09-23 hardening
-moved **CI-backed QA (Testing/DevOps), lint enforcement (Development), and
-change tracking (Release/Change Management) from gap to partial**. The
-remaining **process roles — peer review/PR flow, tags/releases, PM — are still
-the structural gaps**, and walk-forward evaluation (the explicit pre-condition
-for Azure) remains unpriced.
+Frontend, docs) are genuinely covered today**. The 2026-09-23 hardening moved
+**CI-backed QA, lint enforcement, and change tracking from gap to partial**;
+the 2026-09-23 follow-up finished **walk-forward checkpointing, the labeling
+plan, the requirements artifact, the branch/PR flow, deployment reproducibility
+(digests + rollback + scheduler), and SEC-UA enforcement**. Roles that remain
+open gaps: **PM/coordinator** and the *result* of walk-forward evaluation — the
+mechanism exists but there are still no labels, so "walk-forward passing" is
+not yet demonstrated (the Azure Go/No-Go cannot be recorded as met).
 
 ## 6. Prioritized gaps and recommended next actions
 
@@ -242,35 +251,51 @@ for Azure) remains unpriced.
    commit, `.gitignore` (`.env`, venv, caches, scratch artifacts excluded), and
    local commit identity configured.
 2. ✅ **CI sanity gates added.** `.github/workflows/ci.yml` runs ruff lint +
-   format on every push/PR and pytest across Python 3.10/3.12; 84 cases pass
-   locally.
+   format on every push/PR and pytest across Python 3.10/3.12; the full suite
+   passes locally.
 3. ✅ **Dependencies pinned.** Root `requirements.txt` now matches the pinned
    `scripts/requirements.txt` (plus `ruff==0.15.22`) so installs cannot drift.
 
+**Completed 2026-09-23 (follow-up — original actions 4-9):**
+
+4. ✅ **Branch-and-PR flow defined.** `CONTRIBUTING.md` documents the branch
+   model (`feat/`, `fix/`, `docs/`, ...), Conventional-Commit style, the PR
+   checklist, and the branch-protection settings to enable once the repo is
+   hosted. Merge-to-`main` via review is now the written process; no PR has
+   actually been merged yet (single-owner, linear history).
+5. ✅ **Walk-forward evaluation checkpoint.** `scripts/evaluate_walk_forward`
+   runs `walk_forward` over labeled `model.features`, persists metrics to
+   `audit.model_runs`, writes a reviewable JSON checkpoint, and exits non-zero
+   when `recall < MIN_RECALL`. The checkpoint *is* the Go/No-Go record for
+   Azure. **Still required:** labels (see 6) before the gate can pass.
+6. ✅ **Offline labeling plan authored.** `docs/model-labeling-plan.md` defines
+   the target semantics, owner, cadence, label sources, a review-before-enable
+   SQL sketch, cohort acceptance, and version binding. Implementation as a
+   `scripts.label_targets` job remains open work.
+7. ✅ **Requirements artifact.** `docs/requirements.md` records objectives, the
+   dividend-universe rule, the weight scheme, acceptance criteria, out-of-scope,
+   and priorities.
+8. ✅ **Deployment reproducibility.** `postgres` image pinned to an immutable
+   digest (`sha256:f4c6…e91232`); `docs/deployment-runbook.md` covers release
+   steps, pg_dump backups, forward-only-migration-aware rollback, and
+   digest-based image rollback.
+9. ✅ **Security/ops hygiene codified.** `SEC_USER_AGENT` is enforced before
+   any SEC request; key rotation + Key Vault guidance is in the runbook; the
+   nightly schedule is defined two ways — `airflow/dags/dividend_etl_dag.py`
+   (daily 03:00) and `ops/systemd/dividend-etl.{service,timer}` templates.
+
 **Remaining, in priority order:**
 
-4. **Adopt a branch-and-PR flow.** History is linear on `main`; introduce
-   short-lived feature branches + review so the Release/Change-Management role
-   moves from ◐ to ✓ and changes are attributable to a review.
-5. **Checkpoint walk-forward evaluation.** The Scoring/ML role is ◐: formalize
-   the snapshot that proves walk-forward passes, tie it to `MIN_RECALL=0.30`,
-   and record the decision — this is the explicit Go/No-Go for the Azure pilot.
-6. **Define the offline labeling plan.** The ML target must be populated from
-   future dividend events/coverage rather than fabricated (`README.md:666`);
-   document the labeling owner and cadence so the Data Scientist/ML role is
-   complete before modeling.
-7. **Author a light requirements artifact.** Record the screening weights, the
-   `dividend = TRUE` universe rule, and acceptance criteria in one page so the
-   Product-Owner role survives knowledge loss (e.g., a `docs/requirements.md`
-   or an ADR-style note).
-8. **Drive deployment reproducibility further:** pin the `postgres` image to an
-   immutable `@sha256:` digest (see note in `docker-compose.yml:5`) and define
-   a rollback path before any non-local release.
-9. **Codify security/ops hygiene** as the PM/coordinator evolves into a
-   release procedure: key rotation for `API_KEY`, enforcing `SEC_USER_AGENT`
-   in config, moving secrets toward a vault at Azure time, and defining a
-   nightly scheduler (Airflow DAG or Azure Functions job) for the current
-   manual `run_full_etl` invocation.
+10. **Populate labels (`scripts.label_targets`) and demonstrate the gate.** The
+    only substantive outstanding Azure precondition: once
+    `target_sustainable_dividend` is populated, run
+    `python -m scripts.evaluate_walk_forward` and record PASS in
+    `audit.model_runs`. Until then the PM role's Go/No-Go is un-produced.
+11. **Merge the first real PR and cut a release tag** to exercise the
+    documented flow end-to-end, then enable branch protection when the repo is
+    hosted.
+12. **Nominate/perform the PM/coordinator role** so the backlog, the Azure
+    gate, and label cadence are actively tracked instead of ad hoc.
 
 ## 7. End-state role definition (reference)
 

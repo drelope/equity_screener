@@ -46,7 +46,15 @@ class SECDataUnavailableError(requests.exceptions.HTTPError):
         )
 
 
-SEC_SESSION = requests.Session()
+class _SecSession(requests.Session):
+    """SEC session that enforces the fair-access User-Agent before any request."""
+
+    def get(self, url, **kwargs):
+        settings.require_sec_user_agent()
+        return super().get(url, **kwargs)
+
+
+SEC_SESSION = _SecSession()
 SEC_SESSION.headers.update(HEADERS)
 SEC_SESSION.mount(
     "https://",

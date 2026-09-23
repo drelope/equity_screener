@@ -54,6 +54,18 @@ HTTP `404` with error code `SEC_COMPANYFACTS_UNAVAILABLE` and the normalized
 CIK. This is an expected unavailable-data response, not an API outage.
 
 
+## Docs
+
+- [SDLC review](docs/sdlc-review.md) — SDLC phase assessment, key roles and
+  responsibilities, and prioritized gaps.
+- [Requirements](docs/requirements.md) — screening universe, weights, and
+  acceptance criteria.
+- [Model labeling plan](docs/model-labeling-plan.md) — how the offline ML
+  target is populated.
+- [Deployment runbook](docs/deployment-runbook.md) — release/rollback, secrets,
+  nightly schedule (Airflow DAG or systemd).
+- [Contributing](CONTRIBUTING.md) — branch model, commits, PR checklist.
+
 ## Install
 
 ```bash
@@ -258,6 +270,17 @@ Build features and score the latest feature date after source data is loaded:
 ```bash
 python -m scripts.build_features
 python -m scripts.score_rank
+```
+
+The ML target (`model.features.target_sustainable_dividend`) is deliberately
+never fabricated — populate it from future dividend events first
+(see [docs/model-labeling-plan.md](docs/model-labeling-plan.md), a
+`scripts.label_targets` job is planned). Once labeled rows exist, record the
+walk-forward evaluation checkpoint (the Azure Go/No-Go, recall gate =
+`MIN_RECALL`, default 0.30) with:
+
+```bash
+python -m scripts.evaluate_walk_forward
 ```
 
 The current ETL entrypoint for market data is:

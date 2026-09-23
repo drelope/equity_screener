@@ -21,6 +21,10 @@ env/
 .env
 .env.local
 
+# Generated artifacts
+data/*
+!data/.gitkeep
+
 # IDE / OS
 .vscode/
 .idea/

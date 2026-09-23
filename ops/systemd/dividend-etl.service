@@ -1,0 +1,16 @@
+# systemd unit + timer templates for the nightly dividend-equity ETL.
+# Copy to /etc/systemd/system/, fix WorkingDirectory/ExecStart/EnvironmentFile
+# for your host, then:
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now dividend-etl.timer
+# See docs/deployment-runbook.md section 5 (Option B).
+
+[Unit]
+Description=Dividend Equity nightly ETL (run_full_etl)
+After=docker.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=/mnt/d/dividend_equity_crispdm_implementation/dividend_equity_crispdm
+ExecStart=/mnt/d/dividend_equity_crispdm_implementation/dividend_equity_crispdm/.venv/bin/python -m scripts.run_full_etl
+EnvironmentFile=/mnt/d/dividend_equity_crispdm_implementation/dividend_equity_crispdm/.env

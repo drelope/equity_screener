@@ -1,8 +1,8 @@
 services:
   postgres:
-    # Pin a specific minor release; add @sha256:<resolved> to the tag for
-    # immutable reproducibility (resolve with `docker buildx imagetools inspect postgres:17.11`).
-    image: postgres:17.11
+    # Pin a specific minor release to an immutable digest for reproducibility.
+    # Resolve with: docker buildx imagetools inspect postgres:17.11
+    image: postgres:17.11@sha256:f4c66b820c6f974249089d3d16d86a3698eae11e8746eb6644b2271031e91232
     command:
       - "postgres"
       - "-c"
