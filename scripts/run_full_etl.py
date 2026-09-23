@@ -25,6 +25,7 @@ Usage:
     python -m scripts.run_full_etl --skip-companyfacts --skip-sec-documents
     python -m scripts.run_full_etl --skip-derived
     python -m scripts.run_full_etl --run-labels --label-cutoff 2026-12-31
+    python -m scripts.run_full_etl --dividend-full-history   # post-PoC total history
 """
 
 import argparse
@@ -99,6 +100,19 @@ def main():
         help="Label horizon cutoff for stage 7 (default: today)",
     )
     parser.add_argument(
+        "--dividend-start",
+        type=str,
+        default=None,
+        help="Override the 12-month dividend lookback start for stage 2 "
+        "(default: DIVIDEND_LOOKBACK_START, i.e. 2025-01-01)",
+    )
+    parser.add_argument(
+        "--dividend-full-history",
+        action="store_true",
+        help="Post-PoC provision: stage 2 fetches the full available dividend "
+        "history instead of the 12-month lookback",
+    )
+    parser.add_argument(
         "--all",
         action="store_true",
         help="Include non-dividend securities in stages 2-4 (not recommended)",
@@ -138,6 +152,10 @@ def main():
 
     if args.sources != "all":
         dividend_args += ["--sources", args.sources]
+    if args.dividend_full_history:
+        dividend_args += ["--full-history"]
+    elif args.dividend_start is not None:
+        dividend_args += ["--start-date", args.dividend_start]
     if args.skip_profiles:
         dividend_args += ["--skip-profiles"]
     if args.all:

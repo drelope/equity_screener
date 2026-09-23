@@ -62,6 +62,8 @@ CIK. This is an expected unavailable-data response, not an API outage.
   acceptance criteria.
 - [Model labeling plan](docs/model-labeling-plan.md) — how the offline ML
   target is populated.
+- [Data acquisition](docs/data-acquisition.md) — 12-month dividend lookback,
+  nightly accrual, and the post-PoC total-history backfill provision.
 - [Deployment runbook](docs/deployment-runbook.md) — release/rollback, secrets,
   nightly schedule (Airflow DAG or systemd).
 - [Contributing](CONTRIBUTING.md) — branch model, commits, PR checklist.
@@ -157,7 +159,9 @@ python -m scripts.populate_raw_tables --limit 100
 python -m scripts.populate_reference_tables --limit 100
 
 # Stage 2 — Load dividend records from SEC XBRL and/or OpenBB, then populate
-# preferred.security_terms and raw.ticker_profile summaries
+# preferred.security_terms and raw.ticker_profile summaries. OpenBB starts at
+# DIVIDEND_LOOKBACK_START (default 2025-01-01 = the 12-month lookback) and
+# accrues forward; add --full-history after the PoC gate for total history.
 python -m scripts.populate_dividend_data --tickers ACR-PC,ACR-PD,LFMDP --sources all
 
 # Stage 3 — Load SEC submissions and complete companyfacts (dividend payers
@@ -300,6 +304,13 @@ Azure Go/No-Go, recall gate = `MIN_RECALL`, default 0.30) with:
 
 ```bash
 python -m scripts.evaluate_walk_forward
+```
+
+No data yet? The Go/No-Go mechanism can be demonstrated immediately with an
+in-memory synthetic sample (no DB/network writes):
+
+```bash
+python -m scripts.dry_run_walk_forward   # -> PASS, writes /tmp/walk_forward_dry_run.json
 ```
 
 `scripts.label_targets` labels every eligible feature row: **1** if at least

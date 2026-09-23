@@ -26,7 +26,17 @@ Options:
     --tickers SYMBOL,...   Populate only selected tickers
     --sources VALUE        one of: all, sec, openbb (default: all)
     --start-date YYYY-MM-DD
+        Earliest dividend date for the OpenBB source (the SEC XBRL source
+        always returns full history regardless of this bound). Defaults to
+        settings.dividend_lookback_start (12-month lookback; env
+        DIVIDEND_LOOKBACK_START) so nightly runs acquire the 2025-01-01+
+        window once and keep accruing.
     --end-date YYYY-MM-DD
+        Latest dividend date (OpenBB); default now.
+    --full-history
+        Total-historical provision for post-PoC: ignore the lookback bound and
+        ask OpenBB for the full available history (from 1970-01-01). SEC XBRL
+        already returns full history, so this only affects the OpenBB source.
     --skip-preferred-terms Do not populate preferred.security_terms after loading dividends
     --skip-profiles        Do not fetch/store raw.ticker_profile summaries for dividend payers
     --include-non-dividend Also fetch dividend events for securities not flagged dividend=TRUE
@@ -36,6 +46,8 @@ Examples:
     python -m scripts.populate_dividend_data --sources all --tickers AAPL,MSFT,JNJ
     python -m scripts.populate_dividend_data --limit 10 --sources sec
     python -m scripts.populate_dividend_data --sources openbb --tickers ACR-PC,ACR-PD
+    # Post-PoC total-history backfill (one-time provision):
+    python -m scripts.populate_dividend_data --sources openbb --full-history
 """
 
 import argparse
@@ -53,6 +65,7 @@ if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from scripts.populate_companyfacts import upsert_companyfacts
+from src.crispdm.config import settings
 from src.crispdm.db import engine
 from src.crispdm.sec_client import (
     build_companyfacts_concept_groups,
@@ -107,6 +120,8 @@ def parse_date(value):
                 continue
     return None
 
+
+FULL_HISTORY_START = "1970-01-01"
 
 SEC_DIVIDEND_CONCEPTS = (
     "CommonStockDividendsPaid",
@@ -363,7 +378,9 @@ def get_target_dividend_tickers(conn, tickers=None, dividend_only=True, limit=No
     return result
 
 
-def fetch_dividend_data(tickers=None, limit=None, sources=None, start_date=None, end_date=None):
+def fetch_dividend_data(
+    tickers=None, limit=None, sources=None, start_date=None, end_date=None, full_history=False
+):
     chosen_sources = set(sources or ["sec", "openbb"])
     sec_ticker_map = get_sec_ticker_map() if "sec" in chosen_sources else {}
     target_tickers = get_target_tickers(
@@ -383,7 +400,10 @@ def fetch_dividend_data(tickers=None, limit=None, sources=None, start_date=None,
         if "openbb" in chosen_sources:
             if openbb_dividends is None:
                 continue
-            openbb_start = start_date or "2000-01-01"
+            if full_history:
+                openbb_start = FULL_HISTORY_START
+            else:
+                openbb_start = start_date or settings.dividend_lookback_start.isoformat()
             openbb_end = end_date or datetime.now(timezone.utc).strftime("%Y-%m-%d")
             try:
                 frame = openbb_dividends(ticker, openbb_start, openbb_end)
@@ -773,6 +793,7 @@ def populate_dividend_data(
     sources=None,
     start_date=None,
     end_date=None,
+    full_history=False,
     populate_preferred_terms=True,
     populate_profiles=True,
     include_non_dividend=False,
@@ -800,6 +821,7 @@ def populate_dividend_data(
         sources=normalized_sources,
         start_date=start_date,
         end_date=end_date,
+        full_history=full_history,
     )
     print(f"Fetched {len(dividend_data)} normalized dividend records")
 
@@ -896,8 +918,19 @@ def main():
         choices=["all", "sec", "openbb"],
         help="Data source(s) to use",
     )
-    parser.add_argument("--start-date", type=str, default="2000-01-01", help="OpenBB start date")
+    parser.add_argument(
+        "--start-date",
+        type=str,
+        default=settings.dividend_lookback_start.isoformat(),
+        help="OpenBB start date (default: dividend_lookback_start from config/.env)",
+    )
     parser.add_argument("--end-date", type=str, default=None, help="OpenBB end date")
+    parser.add_argument(
+        "--full-history",
+        action="store_true",
+        help="Post-PoC total-history provision: ask OpenBB for the full available "
+        "history (from 1970-01-01) instead of the 12-month lookback",
+    )
     parser.add_argument(
         "--skip-preferred-terms",
         action="store_true",
@@ -929,6 +962,7 @@ def main():
             sources=selected_sources,
             start_date=args.start_date,
             end_date=args.end_date,
+            full_history=args.full_history,
             populate_preferred_terms=not args.skip_preferred_terms,
             populate_profiles=not args.skip_profiles,
             include_non_dividend=args.include_non_dividend,

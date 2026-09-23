@@ -1,3 +1,5 @@
+from datetime import date
+
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -7,6 +9,7 @@ class Settings(BaseSettings):
     openbb_provider: str | None = None
     api_key: str | None = None
     min_recall: float = 0.30
+    dividend_lookback_start: date = date(2025, 1, 1)
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
     def require_sec_user_agent(self) -> None:

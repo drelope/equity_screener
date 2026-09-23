@@ -44,7 +44,11 @@ for first initialization only.
    curl -s -H "X-API-Key: $API_KEY" localhost:8000/metrics/enriched/AAPL
    ```
 
-5. Run the nightly ETL (see §5 for automation).
+5. Run the nightly ETL (see §5 for automation). Stage 2 keeps the 12-month
+   dividend lookback (`DIVIDEND_LOOKBACK_START`, default 2025-01-01) and
+   accrues forward; **after the PoC gate passes**, switch the ETL/scheduler to
+   total history once with `--dividend-full-history`
+   (see [data-acquisition.md](data-acquisition.md)).
 
 ## 3. Database backups
 

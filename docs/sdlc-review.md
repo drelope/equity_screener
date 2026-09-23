@@ -208,7 +208,7 @@ Today **one person fills every role**. Coverage is labeled:
 | Role | Primary responsibilities | Phase(s) | Coverage |
 |---|---|---|---|
 | **Product Owner / Business Analyst** | Own screening objectives, the weighting scheme (Income 25 / Sustainability 20 / Legal-Rights 25 / Appreciation 15 / Risk 10 / Valuation 5), the dividend-universe definition, and priority order of stages | Requirements | ◐ Weighted rules and universe recorded in a light requirements artifact; acceptance criteria now codified (`docs/requirements.md`); still no PRD-level user stories |
-| **Data Scientist / ML Engineer** | Feature engineering, rule+ML composite scoring (`src/crispdm/scoring.py`, `WEIGHTS` sum to 1), walk-forward evaluation, offline target labeling for future dividend outcomes | Requirements, Design, Testing | ◐ Scoring implemented + tested; **checkpoint mechanism AND labeler now exist** (`scripts.evaluate_walk_forward` persists to `audit.model_runs` and gates on `MIN_RECALL`; `scripts.label_targets` populates the target from future dividend events and is unit-tested) — but the local DB has **zero raw.dividend_data**, so a labeled, passing walk-forward run is not yet demonstrated |
+| **Data Scientist / ML Engineer** | Feature engineering, rule+ML composite scoring (`src/crispdm/scoring.py`, `WEIGHTS` sum to 1), walk-forward evaluation, offline target labeling for future dividend outcomes | Requirements, Design, Testing | ◐ Scoring implemented + tested; checkpoint mechanism, labeler, **and a dry-run Go/No-Go demonstration** (`scripts.dry_run_walk_forward`, PASS) all wired and unit-tested; lookback (2025-01-01) + total-history provisions in place — **the local DB still has zero `raw.dividend_data`, so a labeled walk-forward run on real data is not yet recorded in `audit.model_runs`** |
 | **Data Engineer** | SEC EDGAR/XBRL + OpenBB ingestion, normalization against the XBRL tag registry, `raw→reference` classification, per-CIK de-duplication, audit lineage | Design, Development, Ops | ✓ Strong: staged scripts, CIK-keyed payloads, dividend gating, `raw_payload` retention |
 | **DBA / Data Modeler** | 8-schema data model, `reference.securities` hub, indexes (`ix_securities_dividend_active`), Flyway-style migrations + `init_db` compat, Compose-hosted Postgres with `pg_stat_statements` | Design, Deployment, Ops | ✓ Strong: schema documented with per-column `COMMENT`, migration discipline present |
 | **Backend / API Developer** | FastAPI service, `X-API-Key` auth, query serialization, expected `404`/error-code behavior for missing SEC datasets | Development, Deployment | ✓ Filled; API-key handling and ticker validation present |
@@ -290,12 +290,18 @@ not yet demonstrated (the Azure Go/No-Go cannot be recorded as met).
 
 **Remaining, in priority order:**
 
-10. **Accrue ~12 months of `raw.dividend_data`, then run the gate.** The label
-    machinery now exists (`scripts.label_targets`, ETL stage 7 via
-    `--run-labels`, unit-tested); the remaining precondition is empirical —
-    local `raw.dividend_data` is still empty. Once labels land, run
-    `python -m scripts.evaluate_walk_forward` and record PASS in
-    `audit.model_runs`. Until then the PM role's Go/No-Go is un-produced.
+10. **Accrue 12 months of `raw.dividend_data` (lookback 2025-01-01), then run
+    the gate.** Data acquisition provisions are in place: stage 2 defaults to
+    `DIVIDEND_LOOKBACK_START` (2025-01-01) and accrues nightly (Airflow DAG /
+    systemd); the post-PoC total-history provision is `--dividend-full-history`
+    (see [data-acquisition.md](data-acquisition.md)). Label machinery
+    (`scripts.label_targets`, ETL stage 7 via `--run-labels`) is unit-tested,
+    and the Go/No-Go mechanism is demonstrated today end-to-end by
+    `scripts.dry_run_walk_forward` (PASS). The remaining item is empirical:
+    the local `raw.dividend_data` must actually accrue, then
+    `python -m scripts.evaluate_walk_forward` records the real PASS in
+    `audit.model_runs`. Until then the PM role's Go/No-Go on real data is
+    un-produced.
 11. **Merge the first real PR and cut a release tag** to exercise the
     documented flow end-to-end, then enable branch protection when the repo is
     hosted.
