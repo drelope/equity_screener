@@ -42,7 +42,24 @@ partial at the tail and prevent look-ahead bias.
 3. **Reference flags** — `reference.securities.active` and `sec_data_status`;
    a security deactivated mid-window is evidence for a negative label.
 
-## 4. Labeling SQL sketch (to be implemented as `scripts.label_targets`)
+## 4. Labeling SQL sketch (implemented as `scripts.label_targets`, 2026-09-23)
+
+The implemented command is `python -m scripts.label_targets [--cutoff YYYY-MM-DD]
+[--rebuild]`. It is also available as ETL stage 7 via `--run-labels` on
+`scripts.run_full_etl` (refused on `--limit`/`--tickers` partial runs, since
+labels are immutable once written).
+
+Implemented semantics refine the sketch below (365-day window, matching the
+`annual_dividend` feature convention):
+
+- **1** — ≥ one positive dividend event (`ex_dividend_date` in window, `amount > 0`).
+- **0** — no in-window positive payment, but monitoring extends to/past the
+  window end (`MAX(ex_dividend_date) >= as_of_date + 365d`, counting any
+  record incl. `amount = 0`, which marks a deliberate omission): a genuine
+  cut, not lost coverage.
+- **NULL** — otherwise-eligible rows whose monitoring data stops before the
+  window end are left unlabeled (insufficient evidence), rather than being
+  forced to 0.
 
 ```sql
 WITH windowed AS (

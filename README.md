@@ -178,6 +178,16 @@ python -m scripts.populate_companyfacts --preferred-taxonomy
 # Stage 4 — Refresh raw.sec_documents concept-group metadata without new SEC
 # requests (dividend payers only by default)
 python -m scripts.populate_sec_documents --tickers AAPL,MSFT,JNJ
+
+# Stage 5 — Offline derived financials over stored XBRL (no network)
+python -m scripts.populate_fundamentals
+
+# Stage 6 — Offline audit lineage/quality over stored data (no network)
+python -m scripts.populate_audit
+
+# Stage 7 (optional) — Populate the offline ML target from future dividend
+# events once ~12 months of history exists; refused on --limit/--tickers runs
+python -m scripts.label_targets
 ```
 
 Reference-table options are `--exchanges`, `--issuers`, `--securities`, and
@@ -273,15 +283,30 @@ python -m scripts.score_rank
 ```
 
 The ML target (`model.features.target_sustainable_dividend`) is deliberately
-never fabricated — populate it from future dividend events first
-(see [docs/model-labeling-plan.md](docs/model-labeling-plan.md), a
-`scripts.label_targets` job is planned). Once labeled rows exist, record the
-walk-forward evaluation checkpoint (the Azure Go/No-Go, recall gate =
-`MIN_RECALL`, default 0.30) with:
+never fabricated — populate it from future dividend events
+(see [docs/model-labeling-plan.md](docs/model-labeling-plan.md)). When at
+least ~12 months of `raw.dividend_data` history exists, populate the offline
+label (also available as ETL stage 7 via `run_full_etl --run-labels`, which is
+refused on partial `--limit`/`--tickers` runs to keep labels immutable):
+
+```bash
+python -m scripts.label_targets
+python -m scripts.label_targets --cutoff 2026-12-31   # fixed horizon
+python -m scripts.label_targets --rebuild              # careful: overwrites labels
+```
+
+Once labeled rows exist, record the walk-forward evaluation checkpoint (the
+Azure Go/No-Go, recall gate = `MIN_RECALL`, default 0.30) with:
 
 ```bash
 python -m scripts.evaluate_walk_forward
 ```
+
+`scripts.label_targets` labels every eligible feature row: **1** if at least
+one positive dividend event falls inside the 365-day outcome window, **0** if
+the row was monitored through the window end but paid nothing, and leaves
+otherwise-eligible rows without post-window monitoring data as NULL
+(insufficient evidence).
 
 The current ETL entrypoint for market data is:
 

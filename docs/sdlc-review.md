@@ -208,7 +208,7 @@ Today **one person fills every role**. Coverage is labeled:
 | Role | Primary responsibilities | Phase(s) | Coverage |
 |---|---|---|---|
 | **Product Owner / Business Analyst** | Own screening objectives, the weighting scheme (Income 25 / Sustainability 20 / Legal-Rights 25 / Appreciation 15 / Risk 10 / Valuation 5), the dividend-universe definition, and priority order of stages | Requirements | ◐ Weighted rules and universe recorded in a light requirements artifact; acceptance criteria now codified (`docs/requirements.md`); still no PRD-level user stories |
-| **Data Scientist / ML Engineer** | Feature engineering, rule+ML composite scoring (`src/crispdm/scoring.py`, `WEIGHTS` sum to 1), walk-forward evaluation, offline target labeling for future dividend outcomes | Requirements, Design, Testing | ◐ Scoring implemented + tested; **walk-forward checkpoint mechanism now exists** (`scripts.evaluate_walk_forward`, persists to `audit.model_runs`, gates on `MIN_RECALL`); labeling plan authored — labels themselves still open work (`docs/model-labeling-plan.md`) |
+| **Data Scientist / ML Engineer** | Feature engineering, rule+ML composite scoring (`src/crispdm/scoring.py`, `WEIGHTS` sum to 1), walk-forward evaluation, offline target labeling for future dividend outcomes | Requirements, Design, Testing | ◐ Scoring implemented + tested; **checkpoint mechanism AND labeler now exist** (`scripts.evaluate_walk_forward` persists to `audit.model_runs` and gates on `MIN_RECALL`; `scripts.label_targets` populates the target from future dividend events and is unit-tested) — but the local DB has **zero raw.dividend_data**, so a labeled, passing walk-forward run is not yet demonstrated |
 | **Data Engineer** | SEC EDGAR/XBRL + OpenBB ingestion, normalization against the XBRL tag registry, `raw→reference` classification, per-CIK de-duplication, audit lineage | Design, Development, Ops | ✓ Strong: staged scripts, CIK-keyed payloads, dividend gating, `raw_payload` retention |
 | **DBA / Data Modeler** | 8-schema data model, `reference.securities` hub, indexes (`ix_securities_dividend_active`), Flyway-style migrations + `init_db` compat, Compose-hosted Postgres with `pg_stat_statements` | Design, Deployment, Ops | ✓ Strong: schema documented with per-column `COMMENT`, migration discipline present |
 | **Backend / API Developer** | FastAPI service, `X-API-Key` auth, query serialization, expected `404`/error-code behavior for missing SEC datasets | Development, Deployment | ✓ Filled; API-key handling and ticker validation present |
@@ -268,10 +268,14 @@ not yet demonstrated (the Azure Go/No-Go cannot be recorded as met).
    `audit.model_runs`, writes a reviewable JSON checkpoint, and exits non-zero
    when `recall < MIN_RECALL`. The checkpoint *is* the Go/No-Go record for
    Azure. **Still required:** labels (see 6) before the gate can pass.
-6. ✅ **Offline labeling plan authored.** `docs/model-labeling-plan.md` defines
-   the target semantics, owner, cadence, label sources, a review-before-enable
-   SQL sketch, cohort acceptance, and version binding. Implementation as a
-   `scripts.label_targets` job remains open work.
+6. ✅ **Offline labeling plan authored and implemented.** The plan
+    (ownership, cadence, sources, cohort acceptance, version binding) and its
+    implementation, `scripts.label_targets`, both landed: the script labels
+    every eligible feature row from future dividend events (1 = ≥ one positive
+    payment in the 365-day window; 0 = monitored through the window end with
+    none; NULL = insufficient evidence), is available as ETL stage 7 via
+    `run_full_etl --run-labels`, and refuses partial `--limit`/`--tickers`
+    runs so labels stay immutable.
 7. ✅ **Requirements artifact.** `docs/requirements.md` records objectives, the
    dividend-universe rule, the weight scheme, acceptance criteria, out-of-scope,
    and priorities.
@@ -286,9 +290,10 @@ not yet demonstrated (the Azure Go/No-Go cannot be recorded as met).
 
 **Remaining, in priority order:**
 
-10. **Populate labels (`scripts.label_targets`) and demonstrate the gate.** The
-    only substantive outstanding Azure precondition: once
-    `target_sustainable_dividend` is populated, run
+10. **Accrue ~12 months of `raw.dividend_data`, then run the gate.** The label
+    machinery now exists (`scripts.label_targets`, ETL stage 7 via
+    `--run-labels`, unit-tested); the remaining precondition is empirical —
+    local `raw.dividend_data` is still empty. Once labels land, run
     `python -m scripts.evaluate_walk_forward` and record PASS in
     `audit.model_runs`. Until then the PM role's Go/No-Go is un-produced.
 11. **Merge the first real PR and cut a release tag** to exercise the

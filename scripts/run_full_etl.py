@@ -7,12 +7,16 @@ Stages (in dependency order):
     2. populate_dividend_data    -> raw.dividend_data, raw.ticker_profile, preferred.security_terms
     3. populate_companyfacts     -> raw.sec_submissions + raw.companyfacts (dividend universe only)
     4. populate_sec_documents    -> raw.sec_documents concept_groups (dividend universe only)
-    5. populate_fundamentals     -> fundamentals.periodic_financials (offline, stored XBRL)
-    6. populate_audit            -> audit.source_lineage + audit.data_quality (offline)
+5. populate_fundamentals     -> fundamentals.periodic_financials (offline, stored XBRL)
+     6. populate_audit            -> audit.source_lineage + audit.data_quality (offline)
+     7. label_targets (optional)  -> model.features.target_sustainable_dividend
+                                    (run with --run-labels after ~12 months of data)
 
 Stages 2-4 only touch securities flagged ``dividend = TRUE`` in
 ``reference.securities``, so SEC and OpenBB are never called for non-payers.
 Stages 5-6 need no network at all and run over whatever is already stored.
+Stage 7 (labels) is refused on ``--limit``/``--tickers`` runs because labels
+are immutable once written; a partial run would freeze wrong labels.
 
 Usage:
     python -m scripts.run_full_etl
@@ -20,12 +24,14 @@ Usage:
     python -m scripts.run_full_etl --tickers ACR-PC,ACR-PD
     python -m scripts.run_full_etl --skip-companyfacts --skip-sec-documents
     python -m scripts.run_full_etl --skip-derived
+    python -m scripts.run_full_etl --run-labels --label-cutoff 2026-12-31
 """
 
 import argparse
 import subprocess
 import sys
 import time
+from datetime import date
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -81,11 +87,32 @@ def main():
         "--skip-profiles", action="store_true", help="Do not refresh raw.ticker_profile in stage 2"
     )
     parser.add_argument(
+        "--run-labels",
+        action="store_true",
+        help="Stage 7: populate target_sustainable_dividend from future dividend "
+        "events (default off; refused on partial runs)",
+    )
+    parser.add_argument(
+        "--label-cutoff",
+        type=date.fromisoformat,
+        default=None,
+        help="Label horizon cutoff for stage 7 (default: today)",
+    )
+    parser.add_argument(
         "--all",
         action="store_true",
         help="Include non-dividend securities in stages 2-4 (not recommended)",
     )
     args = parser.parse_args()
+
+    if args.run_labels and (args.limit is not None or args.tickers):
+        print(
+            "[run_full_etl] refusing --run-labels on a partial run "
+            "(--limit/--tickers): labels are immutable once written, so a "
+            "partial run would freeze wrong labels. Run the full universe, "
+            "or repair later with scripts.label_targets --rebuild."
+        )
+        return 1
 
     base = []
     if args.tickers:
@@ -140,6 +167,12 @@ def main():
     ok = run_module("scripts.populate_audit", [], skip=args.skip_derived)
     if not ok:
         return 1
+
+    if args.run_labels:
+        label_args = ["--cutoff", args.label_cutoff.isoformat()] if args.label_cutoff else []
+        ok = run_module("scripts.label_targets", label_args)
+        if not ok:
+            return 1
 
     print("\nFull ETL pipeline complete.")
     return 0
