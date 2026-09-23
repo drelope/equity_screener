@@ -1,0 +1,73 @@
+services:
+  postgres:
+    # Pin a specific minor release; add @sha256:<resolved> to the tag for
+    # immutable reproducibility (resolve with `docker buildx imagetools inspect postgres:17.11`).
+    image: postgres:17.11
+    command:
+      - "postgres"
+      - "-c"
+      - "shared_preload_libraries=pg_stat_statements"
+      - "-c"
+      - "pg_stat_statements.max=10000"
+      - "-c"
+      - "pg_stat_statements.track=all"
+    environment:
+      POSTGRES_DB: dividend
+      POSTGRES_USER: dividend
+      POSTGRES_PASSWORD: dividend
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./sql/schema.sql:/docker-entrypoint-initdb.d/001_schema.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U dividend -d dividend"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+
+  migrate:
+    build: .
+    command: ["python", "-m", "scripts.migrate"]
+    environment:
+      DATABASE_URL: postgresql+psycopg://dividend:dividend@postgres:5432/dividend
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  streamlit:
+    build: .
+    command: ["streamlit", "run", "app/streamlit_app.py", "--server.address=0.0.0.0", "--server.port=8501"]
+    environment:
+      DATABASE_URL: postgresql+psycopg://dividend:dividend@postgres:5432/dividend
+    ports:
+      - "8501:8501"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+
+  api:
+    build: .
+    command: ["uvicorn", "api.main:app", "--host", "0.0.0.0", "--port", "8000"]
+    environment:
+      DATABASE_URL: postgresql+psycopg://dividend:dividend@postgres:5432/dividend
+      API_KEY: ${API_KEY:?Set API_KEY before starting the API}
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+
+volumes:
+  pgdata:

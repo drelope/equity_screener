@@ -1,0 +1,30 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Caches
+.pytest_cache/
+.ruff_cache/
+.ipynb_checkpoints/
+.mypy_cache/
+
+# Local environment / secrets
+.env
+.env.local
+
+# IDE / OS
+.vscode/
+.idea/
+.DS_Store
+
+# Accidental command-output junk (PowerShell redirect artifact)
+t -ErrorAction SilentlyContinue | Select-Object Name,Source
