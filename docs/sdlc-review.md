@@ -286,7 +286,7 @@ not yet demonstrated (the Azure Go/No-Go cannot be recorded as met).
 9. ✅ **Security/ops hygiene codified.** `SEC_USER_AGENT` is enforced before
    any SEC request; key rotation + Key Vault guidance is in the runbook; the
    nightly schedule is defined two ways — `airflow/dags/dividend_etl_dag.py`
-   (daily 03:00) and `ops/systemd/dividend-etl.{service,timer}` templates.
+   (daily 03:00 ET) and `ops/systemd/dividend-etl.{service,timer}` templates.
 
 **Remaining, in priority order:**
 

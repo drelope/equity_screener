@@ -93,14 +93,14 @@ Problem: `scripts.run_full_etl` is currently invoked manually
 
 ### Option A — Airflow (recommended if Airflow already in the stack)
 
-A ready DAG is provided at `airflow/dags/dividend_etl_dag.py` (daily 03:00,
+A ready DAG is provided at `airflow/dags/dividend_etl_dag.py` (daily 03:00 ET,
 local Python script). Deploy Airflow with that DAG mounted, set the repo path
 inside the DAG, and let it own retries/failure emails.
 
 ### Option B — systemd timer (zero extra dependencies, local-first)
 
 Ready-to-edit templates live at `ops/systemd/dividend-etl.service` and
-`ops/systemd/dividend-etl.timer` (daily 03:00). Copy them to
+`ops/systemd/dividend-etl.timer` (daily 03:00 ET). Copy them to
 `/etc/systemd/system/`, fix `WorkingDirectory` / `ExecStart` /
 `EnvironmentFile` for your host, then:
 

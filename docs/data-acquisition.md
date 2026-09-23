@@ -11,7 +11,7 @@ to accrue.
 | Provision | When | Command |
 |---|---|---|
 | **12-month lookback backfill** | Now — first run, acquires dividend history from `2025-01-01` to today | `python -m scripts.run_full_etl` (stage 2 defaults to `DIVIDEND_LOOKBACK_START`) |
-| **Nightly accrual** | Ongoing — re-runs the ETL daily at 03:00 so the same window stays current and grows forward | Airflow `airflow/dags/dividend_etl_dag.py` or systemd `ops/systemd/dividend-etl.{service,timer}` |
+| **Nightly accrual** | Ongoing — re-runs the ETL daily at 03:00 ET so the same window stays current and grows forward | Airflow `airflow/dags/dividend_etl_dag.py` or systemd `ops/systemd/dividend-etl.{service,timer}` |
 | **Total-history backfill** | One-time, *after* the PoC gate passes — fetches the full available dividend history per security | `python -m scripts.run_full_etl --dividend-full-history` |
 
 All three rely on the same upsert into `raw.dividend_data`
@@ -35,7 +35,7 @@ written to `raw.dividend_data`.
 
 ## 2. Nightly accrual (continues into the future)
 
-The scheduler runs the full ETL once daily at 03:00 (Airflow DAG or the
+The scheduler runs the full ETL once daily at 03:00 ET (Airflow DAG or the
 systemd timer). Because stage 2 keeps its lookback start fixed at
 `2025-01-01` while its end defaults to *now*, each nightly run:
 

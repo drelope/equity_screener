@@ -2,7 +2,9 @@
 Description=Nightly trigger for dividend-etl.service
 
 [Timer]
-OnCalendar=*-*-* 03:00:00
+# 03:00 Eastern Time (DST-aware). systemd resolves this IANA zone against the
+# system tzdata; Persistent=true catches up a missed run after reboot/idle.
+OnCalendar=*-*-* 03:00:00 America/New_York
 Persistent=true
 
 [Install]
