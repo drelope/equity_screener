@@ -523,3 +523,25 @@ CREATE TABLE IF NOT EXISTS audit.model_runs (
   pr_auc NUMERIC, roc_auc NUMERIC, accuracy NUMERIC, parameters JSONB,
   created_at TIMESTAMPTZ DEFAULT now()
 );
+
+CREATE TABLE IF NOT EXISTS audit.nightly_runs (
+  run_id BIGSERIAL PRIMARY KEY,
+  run_date DATE NOT NULL,
+  trigger TEXT NOT NULL DEFAULT 'manual',   -- manual | airflow | systemd
+  started_at TIMESTAMPTZ NOT NULL,
+  finished_at TIMESTAMPTZ,
+  exit_code INT,
+  stages JSONB NOT NULL DEFAULT '{}',       -- {module: ok|failed|skipped}
+  status TEXT NOT NULL DEFAULT 'running',   -- running | success | failed
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS audit.nightly_checks (
+  check_id BIGSERIAL PRIMARY KEY,
+  verified_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  run_date DATE NOT NULL,
+  verified_by TEXT NOT NULL DEFAULT 'single-owner',
+  status TEXT NOT NULL,                     -- ok | attention
+  findings JSONB NOT NULL DEFAULT '{}',
+  notes TEXT
+);

@@ -217,7 +217,7 @@ Today **one person fills every role**. Coverage is labeled:
 | **DevOps / SRE / Release Engineer** | Docker Compose services, container health/heartbeat, image reproducibility, CI/CD, Azure migration (Container Apps, Azure DB for Postgres, Blob, Functions jobs, Key Vault, App Insights) | Deployment, Ops | ◐ Compose + CI functional; **postgres image digest-pinned**, rollback runbook written, nightly scheduler defined (Airflow DAG + systemd); cloud migration still deferred |
 | **Security / Compliance** | API-key auth, SEC User-Agent policy, secrets management, auditability (`audit.*`) | Requirements, Deployment, Ops | ◐ **SEC_USER_AGENT now enforced** before any SEC request; key-rotation + vault guidance in runbook; secrets still live in `.env` locally |
 | **Release / Change Management** | Version control, code review, changelog, tagged releases, rollback | Development, Deployment | ◐ Git history + **documented branch/PR flow** (`CONTRIBUTING.md`), tag/release + rollback procedure defined; **no PRs merged yet, no tags cut** (linear history on `main` so far) |
-| **Project Manager / Coordinator** | Backlog, sprint/phase tracking, Go/No-Go decision for Azure gate ("walk-forward passing") | All | ✗ Absent; tasks driven ad hoc — the Go/No-Go *record* now exists as `audit.model_runs` checkpoints, but no coordinator owns it |
+| **Project Manager / Coordinator** | Backlog, sprint/phase tracking, Go/No-Go decision for Azure gate ("walk-forward passing") | All | ◐ The single-owner **operating ritual now exists and is auditable**: nightly run + data-module verification (`scripts.verify_nightly_run`, records into `audit.nightly_runs` + `audit.nightly_checks`) with a defined process doc; the Go/No-Go record pipeline (`audit.model_runs`) is in place — no dedicated coordinator beyond the owner, and the real-data gate is still un-produced |
 | **Technical Writer** | README, Azure mapping, schema comments, docs index | All | ✓ README + new docs (`requirements`, `model-labeling-plan`, `deployment-runbook`, `CONTRIBUTING`) |
 
 ## 5. Phase × role coverage matrix
@@ -305,8 +305,12 @@ not yet demonstrated (the Azure Go/No-Go cannot be recorded as met).
 11. **Merge the first real PR and cut a release tag** to exercise the
     documented flow end-to-end, then enable branch protection when the repo is
     hosted.
-12. **Nominate/perform the PM/coordinator role** so the backlog, the Azure
-    gate, and label cadence are actively tracked instead of ad hoc.
+12. **Perform the nightly verification ritual (and log it).** The PM tracking
+    artifact now exists: `python -m scripts.verify_nightly_run` records the
+    daily clean/Azure-gate check into `audit.nightly_checks`
+    (see [docs/nightly-verification.md](nightly-verification.md)). Doing it
+    daily — and re-verifying after any fix with a note — converts the ◐ PM role
+    into a performed process; a dedicated coordinator remains optional.
 
 ## 7. End-state role definition (reference)
 

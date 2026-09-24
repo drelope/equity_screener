@@ -8,8 +8,8 @@ Stages (in dependency order):
     3. populate_companyfacts     -> raw.sec_submissions + raw.companyfacts (dividend universe only)
     4. populate_sec_documents    -> raw.sec_documents concept_groups (dividend universe only)
 5. populate_fundamentals     -> fundamentals.periodic_financials (offline, stored XBRL)
-     6. populate_audit            -> audit.source_lineage + audit.data_quality (offline)
-     7. label_targets (optional)  -> model.features.target_sustainable_dividend
+    6. populate_audit            -> audit.source_lineage + audit.data_quality (offline)
+    7. label_targets (optional)  -> model.features.target_sustainable_dividend
                                     (run with --run-labels after ~12 months of data)
 
 Stages 2-4 only touch securities flagged ``dividend = TRUE`` in
@@ -17,6 +17,10 @@ Stages 2-4 only touch securities flagged ``dividend = TRUE`` in
 Stages 5-6 need no network at all and run over whatever is already stored.
 Stage 7 (labels) is refused on ``--limit``/``--tickers`` runs because labels
 are immutable once written; a partial run would freeze wrong labels.
+
+Every run is recorded in ``audit.nightly_runs`` (per-stage results, exit code,
+trigger) so ``scripts.verify_nightly_run`` can audit it next morning. Recording
+failure never fails the ETL; verify then flags the missing record.
 
 Usage:
     python -m scripts.run_full_etl
@@ -26,14 +30,20 @@ Usage:
     python -m scripts.run_full_etl --skip-derived
     python -m scripts.run_full_etl --run-labels --label-cutoff 2026-12-31
     python -m scripts.run_full_etl --dividend-full-history   # post-PoC total history
+    python -m scripts.run_full_etl --trigger systemd          # set by scheduler
 """
 
 import argparse
+import json
 import subprocess
 import sys
 import time
-from datetime import date
+from datetime import date, datetime, timezone
 from pathlib import Path
+
+from sqlalchemy import text
+
+from src.crispdm.db import engine
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
@@ -51,6 +61,35 @@ def run_module(name, args, skip=False):
     elapsed = time.monotonic() - started
     print(f"=== {name} finished in {elapsed:.1f}s (exit {result.returncode}) ===")
     return result.returncode == 0
+
+
+def record_nightly_run(trigger, started_at, stages, exit_code):
+    """Write the run into audit.nightly_runs; never fail the ETL on recording."""
+    try:
+        status = "success" if exit_code == 0 else "failed"
+        finished = datetime.now(timezone.utc)
+        with engine.begin() as c:
+            c.execute(
+                text(
+                    """
+                    INSERT INTO audit.nightly_runs
+                      (run_date, trigger, started_at, finished_at, exit_code, stages, status)
+                    VALUES (:run_date, :trigger, :started_at, :finished_at,
+                            :exit_code, :stages, :status)
+                    """
+                ),
+                {
+                    "run_date": date.today(),
+                    "trigger": trigger,
+                    "started_at": started_at,
+                    "finished_at": finished,
+                    "exit_code": exit_code,
+                    "stages": json.dumps(stages, default=str),
+                    "status": status,
+                },
+            )
+    except Exception as exc:
+        print(f"[run_full_etl] could not record audit.nightly_runs: {exc}", file=sys.stderr)
 
 
 def main():
@@ -117,6 +156,13 @@ def main():
         action="store_true",
         help="Include non-dividend securities in stages 2-4 (not recommended)",
     )
+    parser.add_argument(
+        "--trigger",
+        type=str,
+        default="manual",
+        choices=["manual", "airflow", "systemd"],
+        help="How this run was started (recorded in audit.nightly_runs)",
+    )
     args = parser.parse_args()
 
     if args.run_labels and (args.limit is not None or args.tickers):
@@ -142,58 +188,72 @@ def main():
         companyfacts_args += ["--limit", str(args.limit)]
     sec_documents_args = list(base)
 
-    ok = run_module("scripts.populate_raw_tables", raw_args, skip=args.skip_raw)
-    if not ok:
-        return 1
+    started_at = datetime.now(timezone.utc)
+    stages = {}
+    all_ok = True
 
-    ok = run_module("scripts.populate_reference_tables", reference_args, skip=args.skip_reference)
-    if not ok:
-        return 1
+    def stage(name, extra, skip=False):
+        ok = run_module(name, extra, skip=skip)
+        stages[name] = "skipped" if skip else ("ok" if ok else "failed")
+        return ok
 
-    if args.sources != "all":
-        dividend_args += ["--sources", args.sources]
-    if args.dividend_full_history:
-        dividend_args += ["--full-history"]
-    elif args.dividend_start is not None:
-        dividend_args += ["--start-date", args.dividend_start]
-    if args.skip_profiles:
-        dividend_args += ["--skip-profiles"]
-    if args.all:
-        dividend_args += ["--include-non-dividend"]
-    ok = run_module("scripts.populate_dividend_data", dividend_args, skip=args.skip_dividend_data)
-    if not ok:
-        return 1
+    if not stage("scripts.populate_raw_tables", raw_args, args.skip_raw):
+        all_ok = False
 
-    if args.all:
-        companyfacts_args += ["--all"]
-    ok = run_module("scripts.populate_companyfacts", companyfacts_args, skip=args.skip_companyfacts)
-    if not ok:
-        return 1
+    if all_ok and not stage(
+        "scripts.populate_reference_tables", reference_args, args.skip_reference
+    ):
+        all_ok = False
 
-    if args.all:
-        sec_documents_args += ["--all"]
-    ok = run_module(
-        "scripts.populate_sec_documents", sec_documents_args, skip=args.skip_sec_documents
-    )
-    if not ok:
-        return 1
+    if all_ok:
+        if args.sources != "all":
+            dividend_args += ["--sources", args.sources]
+        if args.dividend_full_history:
+            dividend_args += ["--full-history"]
+        elif args.dividend_start is not None:
+            dividend_args += ["--start-date", args.dividend_start]
+        if args.skip_profiles:
+            dividend_args += ["--skip-profiles"]
+        if args.all:
+            dividend_args += ["--include-non-dividend"]
+    if all_ok and not stage(
+        "scripts.populate_dividend_data", dividend_args, args.skip_dividend_data
+    ):
+        all_ok = False
 
-    ok = run_module("scripts.populate_fundamentals", [], skip=args.skip_derived)
-    if not ok:
-        return 1
+    if all_ok:
+        if args.all:
+            companyfacts_args += ["--all"]
+    if all_ok and not stage(
+        "scripts.populate_companyfacts", companyfacts_args, args.skip_companyfacts
+    ):
+        all_ok = False
 
-    ok = run_module("scripts.populate_audit", [], skip=args.skip_derived)
-    if not ok:
-        return 1
+    if all_ok:
+        if args.all:
+            sec_documents_args += ["--all"]
+    if all_ok and not stage(
+        "scripts.populate_sec_documents", sec_documents_args, args.skip_sec_documents
+    ):
+        all_ok = False
 
-    if args.run_labels:
+    if all_ok and not stage("scripts.populate_fundamentals", [], args.skip_derived):
+        all_ok = False
+
+    if all_ok and not stage("scripts.populate_audit", [], args.skip_derived):
+        all_ok = False
+
+    if all_ok and args.run_labels:
         label_args = ["--cutoff", args.label_cutoff.isoformat()] if args.label_cutoff else []
-        ok = run_module("scripts.label_targets", label_args)
-        if not ok:
-            return 1
+        if not stage("scripts.label_targets", label_args):
+            all_ok = False
 
-    print("\nFull ETL pipeline complete.")
-    return 0
+    exit_code = 0 if all_ok else 1
+    record_nightly_run(args.trigger, started_at, stages, exit_code)
+
+    if all_ok:
+        print("\nFull ETL pipeline complete.")
+    return exit_code
 
 
 if __name__ == "__main__":

@@ -70,6 +70,11 @@ docker compose up migrate      # migrations are forward-only: see note below
 docker compose up -d api streamlit
 ```
 
+**Nightly health check:** after any deploy (and every morning), confirm the
+03:00 ET run and the data modules with `python -m scripts.verify_nightly_run`
+— full single-owner process in
+[docs/nightly-verification.md](nightly-verification.md).
+
 **Migration note:** `sql/migrations/*` are forward-only (Flyway-style). If a
 failed migration is already applied, do **not** re-run it against the same
 database — `V*`-tracked files are recorded in the schema-migration tracking

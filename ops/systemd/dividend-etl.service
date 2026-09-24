@@ -15,5 +15,5 @@ WorkingDirectory=/mnt/d/dividend_equity_crispdm_implementation/dividend_equity_c
 # Nightly: acquires dividends from DIVIDEND_LOOKBACK_START (2025-01-01) and
 # accrues forward. After the PoC gate passes, switch to total history:
 #   ... python -m scripts.run_full_etl --dividend-full-history
-ExecStart=/mnt/d/dividend_equity_crispdm_implementation/dividend_equity_crispdm/.venv/bin/python -m scripts.run_full_etl
+ExecStart=/mnt/d/dividend_equity_crispdm_implementation/dividend_equity_crispdm/.venv/bin/python -m scripts.run_full_etl --trigger systemd
 EnvironmentFile=/mnt/d/dividend_equity_crispdm_implementation/dividend_equity_crispdm/.env

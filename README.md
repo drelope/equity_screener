@@ -64,6 +64,9 @@ CIK. This is an expected unavailable-data response, not an API outage.
   target is populated.
 - [Data acquisition](docs/data-acquisition.md) — 12-month dividend lookback,
   nightly accrual, and the post-PoC total-history backfill provision.
+- [Nightly verification](docs/nightly-verification.md) — single-owner daily
+  check of the 03:00 ET run + data-module audit (`audit.nightly_runs` /
+  `audit.nightly_checks`).
 - [Deployment runbook](docs/deployment-runbook.md) — release/rollback, secrets,
   nightly schedule (Airflow DAG or systemd).
 - [Contributing](CONTRIBUTING.md) — branch model, commits, PR checklist.

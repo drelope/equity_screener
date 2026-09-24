@@ -39,7 +39,7 @@ def run_full_etl() -> None:
     # (2025-01-01). After the PoC gate passes, switch to total history by
     # appending "--dividend-full-history" to the command below.
     result = subprocess.run(
-        [str(PYTHON), "-m", "scripts.run_full_etl"],
+        [str(PYTHON), "-m", "scripts.run_full_etl", "--trigger", "airflow"],
         cwd=str(PROJECT_ROOT),
         check=False,
     )
