@@ -1,0 +1,28 @@
+-- V0033 prune_pre_fix_data_quality
+--
+-- Remove the audit.data_quality snapshots that were computed before
+-- populate_audit was scoped to the active universe.
+--
+-- Before the fix, data_quality scored every row in reference.securities,
+-- including securities deactivated by a ticker flip (which keep dividend = TRUE
+-- with active = FALSE). That left 6,152 rows in audit.data_quality belonging to
+-- inactive securities, spread across the seven snapshots from 2026-09-21 to
+-- 2026-10-03, and inflated the completeness/quality averages for every date.
+--
+-- populate_audit now filters on s.active = TRUE, so 2026-10-04 is the first
+-- snapshot that reflects the corrected scope. The older snapshots are dropped
+-- rather than kept: they are not comparable to the new ones (different
+-- denominator) and leaving them in place would keep publishing quality metrics
+-- that were computed over a universe the pipeline no longer processes.
+--
+-- audit.data_quality is a derived score, fully recomputed by
+-- `python -m scripts.populate_audit --as-of <date>`, so nothing is lost that
+-- cannot be regenerated.
+--
+-- Scope: 68,035 rows across 7 as_of_date values. Retains the 10,681 rows for
+-- 2026-10-04.
+--
+-- Destructive and irreversible by design; there is deliberately no archive
+-- table, since the intent is that pre-fix history does not exist.
+DELETE FROM audit.data_quality
+WHERE as_of_date < DATE '2026-10-04';

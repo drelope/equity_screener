@@ -10,7 +10,10 @@ or OpenBB calls, so it is runnable offline and idempotent:
   issuer name, coupon, liquidation preference, dividend flag) came from,
   including the provider and confidence score.
 - ``audit.data_quality`` scores every active security on source reliability,
-  completeness, recency, and consistency for the current run date.
+  completeness, recency, and consistency for the current run date. Every
+  component is bounded to [0, 1]; recency needs the explicit upper clamp
+  because ``as_of`` is midnight while a row retrieved later the same day would
+  otherwise score above 1.
 
 Only active securities are audited, so deactivated tickers do not dilute the
 coverage and quality metrics.
@@ -161,11 +164,11 @@ def data_quality(conn, as_of):
                 END AS completeness,
                 CASE
                     WHEN tp.retrieved_at IS NOT NULL
-                    THEN GREATEST(0.0, 1.0 - EXTRACT(EPOCH FROM (:as_of)::timestamp
-                        - tp.retrieved_at::timestamp) / 31536000.0)
+                    THEN LEAST(1.0, GREATEST(0.0, 1.0 - EXTRACT(EPOCH FROM (:as_of)::timestamp
+                        - tp.retrieved_at::timestamp) / 31536000.0))
                     WHEN cf.retrieved_at IS NOT NULL
-                    THEN GREATEST(0.0, 1.0 - EXTRACT(EPOCH FROM (:as_of)::timestamp
-                        - cf.retrieved_at::timestamp) / 31536000.0)
+                    THEN LEAST(1.0, GREATEST(0.0, 1.0 - EXTRACT(EPOCH FROM (:as_of)::timestamp
+                        - cf.retrieved_at::timestamp) / 31536000.0))
                     ELSE 0.0
                 END AS recency,
                 CASE
