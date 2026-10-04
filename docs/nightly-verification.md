@@ -31,7 +31,7 @@ covered.
 |---|---|---|
 | **Nightly run record** | `audit.nightly_runs` | a `success` run (exit 0) exists for the run date |
 | **Stages** | `nightly_runs.stages` | no stage recorded `failed` |
-| **Freshness (data-module audit)** | newest `raw.ticker_profile` / `raw.companyfacts` / `reference.securities` retrieval and `raw.dividend_data` ex-date | within `--max-age-hours` (default 26 h) |
+| **Freshness (data-module audit)** | `MAX(retrieved_at)` in `raw.ticker_profile`, `raw.dividend_data`, `raw.market_data`; `MAX(updated_at)` in `reference.securities`; **`MIN(retrieved_at)`** in `raw.companyfacts` | each source within its own bound in `FRESHNESS_SOURCES` (26 h; 8 d for `raw.companyfacts`, which is a weekly-refresh snapshot). `--max-age-hours` is the fallback for a source with no bound of its own |
 | **Data quality** | `audit.data_quality` (run date) | mean `quality_score` ≥ 0.50 and ≥ 80% rated good/fair |
 | **Dividend accrual coverage** | `raw.dividend_data` × `reference.securities` dividend universe in the lookback window (2025-01-01) | ≥ 95% of the universe covered |
 | **Walk-forward gate** | latest `audit.model_runs` | `recall >= MIN_RECALL`; *info* until real labels accrue |
@@ -45,11 +45,55 @@ label ownership with `--verified-by`, annotate with `--notes`).
 ```
 Nightly verification for 2026-09-23 -> ATTENTION
 [ !! ] nightly_run_record: no audit.nightly_runs row
-[ OK ] freshness: oldest critical source 25.0h old (SLA 26.0h)
+[ OK ] freshness: raw.ticker_profile 4.0h (SLA 26.0h); raw.dividend_data 21.6h (SLA 26.0h);
+     raw.market_data 22.4h (SLA 26.0h); reference.securities 4.0h (SLA 26.0h);
+     raw.companyfacts 71.6h (SLA 192.0h)
 [ !! ] data_quality: mean quality 0.00 (min 0.5), good/fair share 0% (min 80%), n=0
 [ !! ] dividend_coverage: 0/4789 dividend securities covered in lookback (0%, min 95%)
 [info] walk_forward_gate: no model_runs yet; gate pending real-data accrual
 ```
+
+The freshness line names every source and its own bound, so a breach is
+attributable rather than an anonymous worst-case number. A source with no stored
+rows is not aged — an unmeasured source must not read as a stale one.
+
+`raw.companyfacts` holds one immutable snapshot of each issuer's entire SEC
+history and is refreshed on a weekly cycle
+(`run_full_etl --companyfacts-refresh-after-days`, default 5; `--refresh` forces a
+re-fetch now). Its 8-day bound is matched to that cadence, not chosen to make the
+current data pass: a nightly that stops running still ages it past 8 days.
+
+It is also the one source aged by `MIN` rather than `MAX`, because a refresh run
+rewrites every due row: its age is the age of the **stalest payload still
+carried**, and reading `MAX` would let a partial refresh pass — re-fetching 2 of
+7,066 CIKs moves `MAX` to now and reports the source as fresh while 7,064
+snapshots are a week old. The other four sources re-fetch a moving lookback
+window and their out-of-window rows are never meant to be touched, so `MAX` is
+the only meaningful reading for those.
+
+Because of that, all three `raw.companyfacts` populations need a refresh cadence or
+one stale CIK fails the whole source. The nightly covers them in priority order:
+stage 4a (preferred set, 3 days) → 4b (dividend universe, 5 days) → 4c (CIKs in
+neither universe, 5 days). A `raw.companyfacts` breach therefore means *one CIK was
+not refreshed*, not that the table is stale — the detail line reports the age, and
+the per-CIK accounting (`refreshed` / `skipped` / `deferred`) is in the stage log.
+
+Note the margin. The age at check time is `cadence + days missed`, so the
+tolerance is `bound - cadence`, not the cadence itself. At 5 days against an
+8-day bound that is **3 consecutive missed nightlies**; stage 4a at 3 days
+tolerates 5. The earlier 7-day default tolerated only 1 — one laptop lid closed
+at 03:00 was a breach — which is why it is 5. A test pins the relationship so the
+two constants cannot drift apart silently.
+
+**These bounds are currently PoC bounds and must be reverted before deployment.**
+`FRESHNESS_SOURCES` holds `POC_DAILY_BOUND_HOURS` (240h) and
+`POC_COMPANYFACTS_BOUND_HOURS` (504h), widened during the proof of concept so the
+check does not report a breach every morning the development host is not running
+at 03:00. The four daily sources were previously bounded at 26h, which on a daily
+cadence is 2 hours of tolerance — less than one missed nightly. See
+`REVERT_BEFORE_DEPLOY` in `docs/data-health-workstreams.md` for the real values to
+restore and the reasoning. A test asserts every bound is looser than the cadence it
+covers, so a healthy nightly cannot breach its own check.
 
 Before the first historical data has accrued, `[!!]` on run record / data
 quality / coverage is **expected** — it means "the pipeline has not run yet".

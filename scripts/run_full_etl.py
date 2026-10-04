@@ -4,18 +4,37 @@ Run the full dividend-equity ETL pipeline.
 Stages (in dependency order):
     0. populate_raw_tables       -> raw.company_ticker + raw.ticker_profile (dividend payers)
     1. populate_reference_tables -> reference.exchanges/issuers/securities (dividend flags)
-    2. populate_dividend_data    -> raw.dividend_data, raw.ticker_profile, preferred.security_terms
-    3. populate_companyfacts     -> raw.sec_submissions + raw.companyfacts (dividend universe only)
-    4. populate_sec_documents    -> raw.sec_documents concept_groups (dividend universe only)
-5. populate_fundamentals     -> fundamentals.periodic_financials (offline, stored XBRL)
-    6. populate_audit            -> audit.source_lineage + audit.data_quality (offline)
-    7. label_targets (optional)  -> model.features.target_sustainable_dividend
+    2. populate_market_data      -> raw.market_data daily OHLCV (dividend universe only)
+    3. populate_dividend_data    -> raw.dividend_data, raw.ticker_profile, preferred.security_terms
+    3a. populate_clean_ticker_profile -> clean.ticker_profile (one normalized CIK/ticker row)
+    3b. populate_clean_company_profile -> clean.company_profile + clean.company_officer
+    4a. ... --preferred-facts   -> raw.companyfacts (preferred set; priority, runs first)
+    4b. populate_companyfacts   -> raw.sec_submissions + raw.companyfacts (dividend universe)
+    4c. ... --sweep-unlinked    -> raw.companyfacts (CIKs in neither universe)
+    5. populate_sec_documents    -> raw.sec_documents concept_groups (dividend universe only)
+    6. populate_fundamentals     -> fundamentals.periodic_financials (offline, stored XBRL)
+    7. build_features            -> model.features (offline, last --feature-days only)
+    8. score_rank                -> model.scores + model.predictions + model.rankings
+    9. populate_audit            -> audit.source_lineage + audit.data_quality (offline)
+    10. label_targets (optional) -> model.features.target_sustainable_dividend
                                     (run with --run-labels after ~12 months of data)
 
-Stages 2-4 only touch securities flagged ``dividend = TRUE`` in
+Before stage 0, ``migrate --check`` refuses to start if any migration on disk
+is unapplied. Stages 6-8 were not wired in until the 2026-09-30 session: the
+nightly refreshed prices and dividends but nothing downstream, which is why
+model.scores was empty and the dashboard's Median Score read N/A. Stage 7 is
+incremental -- the feature insert upserts on (security_id, as_of_date) and only
+the last ``--feature-days`` observations are rebuilt, which must exceed the 252
+trading-day price lookback behind the volatility and momentum features.
+
+Stages 2-5 only touch securities flagged ``dividend = TRUE`` in
 ``reference.securities``, so SEC and OpenBB are never called for non-payers.
-Stages 5-6 need no network at all and run over whatever is already stored.
-Stage 7 (labels) is refused on ``--limit``/``--tickers`` runs because labels
+Stages 4a/4b re-fetch stored SEC companyfacts payloads once they are older than
+``--companyfacts-refresh-after-days`` (default 5): a stored CIK is otherwise
+skipped forever, which would freeze the filings and every point-in-time vintage
+derived from them at first sighting.
+Stages 6-9 need no network at all and run over whatever is already stored.
+Stage 10 (labels) is refused on ``--limit``/``--tickers`` runs because labels
 are immutable once written; a partial run would freeze wrong labels.
 
 Every run is recorded in ``audit.nightly_runs`` (per-stage results, exit code,
@@ -92,6 +111,54 @@ def record_nightly_run(trigger, started_at, stages, exit_code):
         print(f"[run_full_etl] could not record audit.nightly_runs: {exc}", file=sys.stderr)
 
 
+#: Arbitrary but fixed key for the pipeline's mutual-exclusion lock. Postgres
+#: advisory locks are cluster-wide, so the same value excludes a manual run, a
+#: second systemd invocation, and a developer's foreground run alike.
+PIPELINE_LOCK_KEY = 4_713_155_001
+
+
+class PipelineAlreadyRunning(RuntimeError):
+    """Another ETL run is in flight against the same warehouse."""
+
+
+def _acquire_run_lock():
+    """Take the pipeline lock on a dedicated connection, or raise.
+
+    Returned handle must be passed to :func:`_release_run_lock`. Advisory locks
+    are session-scoped, so this deliberately holds its own connection open for
+    the life of the run rather than borrowing a per-call one.
+
+    This is the overlap that actually happened: a hand-started
+    populate_dividend_data was still running 1h33m into the first timer-driven
+    nightly, putting two writers on the same tables. systemd will not start a
+    second instance of a unit it already has active, so the timer alone cannot
+    cause it -- the exposure is a manual or foreground run.
+    """
+    conn = engine.connect()
+    acquired = conn.execute(
+        text("SELECT pg_try_advisory_lock(:key)"), {"key": PIPELINE_LOCK_KEY}
+    ).scalar()
+    if not acquired:
+        conn.close()
+        raise PipelineAlreadyRunning(
+            "another ETL run holds the pipeline lock; refusing to run a second one "
+            "against the same warehouse. Wait for it to finish, or inspect "
+            "`pg_locks WHERE locktype = 'advisory'`."
+        )
+    return conn
+
+
+def _release_run_lock(conn):
+    """Release the lock and close its connection; safe to call once per run."""
+    if conn is None:
+        return
+    try:
+        conn.execute(text("SELECT pg_advisory_unlock(:key)"), {"key": PIPELINE_LOCK_KEY})
+        conn.commit()
+    finally:
+        conn.close()
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -115,46 +182,102 @@ def main():
     )
     parser.add_argument("--skip-reference", action="store_true", help="Skip stage 1")
     parser.add_argument("--skip-raw", action="store_true", help="Skip stage 0")
-    parser.add_argument("--skip-dividend-data", action="store_true", help="Skip stage 2")
-    parser.add_argument("--skip-companyfacts", action="store_true", help="Skip stage 3")
-    parser.add_argument("--skip-sec-documents", action="store_true", help="Skip stage 4")
+    parser.add_argument("--skip-market-data", action="store_true", help="Skip stage 2")
+    parser.add_argument("--skip-dividend-data", action="store_true", help="Skip stage 3")
+    parser.add_argument("--skip-companyfacts", action="store_true", help="Skip stage 4b")
+    parser.add_argument(
+        "--companyfacts-refresh-after-days",
+        type=int,
+        default=5,
+        help="Stages 4b/4c re-fetch a stored SEC companyfacts payload once it is older "
+        "than this many days (default 5). A stored CIK is otherwise skipped forever, "
+        "which freezes the filings -- and every point-in-time vintage derived from "
+        "them -- at first sighting. Use 0 to re-fetch on every run, or a negative "
+        "value to never re-fetch. The default is 5 and not 7 because the freshness "
+        "check bounds this table at 8 days: a 7-day cadence leaves one day of "
+        "slack, so a single missed nightly -- one laptop lid closed at 03:00 -- "
+        "breaches the source. 5 against 8 tolerates two.",
+    )
+    parser.add_argument(
+        "--preferred-companyfacts-refresh-after-days",
+        type=int,
+        default=3,
+        help="Stage 4a re-fetches a stored SEC companyfacts payload for the PREFERRED "
+        "set once it is older than this many days (default 3). This half of "
+        "raw.companyfacts is the priority: it runs first and on the tighter "
+        "cadence, so an interrupted or timed-out nightly still leaves it the "
+        "freshest. Same 0 / negative conventions as the dividend universe.",
+    )
+    parser.add_argument(
+        "--skip-preferred-companyfacts",
+        action="store_true",
+        help="Skip stage 4a. Only safe if the preferred-set companyfacts payloads are "
+        "not expected to change: the freshness check ages raw.companyfacts by its "
+        "oldest row, so leaving these un-refreshed fails the bound for the whole "
+        "source.",
+    )
+    parser.add_argument(
+        "--skip-unlinked-companyfacts",
+        action="store_true",
+        help="Skip stage 4c. Only safe if the stored companyfacts rows that belong to "
+        "neither the dividend nor the preferred universe are not expected to change: "
+        "the freshness check ages raw.companyfacts by its oldest row, so leaving "
+        "them un-refreshed fails the bound for the whole source.",
+    )
+    parser.add_argument("--skip-sec-documents", action="store_true", help="Skip stage 5")
     parser.add_argument(
         "--skip-derived",
         action="store_true",
-        help="Do not run offline derived stages 5 (fundamentals) and 6 (audit)",
+        help="Do not run the offline derived stages (fundamentals, features, "
+        "scoring, audit) or the schema preflight",
     )
     parser.add_argument(
-        "--skip-profiles", action="store_true", help="Do not refresh raw.ticker_profile in stage 2"
+        "--feature-days",
+        type=int,
+        default=400,
+        help="Days of observations for the nightly feature rebuild (default: 400). "
+        "Must exceed the longest price lookback (252 trading days) or the "
+        "volatility and momentum features lose their trailing window.",
+    )
+    parser.add_argument(
+        "--skip-profiles", action="store_true", help="Do not refresh raw.ticker_profile in stage 3"
     )
     parser.add_argument(
         "--run-labels",
         action="store_true",
-        help="Stage 7: populate target_sustainable_dividend from future dividend "
+        help="Stage 8: populate target_sustainable_dividend from future dividend "
         "events (default off; refused on partial runs)",
     )
     parser.add_argument(
         "--label-cutoff",
         type=date.fromisoformat,
         default=None,
-        help="Label horizon cutoff for stage 7 (default: today)",
+        help="Label horizon cutoff for stage 8 (default: today)",
+    )
+    parser.add_argument(
+        "--price-start",
+        type=str,
+        default=None,
+        help="Override the price lookback start for stage 2 "
+        "(default: PRICE_LOOKBACK_START, i.e. 2023-09-01)",
     )
     parser.add_argument(
         "--dividend-start",
         type=str,
         default=None,
-        help="Override the 12-month dividend lookback start for stage 2 "
+        help="Override the 12-month dividend lookback start for stage 3 "
         "(default: DIVIDEND_LOOKBACK_START, i.e. 2025-01-01)",
     )
     parser.add_argument(
         "--dividend-full-history",
         action="store_true",
-        help="Post-PoC provision: stage 2 fetches the full available dividend "
+        help="Post-PoC provision: stage 3 fetches the full available dividend "
         "history instead of the 12-month lookback",
     )
     parser.add_argument(
         "--all",
         action="store_true",
-        help="Include non-dividend securities in stages 2-4 (not recommended)",
+        help="Include non-dividend securities in stages 2-5 (not recommended)",
     )
     parser.add_argument(
         "--trigger",
@@ -180,80 +303,200 @@ def main():
 
     raw_args = ["--limit", str(args.limit)] if args.limit is not None else []
     reference_args = ["--limit", str(args.limit)] if args.limit is not None else []
+    market_data_args = list(base)
+    if args.limit is not None:
+        market_data_args += ["--limit", str(args.limit)]
+    if args.price_start is not None:
+        market_data_args += ["--start-date", args.price_start]
     dividend_args = list(base)
     if args.limit is not None:
         dividend_args += ["--limit", str(args.limit)]
     companyfacts_args = list(base)
+    if args.companyfacts_refresh_after_days >= 0:
+        companyfacts_args += ["--refresh-after-days", str(args.companyfacts_refresh_after_days)]
     if args.limit is not None:
-        companyfacts_args += ["--limit", str(args.limit)]
+        companyfacts_args += ["--max-ciks", str(args.limit)]
+    preferred_companyfacts_args = list(base) + ["--preferred-facts"]
+    if args.preferred_companyfacts_refresh_after_days >= 0:
+        preferred_companyfacts_args += [
+            "--refresh-after-days",
+            str(args.preferred_companyfacts_refresh_after_days),
+        ]
+    if args.limit is not None:
+        preferred_companyfacts_args += ["--max-ciks", str(args.limit)]
+    unlinked_companyfacts_args = list(base) + ["--sweep-unlinked"]
+    if args.companyfacts_refresh_after_days >= 0:
+        unlinked_companyfacts_args += [
+            "--refresh-after-days",
+            str(args.companyfacts_refresh_after_days),
+        ]
+    if args.limit is not None:
+        unlinked_companyfacts_args += ["--max-ciks", str(args.limit)]
     sec_documents_args = list(base)
 
     started_at = datetime.now(timezone.utc)
     stages = {}
     all_ok = True
 
-    def stage(name, extra, skip=False):
-        ok = run_module(name, extra, skip=skip)
-        stages[name] = "skipped" if skip else ("ok" if ok else "failed")
-        return ok
+    try:
+        lock_conn = _acquire_run_lock()
+    except PipelineAlreadyRunning as exc:
+        print(f"\n✗ {exc}", file=sys.stderr)
+        return 2
 
-    if not stage("scripts.populate_raw_tables", raw_args, args.skip_raw):
-        all_ok = False
+    try:
 
-    if all_ok and not stage(
-        "scripts.populate_reference_tables", reference_args, args.skip_reference
-    ):
-        all_ok = False
+        def stage(module, extra, skip=False, label=None):
+            """Run one stage.
 
-    if all_ok:
-        if args.sources != "all":
-            dividend_args += ["--sources", args.sources]
-        if args.dividend_full_history:
-            dividend_args += ["--full-history"]
-        elif args.dividend_start is not None:
-            dividend_args += ["--start-date", args.dividend_start]
-        if args.skip_profiles:
-            dividend_args += ["--skip-profiles"]
-        if args.all:
-            dividend_args += ["--include-non-dividend"]
-    if all_ok and not stage(
-        "scripts.populate_dividend_data", dividend_args, args.skip_dividend_data
-    ):
-        all_ok = False
+            ``module`` is what gets handed to ``python -m``; ``label`` is what goes
+            into the audit record. They differ wherever one script covers several
+            populations via a flag, since ``scripts.populate_companyfacts`` has no
+            submodule named ``preferred`` or ``unlinked`` -- and a dotted pseudo-module
+            fails at runtime with ModuleNotFoundError. Keeping them separate means the
+            audit row can still distinguish the populations while the subprocess
+            always names a module that actually exists.
+            """
+            ok = run_module(module, extra, skip=skip)
+            key = label or module
+            stages[key] = "skipped" if skip else ("ok" if ok else "failed")
+            return ok
 
-    if all_ok:
-        if args.all:
-            companyfacts_args += ["--all"]
-    if all_ok and not stage(
-        "scripts.populate_companyfacts", companyfacts_args, args.skip_companyfacts
-    ):
-        all_ok = False
-
-    if all_ok:
-        if args.all:
-            sec_documents_args += ["--all"]
-    if all_ok and not stage(
-        "scripts.populate_sec_documents", sec_documents_args, args.skip_sec_documents
-    ):
-        all_ok = False
-
-    if all_ok and not stage("scripts.populate_fundamentals", [], args.skip_derived):
-        all_ok = False
-
-    if all_ok and not stage("scripts.populate_audit", [], args.skip_derived):
-        all_ok = False
-
-    if all_ok and args.run_labels:
-        label_args = ["--cutoff", args.label_cutoff.isoformat()] if args.label_cutoff else []
-        if not stage("scripts.label_targets", label_args):
+        # Preflight, before any long stage. A stage that reads a column the
+        # database does not have fails at execution -- hours in, with the rows it
+        # did manage to write already committed. This is what let the 02:00
+        # nightly write nothing and still be recorded as successful.
+        if not stage(
+            "scripts.migrate", ["--check"], args.skip_derived, label="scripts.migrate --check"
+        ):
             all_ok = False
 
-    exit_code = 0 if all_ok else 1
-    record_nightly_run(args.trigger, started_at, stages, exit_code)
+        if all_ok and not stage("scripts.populate_raw_tables", raw_args, args.skip_raw):
+            all_ok = False
 
-    if all_ok:
-        print("\nFull ETL pipeline complete.")
-    return exit_code
+        if all_ok and not stage(
+            "scripts.populate_reference_tables", reference_args, args.skip_reference
+        ):
+            all_ok = False
+
+        if all_ok:
+            if args.all:
+                market_data_args += ["--all"]
+        if not stage("scripts.populate_market_data", market_data_args, args.skip_market_data):
+            all_ok = False
+
+        if all_ok:
+            if args.sources != "all":
+                dividend_args += ["--sources", args.sources]
+            if args.dividend_full_history:
+                dividend_args += ["--full-history"]
+            elif args.dividend_start is not None:
+                dividend_args += ["--start-date", args.dividend_start]
+            if args.skip_profiles:
+                dividend_args += ["--skip-profiles"]
+            if args.all:
+                dividend_args += ["--include-non-dividend"]
+        if all_ok and not stage(
+            "scripts.populate_dividend_data", dividend_args, args.skip_dividend_data
+        ):
+            all_ok = False
+
+        if all_ok and not stage("scripts.populate_clean_ticker_profile", []):
+            all_ok = False
+
+        if all_ok and not stage("scripts.populate_clean_company_profile", []):
+            all_ok = False
+
+        # raw.companyfacts holds three populations, all refreshed here.
+        #
+        # Stage 4a is the preferred set and runs FIRST: it is the priority half, on a
+        # tighter cadence (3 days against 7), so a nightly that is cut short -- by the
+        # 12h TimeoutStartSec, or by a WSL2 host that suspends mid-run -- still leaves
+        # the preferred payloads fresh rather than frozen at first sighting. 4b then
+        # sweeps the dividend universe, and 4c the CIKs in neither universe.
+        #
+        # All three are required, not alternatives: the freshness check ages this table
+        # by its OLDEST row, so one never-refreshed CIK fails the bound for the whole
+        # source. Priority is about ordering and cadence, not about which populations
+        # may be skipped -- hence a --skip-* flag per stage, each documenting the
+        # consequence. The overlap costs nothing: a CIK 4a just refreshed is not yet
+        # due, so 4b and 4c skip it.
+        if all_ok and not stage(
+            "scripts.populate_companyfacts",
+            preferred_companyfacts_args,
+            args.skip_preferred_companyfacts,
+            label="scripts.populate_companyfacts.preferred",
+        ):
+            all_ok = False
+
+        if all_ok:
+            if args.all:
+                companyfacts_args += ["--all"]
+        if all_ok and not stage(
+            "scripts.populate_companyfacts",
+            companyfacts_args,
+            args.skip_companyfacts,
+            label="scripts.populate_companyfacts.dividend",
+        ):
+            all_ok = False
+
+        # raw.companyfacts has a third population: CIKs stored by an earlier, wider
+        # run that are in neither the dividend nor the preferred universe (2,896 rows
+        # here). Both sweeps walk a security universe, so those rows are invisible to
+        # both, and the MIN-based freshness check would pin the whole source to a
+        # permanent breach on rows no stage log mentions. Runs last: it is the
+        # lowest-priority population and shares the dividend cadence.
+        if all_ok and not stage(
+            "scripts.populate_companyfacts",
+            unlinked_companyfacts_args,
+            args.skip_unlinked_companyfacts,
+            label="scripts.populate_companyfacts.unlinked",
+        ):
+            all_ok = False
+
+        if all_ok:
+            if args.all:
+                sec_documents_args += ["--all"]
+        if all_ok and not stage(
+            "scripts.populate_sec_documents", sec_documents_args, args.skip_sec_documents
+        ):
+            all_ok = False
+
+        if all_ok and not stage("scripts.populate_fundamentals", [], args.skip_derived):
+            all_ok = False
+
+        # Features and scoring were not stages until now, which is why
+        # model.scores was empty and the dashboard's Median Score read N/A: the
+        # nightly refreshed prices and dividends but nothing downstream of them.
+        # Both are incremental -- the feature insert upserts on
+        # (security_id, as_of_date) and only the recent tail is rebuilt, and
+        # score_rank scores the latest date -- so the added cost is minutes, not
+        # the ~50 minutes a full history rebuild takes.
+        if all_ok and not stage(
+            "scripts.build_features", ["--days", str(args.feature_days)], args.skip_derived
+        ):
+            all_ok = False
+
+        if all_ok and not stage("scripts.score_rank", [], args.skip_derived):
+            all_ok = False
+
+        # The audit snapshot runs last so it records the scores just written.
+        if all_ok and not stage("scripts.populate_audit", [], args.skip_derived):
+            all_ok = False
+
+        if all_ok and args.run_labels:
+            label_args = ["--cutoff", args.label_cutoff.isoformat()] if args.label_cutoff else []
+            if not stage("scripts.label_targets", label_args):
+                all_ok = False
+
+        exit_code = 0 if all_ok else 1
+        record_nightly_run(args.trigger, started_at, stages, exit_code)
+
+        if all_ok:
+            print("\nFull ETL pipeline complete.")
+        return exit_code
+    finally:
+        _release_run_lock(lock_conn)
 
 
 if __name__ == "__main__":

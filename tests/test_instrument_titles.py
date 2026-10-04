@@ -71,3 +71,46 @@ def test_skips_non_xbrl_filings():
 def test_empty_payload_returns_none():
     assert pick_best_filing({}) is None
     assert pick_best_filing(None) is None
+
+
+class _Result:
+    def __init__(self, rows):
+        self._rows = rows
+
+    def mappings(self):
+        return self
+
+    def all(self):
+        return self._rows
+
+
+class _FakeConnection:
+    def __init__(self, rows=()):
+        self._rows = list(rows)
+        self.statements = []
+
+    def execute(self, statement, params=None):
+        self.statements.append(str(statement))
+        return _Result(self._rows)
+
+
+def test_load_cik_universe_defaults_to_active_securities():
+    from scripts.populate_sec_instrument_titles import load_cik_universe
+
+    conn = _FakeConnection([{"cik": "0000320193"}])
+
+    ciks = load_cik_universe(conn)
+
+    assert ciks == ["0000320193"]
+    assert "s.active = TRUE" in conn.statements[0]
+
+
+def test_load_cik_universe_keeps_active_filter_with_explicit_cik():
+    from scripts.populate_sec_instrument_titles import load_cik_universe
+
+    conn = _FakeConnection()
+
+    load_cik_universe(conn, cik="320193")
+
+    assert "s.active = TRUE" in conn.statements[0]
+    assert "s.cik = :cik" in conn.statements[0]

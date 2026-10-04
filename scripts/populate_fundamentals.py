@@ -18,6 +18,7 @@ Usage:
 
 import argparse
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 
 from sqlalchemy import text
@@ -30,14 +31,24 @@ from src.crispdm.fundamentals import extract_periodic_financials
 from src.crispdm.xbrl_tags import PERIODIC_FINANCIAL_CONCEPTS
 
 
+@dataclass(frozen=True)
+class FundamentalsResult:
+    """What the stage actually did, so main() can fail on a stage that did nothing."""
+
+    candidates: int
+    securities: int
+    periods: int
+    errors: int
+
+
 def load_candidates(conn, tickers=None, limit=None):
     """Securities with a stored companyfacts payload, slimmed to the facts used.
 
     The companyfacts payload is per-issuer CIK but periodic financials are
     stored per security_id, so each CIK's fact slice is extracted once and
-    fanned out to every security sharing that CIK.
+    fanned out to every active, dividend-flagged security sharing that CIK.
     """
-    clauses = ["cf.cik IS NOT NULL"]
+    clauses = ["cf.cik IS NOT NULL", "s.active = TRUE", "s.dividend = TRUE"]
     params = {"concepts": list(PERIODIC_FINANCIAL_CONCEPTS)}
     if tickers:
         clauses.append("UPPER(s.ticker) = ANY(:tickers)")
@@ -74,22 +85,38 @@ def load_candidates(conn, tickers=None, limit=None):
 
 
 def upsert_periodic_financials(conn, security_id, rows):
-    """Upsert one fundamentals.periodic_financials row per fiscal period."""
+    """Upsert one fundamentals.periodic_financials row per (period, vintage).
+
+    ``filed`` is part of the conflict key because a period legitimately appears
+    more than once: the original filing and each later restatement are distinct
+    observations, and collapsing them would destroy the ability to resolve an
+    as-of date correctly.
+    """
     inserted = 0
     for row in rows:
         result = conn.execute(
             text("""
             INSERT INTO fundamentals.periodic_financials
-                (security_id, period_end, fiscal_year, fiscal_period,
+                (security_id, period_end, fiscal_year, fiscal_period, filed,
                  revenue, operating_income, net_income, eps, cash, assets,
                  liabilities, debt, equity, operating_cash_flow,
-                 capital_expenditures, free_cash_flow, source, retrieved_at)
-            VALUES (:security_id, :period_end, :fiscal_year, :fiscal_period,
+                 capital_expenditures, free_cash_flow,
+                 depreciation_amortization, interest_expense, shares_outstanding,
+                 current_assets, current_liabilities,
+                 debt_maturing_12m, debt_maturing_year_2,
+                 committed_undrawn_facility,
+                 source, retrieved_at)
+            VALUES (:security_id, :period_end, :fiscal_year, :fiscal_period, :filed,
                     :revenue, :operating_income, :net_income, :eps, :cash,
                     :assets, :liabilities, :debt, :equity,
                     :operating_cash_flow, :capital_expenditures,
-                    :free_cash_flow, :source, now())
-            ON CONFLICT (security_id, period_end, fiscal_period) DO UPDATE SET
+                    :free_cash_flow, :depreciation_amortization,
+                    :interest_expense, :shares_outstanding,
+                    :current_assets, :current_liabilities,
+                    :debt_maturing_12m, :debt_maturing_year_2,
+                    :committed_undrawn_facility,
+                    :source, now())
+            ON CONFLICT (security_id, period_end, fiscal_period, filed) DO UPDATE SET
                 fiscal_year = EXCLUDED.fiscal_year,
                 revenue = EXCLUDED.revenue,
                 operating_income = EXCLUDED.operating_income,
@@ -103,6 +130,14 @@ def upsert_periodic_financials(conn, security_id, rows):
                 operating_cash_flow = EXCLUDED.operating_cash_flow,
                 capital_expenditures = EXCLUDED.capital_expenditures,
                 free_cash_flow = EXCLUDED.free_cash_flow,
+                depreciation_amortization = EXCLUDED.depreciation_amortization,
+                interest_expense = EXCLUDED.interest_expense,
+                shares_outstanding = EXCLUDED.shares_outstanding,
+                current_assets = EXCLUDED.current_assets,
+                current_liabilities = EXCLUDED.current_liabilities,
+                debt_maturing_12m = EXCLUDED.debt_maturing_12m,
+                committed_undrawn_facility = EXCLUDED.committed_undrawn_facility,
+                debt_maturing_year_2 = EXCLUDED.debt_maturing_year_2,
                 source = EXCLUDED.source,
                 retrieved_at = now()
         """),
@@ -111,6 +146,7 @@ def upsert_periodic_financials(conn, security_id, rows):
                 "period_end": row.get("period_end"),
                 "fiscal_year": row.get("fiscal_year"),
                 "fiscal_period": row.get("fiscal_period") or "FY",
+                "filed": row.get("filed"),
                 "revenue": row.get("revenue"),
                 "operating_income": row.get("operating_income"),
                 "net_income": row.get("net_income"),
@@ -123,6 +159,14 @@ def upsert_periodic_financials(conn, security_id, rows):
                 "operating_cash_flow": row.get("operating_cash_flow"),
                 "capital_expenditures": row.get("capital_expenditures"),
                 "free_cash_flow": row.get("free_cash_flow"),
+                "depreciation_amortization": row.get("depreciation_amortization"),
+                "interest_expense": row.get("interest_expense"),
+                "shares_outstanding": row.get("shares_outstanding"),
+                "current_assets": row.get("current_assets"),
+                "current_liabilities": row.get("current_liabilities"),
+                "debt_maturing_12m": row.get("debt_maturing_12m"),
+                "committed_undrawn_facility": row.get("committed_undrawn_facility"),
+                "debt_maturing_year_2": row.get("debt_maturing_year_2"),
                 "source": row.get("source") or "SEC_XBRL",
             },
         )
@@ -137,22 +181,44 @@ def populate_fundamentals(tickers=None, limit=None):
     with engine.begin() as conn:
         candidates = load_candidates(conn, tickers=tickers, limit=limit)
         for candidate in candidates:
+            # A savepoint per issuer. One outer transaction wraps the stage for
+            # throughput, which means a single bad statement aborts it and every
+            # later statement then fails with InFailedSqlTransaction. That turns
+            # one root cause into one error per remaining candidate, and the
+            # resulting error text points at the wrong issuer entirely.
             try:
-                payload = {"full_facts": {"facts": {"us-gaap": candidate["us_gaap"]}}}
-                rows = extract_periodic_financials(payload)
-                if rows:
-                    periods += upsert_periodic_financials(conn, candidate["security_id"], rows)
-                    securities += 1
+                with conn.begin_nested():
+                    payload = {"full_facts": {"facts": {"us-gaap": candidate["us_gaap"]}}}
+                    rows = extract_periodic_financials(payload)
+                    if rows:
+                        periods += upsert_periodic_financials(conn, candidate["security_id"], rows)
+                        securities += 1
             except Exception as exc:
                 errors += 1
                 if errors <= 5:
                     print(f"  Error extracting {candidate['ticker']}: {exc}")
 
-    print("\n✓ Populated fundamentals.periodic_financials from stored XBRL:")
-    print(f"  Securities: {securities}")
-    print(f"  Fiscal-period rows upserted: {periods}")
-    print(f"  Errors: {errors}")
-    return periods
+    result = FundamentalsResult(
+        candidates=len(candidates), securities=securities, periods=periods, errors=errors
+    )
+    # The checkmark is conditional because it used to print over a stage that had
+    # written nothing at all: 8,350 errors, 0 rows, and a success tick in the
+    # nightly log, which run_full_etl and populate_audit both recorded as ok.
+    failed = result.candidates > 0 and result.periods == 0
+    print(f"\n{'✗' if failed else '✓'} Fundamentals.periodic_financials from stored XBRL:")
+    print(f"  Candidates: {result.candidates}")
+    print(f"  Securities: {result.securities}")
+    print(f"  Fiscal-period rows upserted: {result.periods}")
+    print(f"  Errors: {result.errors}")
+    if result.candidates:
+        print(f"  Error rate: {result.errors}/{result.candidates}")
+    if failed:
+        print(
+            "  No rows were written. The stored data is unchanged, but the stage "
+            "did not do its job -- most often a migration is missing.",
+            file=sys.stderr,
+        )
+    return result
 
 
 def main():
@@ -168,11 +234,23 @@ def main():
     )
 
     try:
-        populate_fundamentals(tickers=tickers, limit=args.limit)
-        return 0
+        result = populate_fundamentals(tickers=tickers, limit=args.limit)
     except Exception as exc:
         print(f"✗ Error populating fundamentals: {exc}", file=sys.stderr)
         return 1
+
+    # A stage that processed candidates and wrote nothing has failed, whatever
+    # its internal error count says. main() used to discard the return value and
+    # return 0 unconditionally, so a wholly broken stage exited 0 and the nightly
+    # was audited as successful.
+    if result.candidates > 0 and result.periods == 0:
+        print(
+            f"✗ populate_fundamentals wrote 0 of {result.candidates} candidates "
+            f"({result.errors} errors); treating the stage as failed.",
+            file=sys.stderr,
+        )
+        return 1
+    return 0
 
 
 if __name__ == "__main__":

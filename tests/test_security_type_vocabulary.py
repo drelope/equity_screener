@@ -332,10 +332,24 @@ def test_classify_instrument_cover_titles_bind_preferred_series():
     assert decided_pd.security_type == "preferred stock"
     assert decided_pd.matched_title == "7.875% Series D Cumulative Redeemable Preferred Stock"
     bare_type_match = match_security_title(ACRES_COVER_TITLES, "preferred stock")
+    assert bare_type_match is None
+    assert decided_pd.matched_title not in (None, bare_type_match)
+
+
+def test_match_security_title_returns_only_unambiguous_match():
     assert (
-        bare_type_match == "8.625% Fixed-to-Floating Series C Cumulative Redeemable Preferred Stock"
+        match_security_title(
+            ["Series D Preferred Stock", "Series E Preferred Stock"],
+            "preferred stock",
+        )
+        is None
     )
-    assert decided_pd.matched_title != bare_type_match
+    assert (
+        match_security_title(["Common Stock", "Series D Preferred Stock"], "preferred stock")
+        == "Series D Preferred Stock"
+    )
+    assert match_security_title(["Arbor Realty Trust, Inc."], "preferred stock") is None
+    assert match_security_title(["Common Stock"], "other_equity") is None
 
 
 def test_classify_instrument_brk_class_letter_binds_title():

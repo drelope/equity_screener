@@ -6,15 +6,18 @@ checks, for the target run date:
 
   1. **Nightly run** — an ``audit.nightly_runs`` row exists for ``run_date``
      with status ``success`` (exit 0) and no failed stages.
-  2. **Data-module audit freshness** — ``audit.data_quality`` has the run-date
-     score; the newest SEC/OpenBB retrievals and dividend events are within the
-     freshness SLA (default 26 hours).
-  3. **Dividend accrual** — share of the ``dividend = TRUE`` universe covered by
-     ``raw.dividend_data`` rows in the lookback window (default 2025-01-01)
-     meets the coverage threshold.
+  2. **Data-module audit freshness** — the newest retrieval recorded in each
+     critical source table is within that source's freshness bound: 26 hours for
+     the tables re-fetched nightly, a week for ``raw.companyfacts``, which holds
+     one immutable snapshot per issuer and is refreshed on a weekly cycle.
+  3. **Dividend accrual** — share of the ``dividend = TRUE AND active = TRUE``
+     universe covered by ``raw.dividend_data`` rows in the lookback window
+     (default 2025-01-01) meets the coverage threshold.
   4. **Data quality** — share of securities rated good/fair and the mean
      completeness meet thresholds.
-  5. **Walk-forward gate** — the latest ``audit.model_runs`` recall clears
+  5. **Reference security consistency** — preferred terms and titles are
+      complete, preferences are plausible, and active SEC identities are unique.
+  6. **Walk-forward gate** — the latest ``audit.model_runs`` recall clears
      ``MIN_RECALL``. Informational until real data accrues (no rows yet).
 
 Every verification is recorded in ``audit.nightly_checks`` (the auditable trail;
@@ -48,6 +51,89 @@ CHECK_TABLES_MISSING = (
     "V0005_nightly_run_tracking.sql)"
 )
 
+#: Freshness source -> the timestamp column that dates it, and its bound in hours.
+#:
+#: One global bound is only satisfiable by a source re-fetched on every run, so a
+#: single SLA silently penalises any source on a slower cadence.
+#: ``raw.companyfacts`` holds one immutable snapshot of each issuer's entire SEC
+#: history and is refreshed on a multi-day cadence
+#: (``run_full_etl --companyfacts-refresh-after-days``), so it is held to a longer
+#: bound; the rest are re-fetched nightly.
+#:
+#: Every entry is a *retrieval* timestamp, deliberately. A business date is not a
+#: freshness signal: ``raw.dividend_data`` rows are stamped with the ex-dividend
+#: date, and a quarterly dividend cadence leaves the newest one days old by
+#: construction, so an ex-date SLA reports the calendar rather than the pipeline.
+#:
+#: PROOF-OF-CONCEPT BOUNDS -- TEMPORARY, WIDENED DELIBERATELY, MUST BE REVERTED.
+#: These are PoC bounds, chosen to stop the freshness check reporting a breach on
+#: every morning the development host is not running at 03:00. They are *not* the
+#: bounds a deployed pipeline should run with, and they are looser than the refresh
+#: cadences by design: the nightly is not yet the only writer, and the schedule is
+#: not yet reliable enough for a tight bound to mean anything.
+#:
+#: The tolerance arithmetic still holds and is still tested: the age at check time
+#: is ``cadence + days missed``, so a bound of B on a cadence of C tolerates
+#: ``B - C`` days of missed runs. At 26h on a daily cadence that is 2 hours -- less
+#: than one missed nightly, so a sleeping host breached it every morning and the
+#: signal became noise nobody could act on. A check that is always red trains people
+#: to ignore it, which is worse than a coarse check that is honestly coarse.
+#:
+#: Before this is deployed, restore the real bounds and re-derive them from the
+#: deployed refresh cadence rather than from the cadence as currently configured.
+#: See ``REVERT_BEFORE_DEPLOY`` in docs/data-health-workstreams.md.
+#: PoC bound for the four nightly-re-fetched sources. 10 days is not a target: it
+#: is "long enough that a laptop that is shut for a few days does not go red".
+#: At a daily cadence it tolerates 9 consecutive missed nights.
+POC_DAILY_BOUND_HOURS = 10 * 24.0
+
+PREFERRED_PREFERENCE_REVIEW_THRESHOLD = 1000.0
+
+#: PoC bound for raw.companyfacts. Its 5-day cadence would tolerate 3 missed
+#: nights on the old 8-day bound, which was the right target but not achievable
+#: from a dev laptop, so it is widened in proportion rather than replaced.
+POC_COMPANYFACTS_BOUND_HOURS = 21 * 24.0
+
+FRESHNESS_SOURCES = {
+    "raw.ticker_profile": {
+        "column": "retrieved_at",
+        "aggregate": "MAX",
+        "sla_hours": POC_DAILY_BOUND_HOURS,
+    },
+    "raw.dividend_data": {
+        "column": "retrieved_at",
+        "aggregate": "MAX",
+        "sla_hours": POC_DAILY_BOUND_HOURS,
+    },
+    "raw.market_data": {
+        "column": "retrieved_at",
+        "aggregate": "MAX",
+        "sla_hours": POC_DAILY_BOUND_HOURS,
+    },
+    "reference.securities": {
+        "column": "updated_at",
+        "aggregate": "MAX",
+        "sla_hours": POC_DAILY_BOUND_HOURS,
+    },
+    # MIN, not MAX, and deliberately unlike every source above.
+    #
+    # raw.companyfacts holds one row per CIK and a refresh run rewrites *every*
+    # due row, so the oldest row still in the table is the age of the stalest
+    # payload being carried. The other sources are re-fetched over a moving
+    # lookback window and their out-of-window rows are never meant to be touched,
+    # so for those MAX is the only meaningful reading.
+    #
+    # MAX here would let a partial refresh pass: refreshing 2 of 7,066 CIKs moves
+    # MAX to now and the source reads as fresh while 7,064 snapshots are a week
+    # old. That is exactly the failure this metric exists to catch, reintroduced
+    # through the fix.
+    "raw.companyfacts": {
+        "column": "retrieved_at",
+        "aggregate": "MIN",
+        "sla_hours": POC_COMPANYFACTS_BOUND_HOURS,
+    },
+}
+
 
 def target_run_date(now_utc=None):
     """The ET calendar date the 03:00 ET nightly run would cover."""
@@ -61,8 +147,17 @@ def _check(name, status, detail):
     return {"name": name, "status": status, "detail": detail}
 
 
-def assess(findings, *, min_quality_score, min_good_share, min_coverage, max_age_hours):
+def assess(
+    findings,
+    *,
+    min_quality_score,
+    min_good_share,
+    min_coverage,
+    max_age_hours,
+    freshness_sources=None,
+):
     """Turn DB findings into check statuses (pure; kept for tests)."""
+    freshness_sources = FRESHNESS_SOURCES if freshness_sources is None else freshness_sources
     checks = []
 
     run = findings.get("nightly_run")
@@ -89,19 +184,14 @@ def assess(findings, *, min_quality_score, min_good_share, min_coverage, max_age
     if freshness is None:
         checks.append(_check("freshness", "attention", CHECK_TABLES_MISSING))
     else:
-        worst = max(
-            age
-            for age in [
-                freshness.get("max_retrieval_age_hours"),
-                freshness.get("dividend_ex_age_hours"),
-            ]
-            if age is not None
-        )
+        aged = _freshness_ages(freshness, max_age_hours, freshness_sources)
+        breaches = [row for row in aged if row[1] > row[2]]
+        detail = "; ".join(f"{src} {age:.1f}h (SLA {sla:.1f}h)" for src, age, sla in aged)
         checks.append(
             _check(
                 "freshness",
-                "ok" if worst <= max_age_hours else "attention",
-                f"oldest critical source {worst:.1f}h old (SLA {max_age_hours}h)",
+                "attention" if breaches else "ok",
+                detail or "no source has any stored rows to age",
             )
         )
 
@@ -136,6 +226,45 @@ def assess(findings, *, min_quality_score, min_good_share, min_coverage, max_age
                 "ok" if universe and share >= min_coverage else "attention",
                 f"{covered}/{universe} dividend securities covered in lookback "
                 f"({share:.0%}, min {min_coverage:.0%})",
+            )
+        )
+
+    security_consistency = findings.get("security_consistency")
+    if security_consistency is None:
+        checks.append(
+            _check("security_consistency", "info", "reference security checks not measured")
+        )
+    else:
+        issue_fields = (
+            "active_identity_duplicates",
+            "active_preferred_missing_issuer_id",
+            "active_repeated_preferred_titles",
+            "active_preferred_missing_coupon",
+            "active_preferred_missing_liquidation_preference",
+            "active_preferred_preference_over_threshold",
+            "active_preferred_issuer_only_titles",
+        )
+        issues = [
+            f"{field}={security_consistency.get(field, 0)}"
+            for field in issue_fields
+            if security_consistency.get(field, 0)
+        ]
+        ticker_reuse = security_consistency.get("active_ticker_reuse_across_ciks", 0)
+        detail = ", ".join(issues) if issues else "no reference security anomalies"
+        if security_consistency.get("active_preferred_preference_over_threshold", 0):
+            threshold = security_consistency.get(
+                "preference_review_threshold", PREFERRED_PREFERENCE_REVIEW_THRESHOLD
+            )
+            detail += f" (preference review threshold=${threshold:,.2f}/share)"
+        if ticker_reuse:
+            detail += (
+                f"; active_ticker_reuse_across_ciks={ticker_reuse} (review, not assumed duplicate)"
+            )
+        checks.append(
+            _check(
+                "security_consistency",
+                "attention" if issues else "ok",
+                detail,
             )
         )
 
@@ -212,22 +341,26 @@ def fetch_findings(conn, run_date, lookback_start):
 
         cov = (
             conn.execute(
-                text(
-                    """
-                SELECT
-                  (SELECT COUNT(*) FROM reference.securities WHERE dividend = TRUE) AS universe,
-                  (SELECT COUNT(DISTINCT d.security_id)
-                   FROM raw.dividend_data d
-                   JOIN reference.securities s ON s.security_id = d.security_id
-                   WHERE s.dividend = TRUE AND d.ex_dividend_date >= :lookback) AS covered
-                """
-                ),
+                _coverage_query(),
                 {"lookback": lookback_start},
             )
             .mappings()
             .first()
         )
         findings["coverage"] = {"universe": cov["universe"], "covered": cov["covered"]}
+
+        security_consistency = (
+            conn.execute(
+                _security_consistency_query(),
+                {"preference_review_threshold": PREFERRED_PREFERENCE_REVIEW_THRESHOLD},
+            )
+            .mappings()
+            .one()
+        )
+        findings["security_consistency"] = {
+            **dict(security_consistency),
+            "preference_review_threshold": PREFERRED_PREFERENCE_REVIEW_THRESHOLD,
+        }
 
         model = (
             conn.execute(
@@ -254,32 +387,14 @@ def fetch_findings(conn, run_date, lookback_start):
         }
 
         try:
-            ages = (
-                conn.execute(
-                    text(
-                        """
-                    SELECT
-                      (SELECT MAX(retrieved_at) FROM raw.ticker_profile) AS latest_profile,
-                      (SELECT MAX(retrieved_at) FROM raw.companyfacts) AS latest_facts,
-                      (SELECT MAX(ex_dividend_date) FROM raw.dividend_data) AS latest_ex,
-                      (SELECT MAX(updated_at) FROM reference.securities) AS latest_securities
-                    """
-                    )
-                )
-                .mappings()
-                .first()
-            )
             now = datetime.now(timezone.utc)
+            ages = {}
+            for source, spec in FRESHNESS_SOURCES.items():
+                stamp = conn.execute(_freshness_query(source, spec)).scalar()
+                ages[source] = _age_hours(stamp, now)
             findings["freshness"] = {
-                "max_retrieval_age_hours": _age_hours(
-                    max(
-                        ages["latest_profile"],
-                        ages["latest_facts"],
-                        ages["latest_securities"],
-                    ),
-                    now,
-                ),
-                "dividend_ex_age_hours": _age_hours(ages["latest_ex"], now),
+                "sources": ages,
+                "sla_hours": {s: spec["sla_hours"] for s, spec in FRESHNESS_SOURCES.items()},
             }
         except ProgrammingError:
             findings["freshness"] = None
@@ -289,11 +404,140 @@ def fetch_findings(conn, run_date, lookback_start):
     return findings
 
 
+def _coverage_query():
+    """Dividend-universe coverage, scoped to the active universe on both sides.
+
+    A recency reclassification inserts a new ``security_id`` and deactivates the
+    old row instead of deleting it, so a former payer keeps ``dividend = TRUE``
+    with ``active = FALSE``. Counting ``dividend = TRUE`` without
+    ``active = TRUE`` keeps every retired row in the reported universe -- and in
+    the covered numerator -- indefinitely.
+    """
+    return text(
+        """
+        SELECT
+          (SELECT COUNT(*) FROM reference.securities
+            WHERE dividend = TRUE AND active = TRUE) AS universe,
+          (SELECT COUNT(DISTINCT d.security_id)
+           FROM raw.dividend_data d
+           JOIN reference.securities s ON s.security_id = d.security_id
+           WHERE s.dividend = TRUE AND s.active = TRUE
+             AND d.ex_dividend_date >= :lookback) AS covered
+        """
+    )
+
+
+def _security_consistency_query():
+    """Build consistency metrics over the active security universe only."""
+    return text(
+        """
+        WITH active_securities AS (
+            SELECT s.*, i.issuer_name
+            FROM reference.securities AS s
+            LEFT JOIN reference.issuers AS i ON i.issuer_id = s.issuer_id
+            WHERE s.active = TRUE
+        ),
+        duplicate_active_identities AS (
+            SELECT cik, ticker
+            FROM active_securities
+            GROUP BY cik, ticker
+            HAVING COUNT(*) > 1
+        ),
+        repeated_active_preferred_titles AS (
+            SELECT issuer_id, LOWER(BTRIM(security_name)) AS title
+            FROM active_securities
+            WHERE security_type = 'preferred stock'
+              AND issuer_id IS NOT NULL
+              AND NULLIF(BTRIM(security_name), '') IS NOT NULL
+            GROUP BY issuer_id, LOWER(BTRIM(security_name))
+            HAVING COUNT(*) > 1
+        ),
+        active_ticker_reuse AS (
+            SELECT ticker
+            FROM active_securities
+            GROUP BY ticker
+            HAVING COUNT(DISTINCT cik) > 1
+        )
+        SELECT
+            (SELECT COUNT(*) FROM duplicate_active_identities)
+                AS active_identity_duplicates,
+            (SELECT COUNT(*) FROM repeated_active_preferred_titles)
+                AS active_repeated_preferred_titles,
+            COUNT(*) FILTER (
+                WHERE security_type = 'preferred stock'
+                  AND issuer_id IS NULL
+            ) AS active_preferred_missing_issuer_id,
+            COUNT(*) FILTER (
+                WHERE security_type = 'preferred stock'
+                  AND coupon_rate IS NULL
+            ) AS active_preferred_missing_coupon,
+            COUNT(*) FILTER (
+                WHERE security_type = 'preferred stock'
+                  AND liquidation_preference IS NULL
+            ) AS active_preferred_missing_liquidation_preference,
+            COUNT(*) FILTER (
+                WHERE security_type = 'preferred stock'
+                  AND liquidation_preference > :preference_review_threshold
+            ) AS active_preferred_preference_over_threshold,
+            COUNT(*) FILTER (
+                WHERE security_type = 'preferred stock'
+                  AND issuer_name IS NOT NULL
+                  AND LOWER(BTRIM(security_name)) = LOWER(BTRIM(issuer_name))
+            ) AS active_preferred_issuer_only_titles,
+            (SELECT COUNT(*) FROM active_ticker_reuse)
+                AS active_ticker_reuse_across_ciks
+        FROM active_securities
+        """
+    )
+
+
+def _freshness_query(source, spec):
+    """The SQL that answers "how old is this source", for one source.
+
+    Kept separate from the collector so the aggregate choice is inspectable
+    without a database -- see ``FRESHNESS_SOURCES`` for why one source differs.
+    Table and column names come from the module-level map, never from input.
+    """
+    return text(f"SELECT {spec['aggregate']}({spec['column']}) FROM {source}")  # noqa: S608
+
+
+def _freshness_ages(freshness, max_age_hours, freshness_sources):
+    """``(source, age_hours, sla_hours)`` for every source that has stored rows.
+
+    A source whose age is unknown is not aged: it is either a table this
+    deployment does not have or one holding no rows, and reporting a breach for a
+    source that was never measured would read exactly like a stale one.
+    """
+    ages = []
+    for source, age in (freshness.get("sources") or {}).items():
+        if age is None:
+            continue
+        spec = freshness_sources.get(source) or {}
+        ages.append((source, age, spec.get("sla_hours", max_age_hours)))
+    # The pre-split keys, still honoured so a findings document written by an
+    # older build cannot read as fresher than it is.
+    for legacy in ("max_retrieval_age_hours", "dividend_ex_age_hours"):
+        age = freshness.get(legacy)
+        if age is not None:
+            ages.append((legacy, age, max_age_hours))
+    return ages
+
+
 def _age_hours(value, now):
+    """Age of a stored timestamp in hours; None when the source holds no rows.
+
+    The retrieval columns are ``timestamptz`` (aware datetimes), but a caller may
+    still hand in a plain ``date`` or a naive datetime, and subtracting those from
+    an aware one is a TypeError. Everything is normalized to aware UTC first.
+    """
     if value is None:
         return None
     if isinstance(value, str):
         value = datetime.fromisoformat(value)
+    if not isinstance(value, datetime):
+        value = datetime(value.year, value.month, value.day, tzinfo=timezone.utc)
+    elif value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
     return max(0.0, (now - value).total_seconds() / 3600.0)
 
 
@@ -334,7 +578,12 @@ def main():
         "--min-coverage", type=float, default=0.95, help="Min dividend-universe coverage"
     )
     parser.add_argument(
-        "--max-age-hours", type=float, default=26.0, help="Freshness SLA for source retrievals"
+        "--max-age-hours",
+        type=float,
+        default=26.0,
+        help="Fallback freshness bound for a source with no bound in "
+        "FRESHNESS_SOURCES, and the bound for the pre-split finding keys. The "
+        "per-source bounds in FRESHNESS_SOURCES take precedence.",
     )
     parser.add_argument("--json", action="store_true", help="Print JSON instead of the table")
     parser.add_argument(

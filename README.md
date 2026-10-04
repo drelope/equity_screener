@@ -39,7 +39,9 @@ is public; every other endpoint requires the raw API key in the `X-API-Key`
 header:
 
 ```bash
-export API_KEY="0a1b2c3d4e5f6g7h"
+# Generate one; do not invent a value by hand. Anything you paste into a README,
+# a commit or a chat window is a published secret.
+export API_KEY="$(openssl rand -hex 32)"
 uvicorn api.main:app --host 0.0.0.0 --port 8000
 ```
 
@@ -77,26 +79,26 @@ CIK. This is an expected unavailable-data response, not an API outage.
 cd /path/to/dividend_equity_crispdm
 python -m venv .venv
 # macOS/Linux: source .venv/bin/activate
-python -m pip install -r requirements.txt
+# Windows:      .venv\Scripts\activate
+python -m pip install -r requirements-dev.txt
 ```
 
-On WSL/Linux, this repository also includes a checked-in `venv` used by the
-current workspace. Activate it before running the ETL so `python3` does not
-resolve to the system interpreter without project dependencies:
+`requirements.txt` is the runtime set alone and is what the Docker image
+installs; `requirements-dev.txt` adds `pytest` and `ruff` on top and is what you
+want for the lint and test gates.
+
+To run the pipeline without activating the environment, call the interpreter by
+path instead:
 
 ```bash
-source venv/bin/activate
-python -m pip install -r requirements.txt
-python -m scripts.run_full_etl
+.venv/bin/python -m scripts.run_full_etl
 ```
 
-The equivalent non-activated form is `venv/bin/python -m
-scripts.run_full_etl`.
+## Start PostgreSQL with Docker Compose
 
-## Start PostgreSQL with Docker Compose from the repository root. 
-With Docker Desktop and WSL, start Docker Desktop first and enable WSL integration for the
-distribution. Docker Compose v2 uses `docker compose`; older installations use
-`docker-compose`:
+Run this from the repository root. With Docker Desktop and WSL, start Docker
+Desktop first and enable WSL integration for the distribution. Docker Compose v2
+uses `docker compose`; older installations use `docker-compose`:
 
 ```bash
 # Compose v2
@@ -135,8 +137,8 @@ initialized. The recommended entrypoint is the orchestrated pipeline:
 cd /path/to/dividend_equity_crispdm
 
 # Reference tables → dividend data (SEC + OpenBB) → companyfacts/submissions
-# → sec_documents concept groups. Stage 0 loads raw standardized on SEC tickers and profile
-# summaries for dividend payers; stages 2-4 only touch dividend-flagged 
+# → sec_documents concept groups. Stage 0 loads standardized SEC ticker and
+# profile summaries for dividend payers; stages 2-4 only touch dividend-flagged
 # tickers, so non-payers are never requested from SEC or OpenBB.
 python -m scripts.run_full_etl
 
@@ -158,7 +160,11 @@ python -m scripts.populate_raw_tables --limit 100
 
 # Stage 1 — Populate exchanges, issuers, and audited securities from the raw
 # ticker universe. Marks dividend = TRUE from SEC company facts, defining the
-# dividend universe every later stage is gated on.
+# dividend universe every later stage is gated on. Dividend recency enforcement
+# is opt-in: set ENFORCE_DIVIDEND_RECENCY=true to require a positive dividend
+# fact whose period ends within DIVIDEND_RECENCY_DAYS (548) of the
+# classification date. Off (the default) uses the historical any-positive-fact
+# rule, so an unattended nightly cannot silently flip the universe.
 python -m scripts.populate_reference_tables --limit 100
 
 # Stage 2 — Load dividend records from SEC XBRL and/or OpenBB, then populate
@@ -166,6 +172,14 @@ python -m scripts.populate_reference_tables --limit 100
 # DIVIDEND_LOOKBACK_START (default 2025-01-01 = the 12-month lookback) and
 # accrues forward; add --full-history after the PoC gate for total history.
 python -m scripts.populate_dividend_data --tickers ACR-PC,ACR-PD,LFMDP --sources all
+
+# Stage 3a — Rebuild one normalized profile per CIK/ticker. The raw rows and
+# all source payloads are retained; conflicting attributes are flagged.
+python -m scripts.populate_clean_ticker_profile
+
+# Stage 3b — Split company-level scalar fields from normalized officer rows.
+# Epoch fields become UTC dates/timestamps; omitted compensation remains NULL.
+python -m scripts.populate_clean_company_profile
 
 # Stage 3 — Load SEC submissions and complete companyfacts (dividend payers
 # only by default; add --preferred-facts to target preferred stocks recorded
@@ -219,11 +233,11 @@ Yahoo Finance / OpenBB (yfinance provider) fetch, and upserts the result into
 (`PreferredStockDividendRatePercentage`) and `liquidation_preference`
 (`PreferredStockLiquidationPreferenceValue` /
 `TemporaryEquityLiquidationPreference`, falling back to
-`PreferredStockParOrStatedValuePerShare`); those values take priority over
-the Yahoo/OpenBB or name-parsed equivalents when SEC reports them, and the
-resulting `provider` is recorded as `SEC_XBRL+OPENBB_YFINANCE` with both
-sources kept in `raw_payload`. `scripts.populate_dividend_data` refreshes the
-same table on later runs (Yahoo/OpenBB only); pass `--skip-profiles` to
+`PreferredStockParOrStatedValuePerShare`); when SEC reports them they are
+the value `scripts.populate_raw_tables` writes, and the resulting `provider` is
+recorded as `SEC_XBRL+OPENBB_YFINANCE` with both sources kept in `raw_payload`.
+`scripts.populate_dividend_data` refreshes the same table on later runs
+(Yahoo/OpenBB only); pass `--skip-profiles` to
 disable its summary fetch and `--skip-preferred-terms` to skip the
 `preferred.security_terms` gap-fill. That gap-fill only inserts missing rows
 for active preferred securities with dividend records and preserves existing
@@ -268,10 +282,34 @@ preferred-stock screen:
 Yahoo Finance exposes the company profile, sector, and industry; coupon
 type, fixed-period end, floating spread, tax status, and call date are
 parsed from the security name (best effort and `NULL` when the source text
-does not carry them). `coupon_rate` and `liquidation_preference` prefer the
-SEC Company Facts XBRL tags read by
-`extract_preferred_terms_from_companyfacts` and fall back to the name-parsed
-value only when the issuer never reported the concept.
+does not carry them).
+
+`coupon_rate` and `liquidation_preference` have two writers and an explicit
+priority rule: **the per-security `dei:SecurityTitle` name parse wins, and SEC
+Company Facts XBRL terms are the fallback.**
+
+| source | granularity | precedence | writes |
+|---|---|---|---|
+| `dei:SecurityTitle` / Yahoo short-name parse | **per security** | primary | stage 0 `populate_raw_tables`, stage 3 `populate_dividend_data` |
+| SEC Company Facts XBRL (`PreferredStockDividendRatePercentage`) | **per issuer (CIK)** | fallback | stage 0 `populate_raw_tables` |
+
+The SEC tag is filed once for the whole CIK, so an issuer with several
+preferred series (BAC, PSA) publishes one rate that cannot say which series it
+belongs to. The companyfacts API omits dimensional (per-series) facts, and
+`raw.companyfacts` is keyed by CIK, so nothing here can recover the mapping. The
+name parse is per security and therefore more trustworthy in exactly the
+multi-series case, and less trustworthy when the cover-page title is unusual —
+which is why SEC terms are still worth keeping as a fallback rather than
+dropping them.
+
+Stage 0 resolves both sources in one pass and only falls back to the SEC value
+when the name parse produced nothing
+(`if sec_terms.get("coupon_rate") is not None and summary.get("coupon_rate") is None`).
+Stage 3 upserts with `COALESCE(:coupon_rate, coupon_rate)` in both
+`raw.ticker_profile` and `reference.securities`, so it can only replace a stored
+value when it parses a rate itself. Because neither writer ever overwrites a
+good value with a weaker one, the outcome does not depend on which stage ran
+first — see `docs/data-health-workstreams.md` before changing either stage.
 
 Each active reference security is normalized by the combination of `cik`,
 `ticker`, `security_type`, and `dividend`. Security types are stored as
@@ -423,7 +461,7 @@ and create `raw.company_classification`.
 |---|---|---|
 | `reference.exchanges` | US exchange codes | `exchange_id` PK, `exchange_code`, `exchange_name` |
 | `reference.issuers` | SEC issuer metadata | `issuer_id` PK, `cik`, `issuer_name`, `sic`, `fiscal_year_end` |
-| `reference.securities` | Audited security rows built from SEC tickers + Company Facts | `security_id` UUID PK, `ticker`, `cik`, `issuer_id` FK, `security_name`, `security_type`, `coupon_rate`, `dividend`, `sec_data_status`, `cusip`, `isin`, `exchange_id` FK, `currency`, `liquidation_preference`, `call_date`, `active`; unique index `(cik, ticker, security_type, dividend)` |
+| `reference.securities` | Audited security rows built from SEC tickers + Company Facts | `security_id` UUID PK, `ticker`, `cik`, `issuer_id` FK, `security_name`, `security_type`, `coupon_rate`, `dividend`, `dividend_last_paid`, `sec_data_status`, `cusip`, `isin`, `exchange_id` FK, `currency`, `liquidation_preference`, `call_date`, `active`; unique index `(cik, ticker, security_type, dividend)` |
 
 `reference.securities` is the hub of the model: every table references its
 `security_id`. `security_type` is one of `common_stock`, `preferred stock`,
@@ -439,6 +477,23 @@ The issuer name is normalized onto `reference.issuers.issuer_name`
 reported on the Form 8-K / annual-report cover for that ticker (e.g.
 `7.875% Series D Cumulative Redeemable Preferred Stock` for ACR-PD), sourced
 from `raw.sec_instrument_titles`.
+
+### clean — consolidated profiles
+
+| Table | Purpose | Key columns |
+|---|---|---|
+| `clean.ticker_profile` | One normalized row per `(CIK, ticker)`, rebuilt after raw profile writers; consensus values only, with classification/attribute conflicts and all contributing raw payloads retained | PK `(cik, ticker)`, representative `security_id`, `source_security_ids`, `profile_count`, `provider_sources`, normalized profile attributes, `metadata_conflicts`, `source_profiles` |
+
+The representative security is chosen by active status, classifier confidence,
+then evidence priority. Conflicting liquidation preferences are left NULL and
+reported in `metadata_conflicts`; the raw source rows are never deleted.
+
+| Table | Purpose | Key columns |
+|---|---|---|
+| `clean.company_profile` | Typed company-level provider snapshot, one row per symbol and parent name | `symbol`, `parent_name`, `reference_security_id`, scalar provider attributes, `source_payload`, generated `c2_c3_leverage_exempt` |
+| `clean.company_officer` | One child row per officer in the provider’s company-officers array | composite FK `(symbol, parent_name)`, `officer_no`, officer attributes, nullable `total_pay` |
+
+The `c2_c3_leverage_exempt` tag marks `issue_type = EQUITY` and `sector_key = real-estate` for downstream review only; it does not modify C2/C3 scoring. Unix epoch date fields are stored as UTC `DATE`/`TIMESTAMPTZ`; the loader detects seconds versus milliseconds by magnitude. The invalid SQL identifier `52_week_change` is exposed as `pct_change_52w` while preserved in source payload metadata. Officer rows use `(symbol, parent_name, officer_no)` as their load key and a NULL-aware unique identity on `(symbol, parent_name, name, title)` to prevent repeat ingestion.
 
 ### raw — ingested source payloads
 
@@ -468,8 +523,28 @@ re-downloaded by the reference and companyfacts stages.
 universe used by every downstream ETL stage, so SEC and OpenBB are queried
 only for dividend-flagged securities.
 
+When `ENFORCE_DIVIDEND_RECENCY=true`, `dividend = TRUE` requires a positive
+dividend fact whose period ends within `DIVIDEND_RECENCY_DAYS` (548 days,
+`src/crispdm/xbrl_tags.py`) of the classification date. SEC XBRL Company Facts
+retain every fact an issuer has ever filed, including comparative columns from
+long-past periods, so an unbounded "has any positive dividend fact" test kept
+long-defunct and acquired issuers in the universe indefinitely. 548 days is the
+same horizon the preferred dividend snapshot uses, so the reference universe and
+the per-instrument snapshot agree on what "currently paying" means. The
+qualifying period end is stored in `reference.securities.dividend_last_paid`,
+and `classification_evidence` records `dividend_lookback_start`, so a flag can
+always be traced to the fact that set it.
+
+Enforcement is **off by default** (`enforce_dividend_recency` in
+`src/crispdm/config.py`). The classifier change ships dark so the nightly ETL
+keeps the historical universe until an operator opts in; flipping the setting
+on the next `populate_reference_tables --stage reference` rerun is what applies
+the bound (expect ~1,700 flag changes). Existing rows keep their current value
+until that rerun.
+
 `raw.ticker_profile` columns populated by SEC Company Facts XBRL
-(`coupon_rate`, `liquidation_preference`, prioritized when reported) merged
+(`coupon_rate` as the fallback source, `liquidation_preference`, prioritized
+when reported) merged
 with a Yahoo Finance / OpenBB (yfinance provider) profile fetch plus
 best-effort parsing of the security name (keys left `NULL` when no source
 carries them):
@@ -514,7 +589,7 @@ name. The tag prefixes are `dei` (Document and Entity Information), `us-gaap`
 | `reference.issuers.issuer_name` | `dei:EntityRegistrantName` |
 | `reference.securities.security_name` | `dei:SecurityTitle`, `dei:Security12bTitle` (per-class cover title, e.g. `7.875% Series D Cumulative Redeemable Preferred Stock`) |
 | `reference.securities.cusip` / `isin` | `us-gaap:CUSIP`, `srt:ISIN` (fallbacks `us-gaap:DebtInstrumentCusip`, `us-gaap:ISIN`) |
-| `coupon_rate` (`reference.securities`, `raw.ticker_profile`) | `us-gaap:PreferredStockDividendRatePercentage`, fallback `us-gaap:PreferredStockDividendRatePerAnnum`; else OpenBB/yfinance or name parse |
+| `coupon_rate` (`reference.securities`, `raw.ticker_profile`) | `us-gaap:PreferredStockDividendRatePercentage`, fallback `us-gaap:PreferredStockDividendRatePerAnnum` (both per-CIK, so ambiguous for multi-series issuers); OpenBB/yfinance or `dei:SecurityTitle` name parse (per security) — last writer wins, see the two-writer note above |
 | `liquidation_preference` (`reference.securities`, `raw.ticker_profile`) | `us-gaap:PreferredStockLiquidationPreferenceValue` → `...Preference` → `TemporaryEquityLiquidationPreference(Value)`; fallback `us-gaap:PreferredStockParOrStatedValuePerShare`, then name parse |
 | `par_value` | `us-gaap:PreferredStockParOrStatedValuePerShare`, `us-gaap:TemporaryEquityParOrStatedValuePerShare` |
 | `raw.dividend_data.amount` | per-share: `us-gaap:CommonStockDividendsPerShareDeclared`, `us-gaap:CommonStockDividendsPerShareCashPaid`, `us-gaap:PreferredStockDividendsPerShare`; aggregate fallbacks `DividendsCommonStockCash`, `PaymentsOfDividendsCommonStock`, `PaymentsOfDividendsPreferredStock`, `DividendsPreferredStockCash`, `PaymentsOfDividends`, `Dividends` |
@@ -552,7 +627,7 @@ there are no duplicated tag sets left in the codebase.
 ## Dataflow
 
 ```text
-Oracle company tickers / SEC data ─────────► raw.company_ticker
+SEC company tickers / EDGAR ────────────────► raw.company_ticker
                                                   │
 SEC issuer metadata / OpenBB profile ────────────┤
                                                   ▼

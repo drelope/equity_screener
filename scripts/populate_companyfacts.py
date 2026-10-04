@@ -13,8 +13,18 @@ stores them in raw.company_taxonomy. Per-concept 404s (a company simply did
 not report that tag) are skipped, so only concepts the issuer actually filed
 are persisted.
 
+A CIK that already has a stored payload is skipped, so a backfill never
+downloads the same issuer twice. That also means a stored payload is never
+re-requested, which freezes raw.companyfacts -- and every filing vintage derived
+from it -- at first sighting. ``--refresh-after-days N`` re-fetches a stored CIK
+once its payload is older than N days, and ``--refresh`` re-fetches all of them;
+both advance ``retrieved_at``, which is the column the nightly freshness check
+reads.
+
 Usage:
     python -m scripts.populate_companyfacts [--tickers SYMBOL,SYMBOL,...] [--all] [--max-ciks N]
+    python -m scripts.populate_companyfacts --refresh-after-days 7
+    python -m scripts.populate_companyfacts --refresh
     python -m scripts.populate_companyfacts --preferred-facts [--tickers SYMBOL,...] [--max-ciks N]
     python -m scripts.populate_companyfacts --preferred-taxonomy [--tickers SYMBOL,...]
     python -m scripts.populate_companyfacts --preferred-taxonomy --taxonomies us-gaap,dei,srt
@@ -25,7 +35,7 @@ import argparse
 import hashlib
 import json
 import sys
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import requests
@@ -38,6 +48,7 @@ from sqlalchemy import text
 from src.crispdm.db import engine
 from src.crispdm.sec_client import (
     classify_companyfacts,
+    configured_dividend_lookback,
     get_company_tickers,
     get_companyconcept,
     get_companyfacts_concepts,
@@ -245,7 +256,9 @@ def upsert_classification(conn, cik, ticker, companyfacts):
     """
     if companyfacts is None:
         return
-    classification = classify_companyfacts(companyfacts)
+    classification = classify_companyfacts(
+        companyfacts, lookback_days=configured_dividend_lookback()
+    )
     conn.execute(
         text("""
         INSERT INTO raw.company_classification
@@ -380,21 +393,101 @@ def upsert_company_taxonomy(conn, cik, company_name, taxonomy_payload):
     )
 
 
-def existing_facts_ciks(conn):
-    """CIKs that already have a company facts payload stored.
+def stored_facts_retrieved_at(conn):
+    """Map of CIK -> when its stored companyfacts payload was last retrieved.
 
-    Fetches are per-CIK: every preferred series of an issuer shares the same
-    SEC companyfacts payload, so the row is keyed by CIK and never copied per
-    security. Skipping CIKs already persisted keeps re-runs and overlapping
-    pipelines (dividend universe vs preferred set) from downloading the same
-    payload twice.
+    Fetches are per-CIK: every preferred series of an issuer shares the same SEC
+    companyfacts payload, so the row is keyed by CIK and never copied per
+    security.
+
+    ``retrieved_at`` records the last time the payload was *fetched*, not the
+    first time this CIK was seen. The upsert advances it on every re-fetch,
+    whether or not the content changed (``ON CONFLICT (cik) DO UPDATE SET ...
+    retrieved_at = now()``), which is what makes it usable as a refresh clock --
+    and what ``audit``'s freshness check reads.
     """
     return {
-        row[0]
+        row[0]: row[1]
         for row in conn.execute(
-            text("SELECT DISTINCT cik FROM raw.companyfacts WHERE cik IS NOT NULL")
+            text("SELECT cik, retrieved_at FROM raw.companyfacts WHERE cik IS NOT NULL")
         )
+        if row[0] is not None
     }
+
+
+def existing_facts_ciks(conn):
+    """CIKs that already have a company facts payload stored."""
+    return set(stored_facts_retrieved_at(conn))
+
+
+def select_pending_ciks(entries_by_cik, stored, refresh_after_days=None, max_ciks=None, now=None):
+    """Decide which target CIKs this run fetches, and account for the rest.
+
+    ``refresh_after_days`` decides what happens to a CIK that is already stored:
+
+    - ``None`` -- skip it. A backfill must not re-download a payload, which is
+      what keeps overlapping pipelines (dividend universe vs preferred set) from
+      requesting the same CIK twice.
+    - ``0`` -- re-fetch it now, whatever its age. ``--refresh``.
+    - ``N > 0`` -- re-fetch it only if the stored payload is older than ``N``
+      days, so a nightly run costs nothing on the days nothing can have changed.
+
+    Returns ``(pending, plan)``. Every target CIK lands in exactly one bucket, so
+    the counts in ``plan`` always describe the returned ``pending`` -- applying
+    ``max_ciks`` here rather than at the call site is what keeps them true:
+
+    ``new_ciks``
+        Never fetched before, and in ``pending``.
+    ``refreshed``
+        Stored, past the refresh cutoff, and in ``pending``. Reported separately
+        from ``skipped`` so a stage cannot report "ok" while silently doing
+        nothing: a refresh run that refreshed zero CIKs is visible in the log
+        rather than indistinguishable from a completed backfill.
+    ``skipped``
+        Stored and not yet due for a refresh. Independent of ``max_ciks``: these
+        would not have been fetched regardless of the budget.
+    ``deferred``
+        Due for a fetch but cut by ``max_ciks``. Not a skip, and counted
+        separately so that a partial run cannot report as a complete one.
+    """
+    pending = []
+    due = []
+    skipped = 0
+    cutoff = None
+    if refresh_after_days is not None:
+        now = now or datetime.now(timezone.utc)
+        if now.tzinfo is None:
+            now = now.replace(tzinfo=timezone.utc)
+        cutoff = now - timedelta(days=refresh_after_days)
+
+    for cik in entries_by_cik:
+        retrieved_at = stored.get(cik)
+        if retrieved_at is None:
+            pending.append(cik)
+            continue
+        if cutoff is None:
+            skipped += 1
+            continue
+        if retrieved_at.tzinfo is None:
+            retrieved_at = retrieved_at.replace(tzinfo=timezone.utc)
+        if retrieved_at <= cutoff:
+            pending.append(cik)
+            due.append(cik)
+        else:
+            skipped += 1
+
+    deferred = []
+    if max_ciks and len(pending) > max_ciks:
+        deferred = pending[max_ciks:]
+        pending = pending[:max_ciks]
+    refreshed = len(due) - len([c for c in deferred if c in due])
+    plan = {
+        "new_ciks": len(pending) - refreshed,
+        "refreshed": refreshed,
+        "skipped": skipped,
+        "deferred": len(deferred),
+    }
+    return pending, plan
 
 
 def _ingest_cik(conn, cik, linked_entries, stats):
@@ -441,13 +534,17 @@ def _ingest_cik(conn, cik, linked_entries, stats):
             print(f"Error fetching companyfacts for {ticker} (CIK {cik}): {exc}")
 
 
-def populate_companyfacts(tickers=None, dividend_only=True, max_ciks=None):
+def populate_companyfacts(tickers=None, dividend_only=True, max_ciks=None, refresh_after_days=None):
     """Fetch one submissions and one XBRL payload per unique SEC CIK.
 
     Only downloads payloads for active securities (dividend-flagged by
     default) so CIKs that never pay a dividend are not fetched from SEC.
-    Resumable: CIKs already present in raw.companyfacts are skipped and each
-    CIK is committed immediately after ingestion.
+    Resumable: each CIK is committed immediately after ingestion, and
+    ``refresh_after_days`` decides which already-stored CIKs are re-fetched
+    (see :func:`select_pending_ciks`). A stored CIK is otherwise skipped
+    forever, which is right for a backfill and wrong for a scheduled refresh --
+    without it the payload, and every vintage derived from it, is frozen at
+    first sighting.
     """
     sec_tickers = get_company_tickers()
     ticker_entries = {
@@ -468,7 +565,10 @@ def populate_companyfacts(tickers=None, dividend_only=True, max_ciks=None):
         "missing": 0,
         "unavailable": 0,
         "errors": 0,
+        "new_ciks": 0,
+        "refreshed": 0,
         "skipped": 0,
+        "deferred": 0,
         "processed_ciks": 0,
     }
 
@@ -481,17 +581,34 @@ def populate_companyfacts(tickers=None, dividend_only=True, max_ciks=None):
         for ticker, entry in ticker_entries.items():
             security = securities.get(ticker)
             if security is None:
-                stats["missing"] += 1
+                # A SEC ticker outside our universe. Deliberately not fetched, and
+                # deliberately not counted: SEC lists ~10k tickers against our
+                # ~5.3k targets, so tallying these reported ~5,100 "missing
+                # securities" on a run where every dividend security was mapped
+                # and nothing had failed. The number is the size of the
+                # non-dividend universe, not a fault.
                 continue
             entries_by_cik.setdefault(normalize_cik(entry["cik_str"]), []).append(
                 (ticker, entry.get("title") or "", security)
             )
 
-        existing = existing_facts_ciks(conn)
-        pending = [cik for cik in entries_by_cik if cik not in existing]
-        stats["skipped"] = len(entries_by_cik) - len(pending)
-        if max_ciks:
-            pending = pending[:max_ciks]
+        # The direction that is actionable: securities we want but cannot reach
+        # because SEC's ticker file has no entry for them. These are the ones
+        # that would silently never gain a payload.
+        wanted = set(securities)
+        if tickers:
+            wanted &= {t.upper() for t in tickers}
+        stats["missing"] = len(wanted - set(ticker_entries))
+
+        stored = stored_facts_retrieved_at(conn)
+        pending, plan = select_pending_ciks(entries_by_cik, stored, refresh_after_days, max_ciks)
+        stats.update(plan)
+        print(
+            f"  {len(entries_by_cik)} target CIKs: fetching {len(pending)} "
+            f"({plan['new_ciks']} new, {plan['refreshed']} refreshing stored, "
+            f"{plan['deferred']} deferred by --max-ciks), "
+            f"skipping {plan['skipped']} stored that are not due."
+        )
 
         for cik in pending:
             _ingest_cik(conn, cik, entries_by_cik[cik], stats)
@@ -509,13 +626,106 @@ def populate_companyfacts(tickers=None, dividend_only=True, max_ciks=None):
         f"Completed: fetched={stats['fetched']}, submissions={stats['stored_submissions']}, "
         f"companyfacts={stats['stored_facts']}, missing_securities={stats['missing']}, "
         f"unavailable={stats['unavailable']}, errors={stats['errors']}, "
-        f"skipped={stats['skipped']}, processed_ciks={stats['processed_ciks']}",
+        f"new={stats['new_ciks']}, refreshed={stats['refreshed']}, "
+        f"skipped={stats['skipped']}, deferred={stats['deferred']}, "
+        f"processed_ciks={stats['processed_ciks']}",
         flush=True,
     )
     return stats["stored_facts"]
 
 
-def populate_preferred_companyfacts(tickers=None, max_ciks=None):
+def refresh_unlinked_companyfacts(refresh_after_days=None, max_ciks=None):
+    """Re-fetch stored companyfacts payloads that no tracked universe targets.
+
+    ``raw.companyfacts`` has a population that neither universe sweep can see. The
+    preferred sweep and the dividend sweep each walk a *security* universe, so a
+    CIK stored by an earlier, wider run that is in neither universe is reachable
+    from neither stage: on this warehouse 2,896 of 7,066 rows. Under a ``MIN``-based
+    freshness check those rows would pin the whole source to a permanent breach
+    while being invisible in both stage logs, because neither stage ever mentions
+    them.
+
+    This sweep is the third population, keyed by CIK alone. It re-fetches and
+    upserts only ``raw.sec_submissions`` and ``raw.companyfacts``; it does not
+    touch ``raw.company_classification``, which is keyed on a ticker that an
+    unlinked CIK does not have, and it does not attempt to re-link securities --
+    that is what the two universe sweeps are for.
+
+    It considers *every* stored CIK rather than an explicit list of unlinked ones,
+    because it cannot cheaply know which those are: it runs as its own process
+    and the universe sweeps do not hand their targets forward. In the nightly the
+    two are the same set anyway -- 4a and 4b have just refreshed the CIKs they
+    own, so those are no longer due and the due-set here is the unlinked tail.
+    Run standalone with ``--refresh-after-days 0`` it is a whole-table refresh.
+    """
+    stats = {
+        "fetched": 0,
+        "stored_submissions": 0,
+        "stored_facts": 0,
+        "missing": 0,
+        "unavailable": 0,
+        "errors": 0,
+        "new_ciks": 0,
+        "refreshed": 0,
+        "skipped": 0,
+        "deferred": 0,
+        "processed_ciks": 0,
+    }
+    with engine.connect() as conn:
+        stored = stored_facts_retrieved_at(conn)
+        # An empty entry list per CIK keeps this a pure payload refresh: the
+        # universe sweeps supply the (ticker, title, security) triples that
+        # classification and security linkage need, and an unlinked CIK has none.
+        candidates = {cik: [] for cik in stored}
+        pending, plan = select_pending_ciks(candidates, stored, refresh_after_days, max_ciks)
+        stats.update(plan)
+        print(
+            f"  {len(candidates)} stored CIKs: refreshing {plan['refreshed']}, "
+            f"deferring {plan['deferred']}, not due {plan['skipped']}."
+        )
+        for cik in pending:
+            try:
+                stats["fetched"] += 1
+                submissions = get_submissions(cik)
+                upsert_submissions(conn, cik, None, submissions)
+                stats["stored_submissions"] += 1
+            except Exception as exc:
+                stats["errors" if not _is_not_found(exc) else "unavailable"] += 1
+            try:
+                facts = get_companyfacts_concepts(cik)
+                upsert_companyfacts(conn, cik, facts)
+                stats["stored_facts"] += 1
+            except Exception as exc:
+                stats["errors" if not _is_not_found(exc) else "unavailable"] += 1
+                print(f"Error refreshing companyfacts for CIK {cik}: {exc}")
+            conn.commit()
+            stats["processed_ciks"] += 1
+            if stats["processed_ciks"] % 100 == 0:
+                print(
+                    f"  Progress: {stats['processed_ciks']}/{len(pending)} unlinked CIKs, "
+                    f"facts={stats['stored_facts']}, errors={stats['errors']}",
+                    flush=True,
+                )
+
+    print(
+        f"Completed unlinked sweep: refreshed={stats['refreshed']}, "
+        f"skipped={stats['skipped']}, deferred={stats['deferred']}, "
+        f"companyfacts={stats['stored_facts']}, unavailable={stats['unavailable']}, "
+        f"errors={stats['errors']}, processed_ciks={stats['processed_ciks']}",
+        flush=True,
+    )
+    return stats["stored_facts"]
+
+
+def _is_not_found(exc):
+    return (
+        isinstance(exc, requests.exceptions.HTTPError)
+        and exc.response is not None
+        and exc.response.status_code == 404
+    )
+
+
+def populate_preferred_companyfacts(tickers=None, max_ciks=None, refresh_after_days=None):
     """Download SEC history and XBRL company facts for preferred stocks.
 
     Targets every preferred-stock security recorded in raw.ticker_profile and
@@ -523,8 +733,9 @@ def populate_preferred_companyfacts(tickers=None, max_ciks=None):
     in raw.companyfacts (keyed by the profile's security_id).
 
     The loader is resumable: each CIK is committed immediately after it is
-    fetched, CIKs whose companyfacts already exist are skipped, and
-    ``max_ciks`` bounds a single campaign into verifiable batches.
+    fetched, ``refresh_after_days`` decides which already-stored CIKs are
+    re-fetched (see :func:`select_pending_ciks`), and ``max_ciks`` bounds a
+    single campaign into verifiable batches.
     """
     print("Identifying preferred-stock tickers in raw.ticker_profile...")
 
@@ -535,7 +746,10 @@ def populate_preferred_companyfacts(tickers=None, max_ciks=None):
         "missing": 0,
         "unavailable": 0,
         "errors": 0,
+        "new_ciks": 0,
+        "refreshed": 0,
         "skipped": 0,
+        "deferred": 0,
         "processed_ciks": 0,
     }
 
@@ -548,13 +762,14 @@ def populate_preferred_companyfacts(tickers=None, max_ciks=None):
             f"  Found {len(targets)} preferred-stock tickers ({len(entries_by_cik)} unique CIKs)."
         )
 
-        existing = existing_facts_ciks(conn)
-        pending = [cik for cik in entries_by_cik if cik not in existing]
-        stats["skipped"] = len(entries_by_cik) - len(pending)
-        print(f"  Skipping {stats['skipped']} CIKs already stored; fetching {len(pending)}.")
-        if max_ciks:
-            pending = pending[:max_ciks]
-            print(f"  Batch limited to {len(pending)} CIKs.")
+        stored = stored_facts_retrieved_at(conn)
+        pending, plan = select_pending_ciks(entries_by_cik, stored, refresh_after_days, max_ciks)
+        stats.update(plan)
+        print(
+            f"  Fetching {len(pending)} ({plan['new_ciks']} new, "
+            f"{plan['refreshed']} refreshing stored, {plan['deferred']} deferred "
+            f"by --max-ciks), skipping {plan['skipped']} stored that are not due."
+        )
 
         for cik in pending:
             _ingest_cik(conn, cik, entries_by_cik[cik], stats)
@@ -572,7 +787,9 @@ def populate_preferred_companyfacts(tickers=None, max_ciks=None):
         f"Completed: fetched={stats['fetched']}, submissions={stats['stored_submissions']}, "
         f"companyfacts={stats['stored_facts']}, missing_securities={stats['missing']}, "
         f"unavailable={stats['unavailable']}, errors={stats['errors']}, "
-        f"skipped={stats['skipped']}, processed_ciks={stats['processed_ciks']}",
+        f"new={stats['new_ciks']}, refreshed={stats['refreshed']}, "
+        f"skipped={stats['skipped']}, deferred={stats['deferred']}, "
+        f"processed_ciks={stats['processed_ciks']}",
         flush=True,
     )
     return stats["stored_facts"]
@@ -741,7 +958,36 @@ def main():
         help="Bound a single --preferred-facts / --all run to this many CIKs "
         "(resume-safe: already-fetched CIKs are skipped on re-run)",
     )
+    parser.add_argument(
+        "--sweep-unlinked",
+        action="store_true",
+        help="Re-fetch stored companyfacts payloads that neither the dividend nor "
+        "the preferred universe targets (2,896 of 7,066 rows on this warehouse). "
+        "Those rows are invisible to both universe sweeps, and because the "
+        "freshness check ages raw.companyfacts by its oldest row they would pin "
+        "the whole source to a permanent breach. Refreshes the payload by CIK "
+        "only; does not re-link securities or rewrite raw.company_classification.",
+    )
+    parser.add_argument(
+        "--refresh",
+        action="store_true",
+        help="Re-fetch every already-stored CIK instead of skipping it. Without "
+        "this a stored payload is never requested again, so raw.companyfacts "
+        "(and every vintage derived from it) stays frozen at first sighting.",
+    )
+    parser.add_argument(
+        "--refresh-after-days",
+        type=int,
+        default=None,
+        help="Re-fetch a stored CIK only once its payload is older than this many "
+        "days. This is the scheduled-refresh form of --refresh: a nightly run "
+        "costs nothing on days when nothing can have changed. Implies refresh "
+        "for any value, including 0 (= always re-fetch).",
+    )
     args = parser.parse_args()
+    refresh_after_days = args.refresh_after_days
+    if refresh_after_days is None and args.refresh:
+        refresh_after_days = 0
     tickers = (
         [value.strip().upper() for value in args.tickers.split(",") if value.strip()]
         if args.tickers
@@ -751,8 +997,15 @@ def main():
     try:
         if args.preferred:
             populate_preferred_stocks()
+        if args.sweep_unlinked:
+            refresh_unlinked_companyfacts(
+                refresh_after_days=refresh_after_days, max_ciks=args.max_ciks
+            )
+            return 0
         if args.preferred_facts:
-            populate_preferred_companyfacts(tickers=tickers, max_ciks=args.max_ciks)
+            populate_preferred_companyfacts(
+                tickers=tickers, max_ciks=args.max_ciks, refresh_after_days=refresh_after_days
+            )
             return 0
         if args.preferred_taxonomy:
             if args.taxonomies:
@@ -765,7 +1018,12 @@ def main():
             return 0 if result >= 0 else 1
         if args.preferred and not tickers:
             return 0
-        populate_companyfacts(tickers=tickers, dividend_only=dividend_only, max_ciks=args.max_ciks)
+        populate_companyfacts(
+            tickers=tickers,
+            dividend_only=dividend_only,
+            max_ciks=args.max_ciks,
+            refresh_after_days=refresh_after_days,
+        )
     except Exception as exc:
         print(f"Companyfacts ingestion failed: {exc}", file=sys.stderr)
         return 1

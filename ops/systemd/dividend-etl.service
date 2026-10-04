@@ -1,19 +1,62 @@
-# systemd unit + timer templates for the nightly dividend-equity ETL.
-# Copy to /etc/systemd/system/, fix WorkingDirectory/ExecStart/EnvironmentFile
-# for your host, then:
+# systemd unit + timer for the nightly dividend-equity ETL.
+# Install:
+#   sudo cp ops/systemd/dividend-etl.{service,timer} /etc/systemd/system/
 #   sudo systemctl daemon-reload
 #   sudo systemctl enable --now dividend-etl.timer
 # See docs/deployment-runbook.md section 5 (Option B).
+#
+# WSL2 caveat: this timer only fires while the WSL2 VM is running. A host that is
+# asleep or shut down at 03:00 does not run the ETL then; Persistent=true makes it
+# catch up on the next boot instead. See docs/data-health-workstreams.md WS4.
 
 [Unit]
 Description=Dividend Equity nightly ETL (run_full_etl)
+# Wants, not Requires: a docker restart must not tear down an ETL that is already
+# mid-write against the warehouse. After alone only orders startup -- it does not
+# make docker ready, which is why ExecStartPre below waits for the database.
+Wants=docker.service
 After=docker.service
 
 [Service]
 Type=oneshot
 WorkingDirectory=/mnt/d/dividend_equity_crispdm_implementation/dividend_equity_crispdm
+EnvironmentFile=/mnt/d/dividend_equity_crispdm_implementation/dividend_equity_crispdm/.env
+
+# The default for a oneshot is DefaultTimeoutStartSec=90s, which would kill the
+# ETL mid-run and record a failed nightly 90 seconds in. Budget a full cycle of
+# dividends, market data, companyfacts refresh and fundamentals derivation.
+TimeoutStartSec=12h
+
+# The warehouse is a docker container; make sure it accepts queries before the
+# pipeline starts, so a boot race is not reported as a pipeline fault.
+ExecStartPre=/mnt/d/dividend_equity_crispdm_implementation/dividend_equity_crispdm/.venv/bin/python /mnt/d/dividend_equity_crispdm_implementation/dividend_equity_crispdm/ops/systemd/wait_for_db.py --timeout 600
+
 # Nightly: acquires dividends from DIVIDEND_LOOKBACK_START (2025-01-01) and
 # accrues forward. After the PoC gate passes, switch to total history:
 #   ... python -m scripts.run_full_etl --dividend-full-history
+#
+# Stages 4a/4b/4c re-fetch stored companyfacts payloads that have aged out, which
+# is what advances raw.companyfacts.retrieved_at and lets the freshness check and
+# the WS6/WS7 vintage chain see new filings. Priority order: the preferred set
+# (4a, 3 days) runs before the dividend universe (4b, 5 days), then the CIKs in
+# neither universe (4c, 5 days). The freshness check ages this table by its OLDEST
+# row, so a population left un-refreshed fails the bound for the whole source --
+# each stage has its own --skip-* flag, and the help text says what that breaks.
+#
+# The 5-day cadence is not arbitrary: the check bounds this table at 8 days, and the
+# age at check time is (cadence + days missed), so 5 against 8 tolerates 3
+# consecutive missed nightlies. Cadence 7 would tolerate 1. Do not raise the
+# cadence without checking that arithmetic -- and do not widen the bound to hide a
+# schedule that is not running. Override with --companyfacts-refresh-after-days
+# (4b/4c, default 5) and --preferred-companyfacts-refresh-after-days (4a, default 3).
+#
+# Stage 1 scans all ~10,400 company tickers for dividend classification, and reuses
+# an already-stored payload younger than --reuse-max-age-days (default 5) instead of
+# re-downloading it. That default must stay equal to the cadence above: stage 1 used
+# to re-fetch and re-stamp every payload on each run, which reset this table's
+# freshness clock and made it look current no matter what 4a-4c did.
 ExecStart=/mnt/d/dividend_equity_crispdm_implementation/dividend_equity_crispdm/.venv/bin/python -m scripts.run_full_etl --trigger systemd
-EnvironmentFile=/mnt/d/dividend_equity_crispdm_implementation/dividend_equity_crispdm/.env
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=dividend-etl

@@ -22,6 +22,7 @@ if __package__ in (None, ""):
 from sqlalchemy import text
 
 from src.crispdm.db import engine
+from src.crispdm.stage import stage_exit_code
 
 CONCEPT_GROUPS = (
     "dividends",
@@ -91,46 +92,81 @@ def extract_company_concepts(raw_payload):
     return groups
 
 
-def load_companyfacts(conn, tickers=None, dividend_only=True):
-    """Load companyfacts rows for active securities (dividend payers by default).
+COMPANYFACTS_CHUNK_SIZE = 50
+
+
+def load_companyfacts(conn, tickers=None, dividend_only=True, after=None, limit=None):
+    """Load one chunk of companyfacts rows for active securities.
 
     ``raw.companyfacts`` is keyed by issuer CIK (one payload per CIK shared by
     all of the issuer's listed securities), so the join runs through
     ``reference.securities.cik``.
+
+    ``after`` is a keyset cursor of ``(ticker, security_id)`` pairs and ``limit``
+    bounds the chunk size; see :func:`iter_companyfacts` for why the rows cannot
+    be fetched in a single statement.
     """
     params = {}
     clauses = ["s.active = TRUE", "NULLIF(cf.cik, '') IS NOT NULL"]
     if dividend_only:
         clauses.append("s.dividend = TRUE")
-    ticker_clause = ""
     if tickers:
-        ticker_clause = "AND UPPER(s.ticker) = ANY(:tickers)"
+        clauses.append("UPPER(s.ticker) = ANY(:tickers)")
         params["tickers"] = [ticker.upper() for ticker in tickers]
+    if after is not None:
+        clauses.append("(s.ticker, s.security_id) > (:after_ticker, :after_security_id)")
+        params["after_ticker"] = after[0]
+        params["after_security_id"] = after[1]
 
-    return (
-        conn.execute(
-            text(f"""
+    sql = f"""
         SELECT s.security_id, cf.cik, cf.raw_payload, s.ticker
         FROM raw.companyfacts cf
         JOIN reference.securities s ON s.cik = cf.cik
         WHERE {" AND ".join(clauses)}
-          {ticker_clause}
-        ORDER BY s.ticker
-    """),
-            params,
+        ORDER BY s.ticker, s.security_id
+    """
+    if limit is not None:
+        sql += "\n        LIMIT :limit"
+        params["limit"] = limit
+
+    return conn.execute(text(sql), params).mappings().all()
+
+
+def iter_companyfacts(conn, tickers=None, dividend_only=True, chunk_size=COMPANYFACTS_CHUNK_SIZE):
+    """Yield every companyfacts row, one bounded chunk at a time.
+
+    The full universe is ~2 GB of jsonb that expands several-fold into Python
+    dicts; loading it in one statement grew to ~15 GB and the process was
+    OOM-killed, and the psycopg3 dialect does not honour ``stream_results``
+    (``server_side_cursors`` is False), so paging has to happen in SQL.
+
+    The keyset cursor is the ``(ticker, security_id)`` pair rather than the
+    ticker alone because one ticker can back more than one security (a common
+    and a preferred line), which would otherwise skip rows between chunks.
+    """
+    after = None
+    while True:
+        rows = load_companyfacts(
+            conn,
+            tickers=tickers,
+            dividend_only=dividend_only,
+            after=after,
+            limit=chunk_size,
         )
-        .mappings()
-        .all()
-    )
+        if not rows:
+            return
+        yield from rows
+        after = (rows[-1]["ticker"], rows[-1]["security_id"])
 
 
 def populate_concept_groups(tickers=None, dividend_only=True):
     """Upsert raw.sec_documents concept-groups from stored raw.companyfacts payloads."""
     updated = 0
     errors = 0
+    scanned = 0
     with engine.begin() as conn:
-        rows = load_companyfacts(conn, tickers=tickers, dividend_only=dividend_only)
-        for row in rows:
+        for row in iter_companyfacts(conn, tickers=tickers, dividend_only=dividend_only):
+            scanned += 1
             try:
                 groups = extract_company_concepts(row["raw_payload"])
                 conn.execute(
@@ -160,8 +196,8 @@ def populate_concept_groups(tickers=None, dividend_only=True):
                 errors += 1
                 print(f"Error processing {row['ticker']} (CIK {row['cik']}): {exc}")
 
-    print(f"Completed: rows={len(rows)}, updated={updated}, errors={errors}")
-    return updated
+    print(f"Completed: rows={scanned}, updated={updated}, errors={errors}")
+    return scanned, updated, errors
 
 
 def main():
@@ -179,11 +215,14 @@ def main():
         else None
     )
     try:
-        populate_concept_groups(tickers=tickers, dividend_only=not args.all)
+        scanned, updated, errors = populate_concept_groups(
+            tickers=tickers, dividend_only=not args.all
+        )
+        code = stage_exit_code("populate_sec_documents", scanned, updated, errors=errors)
     except Exception as exc:
         print(f"SEC concept processing failed: {exc}", file=sys.stderr)
         return 1
-    return 0
+    return code
 
 
 if __name__ == "__main__":

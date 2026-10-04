@@ -32,14 +32,19 @@ from src.crispdm.config import settings
 from src.crispdm.model import FEATURES, walk_forward
 
 
-def synthetic_labeled_sample(n_snaps=6, per_snap=12, seed=7):
-    """Seeded synthetic labeled features (separability => recall ~1.0)."""
+def synthetic_labeled_sample(n_days=540, per_snap=12, seed=7, start="2023-01-02"):
+    """Seeded synthetic labeled features (separability => recall ~1.0).
+
+    The span has to clear the label embargo. ``walk_forward`` only keeps
+    training rows whose full 365-day window closes before the test period, and
+    a 70/30 cut puts the test start at ~0.7 * n_days, so the sample needs
+    ``0.7 * n_days > 365`` -- about 522 dates. A six-month fixture leaves
+    nothing trainable and fails for the wrong reason.
+    """
     rng = np.random.RandomState(seed)
-    as_ofs = pd.to_datetime(
-        ["2024-01-01", "2024-02-01", "2024-03-01", "2024-04-01", "2024-05-01", "2024-06-01"]
-    )[:n_snaps]
     snapshots = []
-    for month, as_of in enumerate(as_ofs):
+    for day in range(n_days):
+        as_of = pd.Timestamp(start) + pd.Timedelta(days=day)
         n = per_snap
         score = rng.rand(n)
         frame = {
@@ -50,7 +55,7 @@ def synthetic_labeled_sample(n_snaps=6, per_snap=12, seed=7):
         frame["dividend_coverage"] = score + rng.rand(n) * 0.05  # near-separable
         frame["dividend_yield"] = score * 0.03 + rng.rand(n) * 0.003
         frame["target_sustainable_dividend"] = (score > 0.5).astype(int)
-        frame["security_id"] = [f"SYN-{month}-{j}" for j in range(n)]
+        frame["security_id"] = [f"SYN-{day}-{j}" for j in range(n)]
         frame["as_of_date"] = as_of
         snapshots.append(pd.DataFrame(frame))
     return pd.concat(snapshots, ignore_index=True)

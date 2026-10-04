@@ -132,6 +132,17 @@ DIVIDEND_FACT_TERMS: tuple[str, ...] = (
     "distributionstoowners",
 )
 
+#: How recent a positive dividend fact must be to justify ``dividend = TRUE``.
+#:
+#: XBRL Company Facts retain every fact an issuer has ever filed, including
+#: comparative columns from long-past periods. A single stale positive fact is
+#: therefore enough to keep a long-defunct or acquired issuer inside the
+#: dividend universe forever. 548 days is the same horizon the preferred
+#: dividend snapshot already uses to decide whether a declared dividend is
+#: still live, so the reference universe and the per-instrument snapshot agree
+#: on what "currently paying" means.
+DIVIDEND_RECENCY_DAYS: int = 548
+
 # --------------------------------------------------------------------------
 # Dividend event attributes (raw.dividend_data)
 # --------------------------------------------------------------------------
@@ -296,6 +307,16 @@ PERIODIC_FINANCIAL_CONCEPT_TAGS: dict[str, tuple[str, ...]] = {
         "EarningsPerShareDiluted",
         "EarningsPerShareBasicAndDiluted",
     ),
+    # Cash and marketable securities are stored as one liquidity numerator
+    # because a quick ratio wants both, and the filers that report one almost
+    # always report the other under a compound tag. They are NOT interchangeable
+    # in the general case -- CashAndCashEquivalentsAtCarryingValue excludes
+    # short-term investments entirely -- so the first tag below is the pure
+    # cash line and the compound tags follow. A company reporting only
+    # CashAndCashEquivalentsAtCarryingValue gets a numerator that understates
+    # its real liquidity, which reads as slightly worse coverage rather than
+    # better. That is the direction the section 4.1 house standard wants: a
+    # gap in disclosure costs the filer, it does not pay it.
     "cash": (
         "CashAndCashEquivalentsAtCarryingValue",
         "CashAndCashEquivalentsAndShortTermInvestments",
@@ -303,16 +324,82 @@ PERIODIC_FINANCIAL_CONCEPT_TAGS: dict[str, tuple[str, ...]] = {
     ),
     "assets": (
         "Assets",
-        "AssetsCurrent",
+        # AssetsCurrent is NOT a fallback for Assets. They are different
+        # quantities: total assets against current assets, and a balance sheet
+        # reporting only the current subtotal is reporting less, not the same
+        # thing under another name. Substituting one for the other made
+        # `assets` mean whatever the filer happened to report first, which
+        # broke the assets = liabilities + equity identity check on 44,630 of
+        # 269,969 stored rows. The current-basis subtotals are now their own
+        # metrics below, named for what they are.
     ),
-    "liabilities": (
-        "Liabilities",
-        "LiabilitiesCurrent",
+    "current_assets": ("AssetsCurrent",),
+    "liabilities": ("Liabilities",),
+    "current_liabilities": ("LiabilitiesCurrent",),
+    # The contractual debt maturity ladder, as reported in the debt footnote.
+    #
+    # The specification asserted twice that XBRL "does not expose" a maturity
+    # schedule as a fact, and built C4's unsourced status on that claim. It is
+    # false: 2,748 of 7,079 stored companyfacts carry the year-one bucket and
+    # 2,680 carry both year one and year two. They are instant facts at the
+    # fiscal year end, not duration facts, so they sit on the same vintage as
+    # the balance sheet and need no separate aggregation.
+    #
+    # Year three is also a standard tag (LongTermDebtMaturitiesRepaymentsOfPrincipalInYearThree,
+    # 2,655 companies) but is stored unconverted because C4 is an 18-month
+    # test and year three falls outside it. Carrying it would invite someone to
+    # use a figure the override does not ask for.
+    "debt_maturing_12m": ("LongTermDebtMaturitiesRepaymentsOfPrincipalInNextTwelveMonths",),
+    "debt_maturing_year_2": ("LongTermDebtMaturitiesRepaymentsOfPrincipalInYearTwo",),
+    # Section 5.5 defines C4's reserves as Cash *plus Committed Undrawn
+    # Facilities*. Committed undrawn capacity is a reported XBRL balance, and
+    # 888 stored filers disclose it, so measuring reserves as cash alone
+    # understated them on precisely the firms that hold a revolver alongside a
+    # near-term maturity -- the firms C4 exists to catch.
+    #
+    # Coverage is genuinely partial, and the fallback is deliberate: a filer
+    # that does not tag this is NOT assumed to have zero capacity, because
+    # treating silence as zero is what the cash-only denominator did wrong.
+    # The capacity simply stays out of the numerator, which keeps the measure
+    # conservative in the direction that matters for a gate.
+    "committed_undrawn_facility": (
+        "LineOfCreditFacilityRemainingBorrowingCapacity",
+        "LineOfCreditFacilityCurrentBorrowingCapacity",
     ),
-    "debt": (
+    # Debt is assembled from components rather than taken as one concept. The
+    # previous list was three *long-term* concepts, so a filer whose only
+    # interest-bearing balance was current (LongTermDebtCurrent, DebtCurrent,
+    # ShortTermBorrowings, NotesPayableCurrent, CommercialPaper) reported no
+    # debt at all, and -- because ``debt IS NULL`` is what circuit breakers
+    # C2 and C3 read to decide whether a firm has reportable debt instruments --
+    # that filer was indistinguishable from a firm with genuinely none.
+    #
+    # They must also be summed, not priority-resolved. `_visible_as_of` returns
+    # the first concept with a filing, so a filer reporting both a noncurrent
+    # balance and a current portion kept only the noncurrent one. Understating
+    # debt is the one direction of error a leverage gate cannot absorb.
+    # ``fundamentals.extract_periodic_financials`` adds the parts together.
+    "debt_noncurrent": (
         "LongTermDebtAndCapitalLeaseObligations",
         "LongTermDebt",
         "LongTermDebtNoncurrent",
+    ),
+    "debt_current": (
+        "LongTermDebtCurrent",
+        "DebtCurrent",
+        "ShortTermBorrowings",
+        "NotesPayableCurrent",
+        "CommercialPaper",
+    ),
+    # Finance leases are debt under GAAP and so are included in the total.
+    # Operating leases are deliberately excluded: ASC 842 keeps them off the
+    # balance sheet as borrowings, so counting them would change every leverage
+    # ratio in the warehouse. That is a separate, deliberate decision rather
+    # than an oversight -- 4,742 filers tag OperatingLeaseLiability.
+    "finance_lease_debt": (
+        "FinanceLeaseLiabilityNoncurrent",
+        "FinanceLeaseLiabilityCurrent",
+        "FinanceLeaseLiability",
     ),
     "equity": (
         "StockholdersEquity",
@@ -325,6 +412,42 @@ PERIODIC_FINANCIAL_CONCEPT_TAGS: dict[str, tuple[str, ...]] = {
     "capital_expenditures": (
         "PaymentsToAcquirePropertyPlantAndEquipment",
         "PaymentsToAcquireProductiveAssets",
+    ),
+    # The next three exist because the ratio features that needed them were
+    # retired as "not computable from this schema". That verdict was true of the
+    # *materialised* columns but not of the data: raw.companyfacts keeps the
+    # whole XBRL payload, and the concepts are present far more often than the
+    # retired features' reasons claimed. Measured over 1,500 stored filings,
+    # D&A resolves in 64% (72% including the split-tag fallbacks), interest
+    # expense in 69%, and shares outstanding in 91%. They are populated so the
+    # ratio features can be restored on evidence rather than on assumption; the
+    # remaining sparsity is real and is reported as a coverage number, not
+    # filled in.
+    "depreciation_amortization": (
+        "DepreciationDepletionAndAmortization",
+        "DepreciationAndAmortization",
+        "DepreciationAmortizationAndAccretionNet",
+        "DepreciationNonproduction",
+        "OtherDepreciationAndAmortization",
+    ),
+    # Interest is reported either as a standalone expense or folded into a
+    # combined "interest and debt expense" line, so both are tried.
+    "interest_expense": (
+        "InterestExpense",
+        "InterestExpenseNonoperating",
+        "InterestAndDebtExpense",
+        "InterestExpenseDebt",
+        "InterestExpenseNonoperatingNet",
+    ),
+    # dei:EntityCommonStockSharesOutstanding has the best coverage of any
+    # shares concept but lives in the dei taxonomy, which this extractor does
+    # not read (it is built on the us-gaap slice alone). Using the us-gaap
+    # equivalents keeps the taxonomy plumbing untouched; the coverage cost is
+    # recorded rather than worked around with a second code path.
+    "shares_outstanding": (
+        "CommonStockSharesOutstanding",
+        "WeightedAverageNumberOfDilutedSharesOutstanding",
+        "WeightedAverageNumberOfSharesOutstandingBasic",
     ),
 }
 

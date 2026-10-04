@@ -1,4 +1,5 @@
 CREATE SCHEMA IF NOT EXISTS raw;
+CREATE SCHEMA IF NOT EXISTS clean;
 CREATE SCHEMA IF NOT EXISTS reference;
 CREATE SCHEMA IF NOT EXISTS fundamentals;
 CREATE SCHEMA IF NOT EXISTS dividends;
@@ -6,6 +7,14 @@ CREATE SCHEMA IF NOT EXISTS preferred;
 CREATE SCHEMA IF NOT EXISTS market;
 CREATE SCHEMA IF NOT EXISTS model;
 CREATE SCHEMA IF NOT EXISTS audit;
+
+-- The compose stack preloads pg_stat_statements via shared_preload_libraries.
+-- Preloading only makes the library available to CREATE EXTENSION; without this
+-- the server carries the preload overhead and the pg_stat_statements view never
+-- exists, so the setting does nothing. Idempotent, and a no-op on a server that
+-- did not preload it (the extension is then unavailable and this raises, which
+-- is the honest signal rather than a silent skip).
+CREATE EXTENSION IF NOT EXISTS pg_stat_statements;
 
 CREATE TABLE IF NOT EXISTS raw.company_ticker (
   ticker VARCHAR(32) PRIMARY KEY,
@@ -37,6 +46,7 @@ CREATE TABLE IF NOT EXISTS reference.securities (
   security_type VARCHAR(32) NOT NULL DEFAULT 'other',
   coupon_rate NUMERIC,
   dividend BOOLEAN NOT NULL DEFAULT FALSE,
+  dividend_last_paid DATE,
   sec_data_status VARCHAR(32) NOT NULL DEFAULT 'unavailable',
   cusip VARCHAR(32), isin VARCHAR(32),
   exchange_id INT REFERENCES reference.exchanges(exchange_id),
@@ -57,6 +67,12 @@ CREATE TABLE IF NOT EXISTS reference.securities (
   CONSTRAINT chk_securities_currency
     CHECK (currency ~ '^[A-Z]{3}$')
 );
+CREATE INDEX IF NOT EXISTS ix_securities_issuer_id
+  ON reference.securities (issuer_id);
+CREATE INDEX IF NOT EXISTS ix_securities_exchange_id
+  ON reference.securities (exchange_id);
+CREATE INDEX IF NOT EXISTS ix_securities_ticker_cik
+  ON reference.securities (ticker, cik);
 
 -- Converge databases created before the XBRL-term columns existed so the
 -- COMMENT statements below and the profile/taxonomy writers always apply.
@@ -103,7 +119,15 @@ COMMENT ON COLUMN reference.securities.exchange_id IS
 COMMENT ON COLUMN reference.securities.coupon_rate IS
   'Annual coupon or stated dividend rate, expressed as a percentage';
 COMMENT ON COLUMN reference.securities.dividend IS
-  'Whether SEC evidence indicates that the security pays a dividend';
+  'Whether SEC evidence indicates that the security pays a dividend. '
+  'When ENFORCE_DIVIDEND_RECENCY is enabled, requires a positive dividend '
+  'fact whose period ends within the recency window (DIVIDEND_RECENCY_DAYS, '
+  '548 days) before the classification date; off by default to preserve the '
+  'historical any-positive-fact rule. XBRL retains stale comparative facts '
+  'that would otherwise keep defunct issuers in the universe';
+COMMENT ON COLUMN reference.securities.dividend_last_paid IS
+  'Period end (end date) of the most recent positive dividend fact that '
+  'qualified reference.securities.dividend, or NULL when not a current payer';
 COMMENT ON COLUMN reference.securities.currency IS
   'Currency code for security amounts, normally USD';
 COMMENT ON COLUMN reference.securities.liquidation_preference IS
@@ -189,6 +213,308 @@ COMMENT ON COLUMN raw.ticker_profile.sector IS
   'Company sector from OpenBB/yfinance (provider metadata), not an XBRL fact';
 COMMENT ON COLUMN raw.ticker_profile.industry IS
   'Company industry from OpenBB/yfinance (provider metadata), not an XBRL fact';
+
+-- Curated one-row-per-instrument profile. raw.ticker_profile remains the
+-- source record; this relation preserves every contributing profile payload
+-- while consolidating unambiguous attributes by issuer CIK and ticker.
+CREATE TABLE IF NOT EXISTS clean.ticker_profile (
+  cik VARCHAR(10) NOT NULL,
+  ticker VARCHAR(32) NOT NULL,
+  issuer_id BIGINT REFERENCES reference.issuers(issuer_id),
+  security_id UUID NOT NULL REFERENCES reference.securities(security_id),
+  source_security_ids UUID[] NOT NULL,
+  profile_count INTEGER NOT NULL,
+  provider_sources TEXT[] NOT NULL DEFAULT '{}',
+  issuer_name TEXT,
+  security_name TEXT NOT NULL,
+  security_type VARCHAR(32),
+  classify_source VARCHAR(32),
+  classify_confidence VARCHAR(16),
+  profile_security_type TEXT,
+  active BOOLEAN NOT NULL,
+  dividend BOOLEAN NOT NULL,
+  classification_conflict BOOLEAN NOT NULL DEFAULT FALSE,
+  sector TEXT,
+  industry TEXT,
+  coupon_type VARCHAR(32),
+  coupon_rate NUMERIC,
+  fixed_period_end DATE,
+  floating_spread NUMERIC,
+  tax_status VARCHAR(32),
+  call_date DATE,
+  liquidation_preference NUMERIC,
+  liquidation_preference_conflict BOOLEAN NOT NULL DEFAULT FALSE,
+  metadata_conflicts JSONB NOT NULL DEFAULT '{}'::jsonb,
+  source_profiles JSONB NOT NULL DEFAULT '[]'::jsonb,
+  cleaned_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (cik, ticker),
+  CONSTRAINT chk_clean_ticker_profile_cik CHECK (cik ~ '^[0-9]{1,10}$'),
+  CONSTRAINT chk_clean_ticker_profile_ticker CHECK (ticker = UPPER(BTRIM(ticker))),
+  CONSTRAINT chk_clean_ticker_profile_security_type CHECK (
+    security_type IS NULL OR security_type IN (
+      'common_stock', 'preferred stock', 'debt', 'equity',
+      'other_equity', 'other_debt', 'option', 'future', 'derivative',
+      'government debt', 'corporate bond', 'other_debt_and_equity', 'other'
+    )
+  ),
+  CONSTRAINT chk_clean_ticker_profile_source_count CHECK (
+    profile_count > 0 AND cardinality(source_security_ids) > 0
+  )
+);
+
+COMMENT ON TABLE clean.ticker_profile IS
+  'Curated one-row-per-CIK-and-ticker view of raw profile records; retains every source ID and payload while surfacing unresolved conflicts';
+COMMENT ON COLUMN clean.ticker_profile.cik IS
+  'Zero-padded SEC issuer CIK used as part of the normalized instrument key';
+COMMENT ON COLUMN clean.ticker_profile.ticker IS
+  'Uppercase trimmed SEC-listed ticker used as part of the normalized instrument key';
+COMMENT ON COLUMN clean.ticker_profile.issuer_id IS
+  'Canonical reference.issuers identifier for the CIK, when resolved';
+COMMENT ON COLUMN clean.ticker_profile.security_id IS
+  'Reference security selected by active status, classifier confidence, evidence priority, and stable ID tie-break';
+COMMENT ON COLUMN clean.ticker_profile.source_security_ids IS
+  'All reference.securities IDs contributing to this consolidated CIK/ticker row';
+COMMENT ON COLUMN clean.ticker_profile.profile_count IS
+  'Number of raw.ticker_profile rows consolidated into this instrument row';
+COMMENT ON COLUMN clean.ticker_profile.provider_sources IS
+  'Distinct provider labels from all contributing raw profile rows';
+COMMENT ON COLUMN clean.ticker_profile.issuer_name IS
+  'Registrant name from reference.issuers, not a security-series title';
+COMMENT ON COLUMN clean.ticker_profile.security_name IS
+  'Security title from the selected reference.securities row';
+COMMENT ON COLUMN clean.ticker_profile.security_type IS
+  'Canonical classification from the selected reference.securities row';
+COMMENT ON COLUMN clean.ticker_profile.classify_source IS
+  'Classifier signal associated with the selected reference security';
+COMMENT ON COLUMN clean.ticker_profile.classify_confidence IS
+  'Confidence level associated with the selected reference security';
+COMMENT ON COLUMN clean.ticker_profile.profile_security_type IS
+  'Consensus provider-specific series description; NULL when contributing rows disagree';
+COMMENT ON COLUMN clean.ticker_profile.active IS
+  'Whether the selected reference security is currently active';
+COMMENT ON COLUMN clean.ticker_profile.dividend IS
+  'Dividend flag from the selected reference security';
+COMMENT ON COLUMN clean.ticker_profile.classification_conflict IS
+  'TRUE only when the highest-ranked classifier evidence ties across distinct security types; lower-ranked alternatives are retained in source_profiles';
+COMMENT ON COLUMN clean.ticker_profile.sector IS
+  'Consensus issuer sector from contributing profiles; NULL when unavailable or conflicting';
+COMMENT ON COLUMN clean.ticker_profile.industry IS
+  'Consensus issuer industry from contributing profiles; NULL when unavailable or conflicting';
+COMMENT ON COLUMN clean.ticker_profile.coupon_type IS
+  'Consensus preferred coupon structure parsed or reported by a profile source';
+COMMENT ON COLUMN clean.ticker_profile.coupon_rate IS
+  'Consensus stated preferred coupon or dividend rate, expressed as percent per annum';
+COMMENT ON COLUMN clean.ticker_profile.fixed_period_end IS
+  'Consensus end date of the preferred security fixed-rate period';
+COMMENT ON COLUMN clean.ticker_profile.floating_spread IS
+  'Consensus floating-rate spread, expressed as a percentage';
+COMMENT ON COLUMN clean.ticker_profile.tax_status IS
+  'Consensus tax treatment reported or parsed for the preferred security';
+COMMENT ON COLUMN clean.ticker_profile.call_date IS
+  'Consensus issuer call date, when supplied by a source';
+COMMENT ON COLUMN clean.ticker_profile.liquidation_preference IS
+  'Per-share liquidation preference retained only when all non-null source values agree';
+COMMENT ON COLUMN clean.ticker_profile.liquidation_preference_conflict IS
+  'TRUE when contributing profiles contain conflicting non-null liquidation preferences';
+COMMENT ON COLUMN clean.ticker_profile.metadata_conflicts IS
+  'JSONB map of attributes whose contributing source values disagree';
+COMMENT ON COLUMN clean.ticker_profile.source_profiles IS
+  'JSONB array preserving every contributing source security ID, provider, retrieval time, and raw payload';
+COMMENT ON COLUMN clean.ticker_profile.cleaned_at IS
+  'Timestamp when this curated snapshot was rebuilt';
+CREATE INDEX IF NOT EXISTS ix_clean_ticker_profile_issuer_id
+  ON clean.ticker_profile (issuer_id);
+CREATE INDEX IF NOT EXISTS ix_clean_ticker_profile_security_id
+  ON clean.ticker_profile (security_id);
+
+CREATE TABLE IF NOT EXISTS clean.company_profile (
+  profile_id BIGSERIAL PRIMARY KEY,
+  symbol TEXT NOT NULL,
+  parent_name TEXT NOT NULL,
+  reference_security_id UUID REFERENCES reference.securities(security_id),
+  source_profile_security_id UUID REFERENCES raw.ticker_profile(security_id),
+  source_provider VARCHAR(64),
+  source_retrieved_at TIMESTAMPTZ,
+  ask NUMERIC, bid NUMERIC, fax TEXT, zip TEXT, beta NUMERIC, city TEXT,
+  name TEXT, open NUMERIC, phone TEXT, state TEXT, market TEXT, region TEXT,
+  sector TEXT, volume BIGINT, country TEXT, day_low NUMERIC, max_age BIGINT,
+  website TEXT, address1 TEXT, address2 TEXT, ask_size BIGINT, bid_size BIGINT,
+  currency TEXT, day_high NUMERIC, exchange TEXT, hq_state TEXT, industry TEXT,
+  language TEXT, employees BIGINT, long_name TEXT, peg_ratio NUMERIC,
+  tradeable BOOLEAN, type_disp TEXT, audit_risk BIGINT, board_risk BIGINT,
+  book_value NUMERIC, hq_country TEXT, issue_type TEXT, market_cap BIGINT,
+  price_hint BIGINT, quote_type TEXT, sector_key TEXT, short_name TEXT,
+  total_cash BIGINT, total_debt BIGINT, company_url TEXT, eps_forward NUMERIC,
+  forward_eps NUMERIC, forward_p_e NUMERIC, hq_address1 TEXT,
+  quick_ratio NUMERIC, sector_disp TEXT, short_ratio NUMERIC,
+  triggerable BOOLEAN, all_time_low NUMERIC, display_name TEXT,
+  float_shares BIGINT, industry_key TEXT, market_state TEXT, overall_risk BIGINT,
+  payout_ratio NUMERIC, shares_float BIGINT, shares_short BIGINT,
+  trailing_eps NUMERIC, trailing_p_e NUMERIC, all_time_high NUMERIC,
+  current_price NUMERIC, current_ratio NUMERIC, dividend_date DATE,
+  dividend_rate NUMERIC, esg_populated BOOLEAN, fullday_price NUMERIC,
+  gross_margins NUMERIC, gross_profits BIGINT, industry_disp TEXT,
+  price_to_book NUMERIC, total_revenue BIGINT, pct_change_52w NUMERIC,
+  average_volume BIGINT, debt_to_equity NUMERIC, dividend_yield NUMERIC,
+  dividend_yield_fraction NUMERIC, dividend_yield_source_unit VARCHAR(32),
+  ebitda_margins NUMERIC, fullday_change NUMERIC, previous_close NUMERIC,
+  profit_margins NUMERIC, revenue_growth NUMERIC, stock_exchange TEXT,
+  hq_address_city TEXT, pre_market_time TIMESTAMPTZ, source_interval BIGINT,
+  crypto_tradeable BOOLEAN, enterprise_value BIGINT, eps_current_year NUMERIC,
+  ex_dividend_date DATE, operating_cashflow BIGINT, recommendation_key TEXT,
+  shares_outstanding BIGINT, date_short_interest DATE,
+  fifty_two_week_high NUMERIC, full_time_employees BIGINT,
+  last_dividend_value NUMERIC, most_recent_quarter DATE,
+  recommendation_mean NUMERIC, regular_market_open NUMERIC,
+  regular_market_time TIMESTAMPTZ, target_median_price NUMERIC,
+  average_volume10days BIGINT, fifty_two_week_range TEXT,
+  last_fiscal_year_end DATE, net_income_to_common BIGINT,
+  next_fiscal_year_end DATE, regular_market_price NUMERIC,
+  sand_p52_week_change NUMERIC, total_cash_per_share NUMERIC,
+  enterprise_to_revenue NUMERIC, governance_epoch_date DATE,
+  held_percent_insiders NUMERIC, regular_market_change NUMERIC,
+  regular_market_volume BIGINT, average_analyst_rating TEXT,
+  earnings_timestamp_end TIMESTAMPTZ, exchange_timezone_name TEXT,
+  return_on_assets NUMERIC, return_on_equity NUMERIC, target_low_price NUMERIC,
+  business_phone_no TEXT, compensation_risk BIGINT, fifty_day_average NUMERIC,
+  industry_category TEXT, operating_margins NUMERIC, pre_market_change NUMERIC,
+  quote_source_name TEXT, revenue_per_share NUMERIC, target_high_price NUMERIC,
+  target_mean_price NUMERIC, earnings_timestamp DATE, fifty_two_week_low NUMERIC,
+  financial_currency TEXT, full_exchange_name TEXT, last_dividend_date DATE,
+  pre_market_price NUMERIC, message_board_id TEXT,
+  c2_c3_leverage_exempt BOOLEAN GENERATED ALWAYS AS (
+    COALESCE(UPPER(issue_type) = 'EQUITY' AND LOWER(sector_key) = 'real-estate', FALSE)
+  ) STORED,
+  source_payload JSONB NOT NULL DEFAULT '{}'::jsonb,
+  loaded_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT uq_clean_company_profile_symbol_parent UNIQUE (symbol, parent_name),
+  CONSTRAINT chk_clean_company_profile_symbol CHECK (
+    symbol = UPPER(BTRIM(symbol)) AND symbol <> ''
+  ),
+  CONSTRAINT chk_clean_company_profile_parent CHECK (BTRIM(parent_name) <> '')
+);
+CREATE INDEX IF NOT EXISTS ix_clean_company_profile_reference_security_id
+  ON clean.company_profile (reference_security_id);
+CREATE INDEX IF NOT EXISTS ix_clean_company_profile_source_profile_security_id
+  ON clean.company_profile (source_profile_security_id);
+
+CREATE TABLE IF NOT EXISTS clean.company_officer (
+  symbol TEXT NOT NULL,
+  parent_name TEXT NOT NULL,
+  officer_no SMALLINT NOT NULL,
+  age SMALLINT,
+  name TEXT NOT NULL,
+  title TEXT,
+  total_pay NUMERIC,
+  year_born SMALLINT,
+  fiscal_year SMALLINT,
+  exercised_value NUMERIC,
+  unexercised_value NUMERIC,
+  officer_max_age SMALLINT,
+  source_payload JSONB NOT NULL DEFAULT '{}'::jsonb,
+  loaded_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (symbol, parent_name, officer_no),
+  CONSTRAINT uq_clean_company_officer_identity
+    UNIQUE NULLS NOT DISTINCT (symbol, parent_name, name, title),
+  CONSTRAINT fk_clean_company_officer_profile
+    FOREIGN KEY (symbol, parent_name)
+    REFERENCES clean.company_profile(symbol, parent_name)
+    ON DELETE CASCADE
+);
+
+COMMENT ON TABLE clean.company_profile IS
+  'One typed company-level vendor profile per symbol and parent name, loaded from raw OpenBB/yfinance profile payloads';
+COMMENT ON TABLE clean.company_officer IS
+  'Officer and compensation rows belonging to a clean company profile; missing compensation remains NULL';
+
+DO $company_profile_comments$
+DECLARE
+  column_row RECORD;
+  column_comment TEXT;
+BEGIN
+  FOR column_row IN
+    SELECT column_name
+    FROM information_schema.columns
+    WHERE table_schema = 'clean'
+      AND table_name = 'company_profile'
+  LOOP
+    column_comment := CASE column_row.column_name
+      WHEN 'profile_id' THEN 'Surrogate primary key for this clean company-profile row'
+      WHEN 'symbol' THEN 'Uppercase provider ticker and first component of the company-profile key'
+      WHEN 'parent_name' THEN 'Company name paired with symbol; referenced by the officer child table'
+      WHEN 'reference_security_id' THEN 'Matching canonical listed-security ID when the symbol resolves in reference.securities'
+      WHEN 'source_profile_security_id' THEN 'Raw ticker-profile security ID whose provider payload supplied this company record'
+      WHEN 'source_provider' THEN 'Provider label on the raw profile source row'
+      WHEN 'source_retrieved_at' THEN 'Retrieval timestamp of the selected raw profile source'
+      WHEN 'pct_change_52w' THEN '52-week relative price change; source JSON key 52_week_change'
+      WHEN 'dividend_yield' THEN 'Provider-native yield in percent points when supplied by OpenBB/YFinance; original value is preserved'
+      WHEN 'dividend_yield_fraction' THEN 'Canonical decimal yield fraction, populated only when dividend_rate/current_price corroborates the source unit'
+      WHEN 'dividend_yield_source_unit' THEN 'How source dividend_yield was interpreted: fraction, percent_points, ambiguous, or unverified'
+      WHEN 'payout_ratio' THEN 'Provider-native payout ratio; no scaling is applied without source-unit confirmation'
+      WHEN 'debt_to_equity' THEN 'Provider leverage multiple, not a percentage; raw provider value is preserved'
+      WHEN 'quick_ratio' THEN 'Provider-native liquidity multiple, not a percentage'
+      WHEN 'current_ratio' THEN 'Provider-native liquidity multiple, not a percentage'
+      WHEN 'gross_margins' THEN 'Provider margin fraction where 0.25 represents 25 percent'
+      WHEN 'ebitda_margins' THEN 'Provider margin fraction where 0.25 represents 25 percent'
+      WHEN 'profit_margins' THEN 'Provider margin fraction where 0.25 represents 25 percent'
+      WHEN 'operating_margins' THEN 'Provider margin fraction where 0.25 represents 25 percent'
+      WHEN 'revenue_growth' THEN 'Provider growth fraction where 0.10 represents 10 percent'
+      WHEN 'return_on_assets' THEN 'Provider return fraction where 0.05 represents 5 percent'
+      WHEN 'return_on_equity' THEN 'Provider return fraction where 0.05 represents 5 percent'
+      WHEN 'dividend_date' THEN 'Dividend date converted from the source Unix epoch seconds to a UTC calendar date'
+      WHEN 'ex_dividend_date' THEN 'Ex-dividend date converted from the source Unix epoch seconds to a UTC calendar date'
+      WHEN 'last_dividend_date' THEN 'Last dividend date converted from the source Unix epoch seconds to a UTC calendar date'
+      WHEN 'earnings_timestamp' THEN 'Earnings date converted from the source Unix epoch seconds to a UTC calendar date'
+      WHEN 'pre_market_time' THEN 'Pre-market quote time converted from Unix epoch seconds to a UTC timestamp'
+      WHEN 'regular_market_time' THEN 'Regular-market quote time converted from Unix epoch seconds to a UTC timestamp'
+      WHEN 'earnings_timestamp_end' THEN 'End of earnings-event window converted from Unix epoch seconds to a UTC timestamp'
+      WHEN 'date_short_interest' THEN 'Short-interest report date converted from Unix epoch seconds to a UTC calendar date'
+      WHEN 'most_recent_quarter' THEN 'Most recent fiscal-quarter end converted from Unix epoch seconds to a UTC calendar date'
+      WHEN 'last_fiscal_year_end' THEN 'Last fiscal-year end converted from Unix epoch seconds to a UTC calendar date'
+      WHEN 'next_fiscal_year_end' THEN 'Next fiscal-year end converted from Unix epoch seconds to a UTC calendar date'
+      WHEN 'governance_epoch_date' THEN 'Governance data date converted from Unix epoch seconds to a UTC calendar date'
+      WHEN 'c2_c3_leverage_exempt' THEN 'Generated tag for issue_type EQUITY and sector_key real-estate; informational only and does not change C2/C3 scoring'
+      WHEN 'source_payload' THEN 'JSONB snapshot of selected scalar source fields; officer arrays are stored separately'
+      WHEN 'loaded_at' THEN 'Timestamp when the clean company profile was loaded'
+      ELSE format('Scalar OpenBB/yfinance company-profile attribute from source key %s', column_row.column_name)
+    END;
+    EXECUTE format(
+      'COMMENT ON COLUMN clean.company_profile.%I IS %L',
+      column_row.column_name,
+      column_comment
+    );
+  END LOOP;
+
+  COMMENT ON COLUMN clean.company_officer.symbol IS
+    'Company symbol; first component of the composite foreign key to clean.company_profile';
+  COMMENT ON COLUMN clean.company_officer.parent_name IS
+    'Parent company name; second component of the composite foreign key to clean.company_profile';
+  COMMENT ON COLUMN clean.company_officer.officer_no IS
+    'One-based ordinal from the source company_officers array; child-row key within the parent profile';
+  COMMENT ON COLUMN clean.company_officer.age IS
+    'Officer age when reported; NULL when unavailable';
+  COMMENT ON COLUMN clean.company_officer.name IS
+    'Officer name as reported by the provider';
+  COMMENT ON COLUMN clean.company_officer.title IS
+    'Officer title as reported by the provider';
+  COMMENT ON COLUMN clean.company_officer.total_pay IS
+    'Reported officer total compensation; NULL when the source omitted pay, distinct from zero';
+  COMMENT ON COLUMN clean.company_officer.year_born IS
+    'Officer birth year when reported';
+  COMMENT ON COLUMN clean.company_officer.fiscal_year IS
+    'Fiscal year associated with this officer record';
+  COMMENT ON COLUMN clean.company_officer.exercised_value IS
+    'Reported value of exercised awards or options; NULL when unavailable';
+  COMMENT ON COLUMN clean.company_officer.unexercised_value IS
+    'Reported value of unexercised awards or options; NULL when unavailable';
+  COMMENT ON COLUMN clean.company_officer.officer_max_age IS
+    'Source officer_max_age flag/value preserved from the provider row';
+  COMMENT ON COLUMN clean.company_officer.source_payload IS
+    'Original officer JSON object for audit and future reprocessing';
+  COMMENT ON COLUMN clean.company_officer.loaded_at IS
+    'Timestamp when this officer row was loaded';
+END
+$company_profile_comments$;
 
 CREATE TABLE IF NOT EXISTS raw.dividend_data (
   security_id UUID REFERENCES reference.securities(security_id),
@@ -358,6 +684,8 @@ CREATE TABLE IF NOT EXISTS preferred.security_terms (
   source_document_id BIGINT REFERENCES raw.sec_documents(document_id),
   confidence_score NUMERIC, reviewed_by TEXT, reviewed_at TIMESTAMPTZ
 );
+CREATE INDEX IF NOT EXISTS ix_security_terms_source_document_id
+  ON preferred.security_terms (source_document_id);
 
 COMMENT ON COLUMN preferred.security_terms.dividend_rate IS
   'Preferred dividend rate (percent/amount). XBRL: us-gaap:PreferredStockDividendRatePercentage '
@@ -387,6 +715,9 @@ CREATE TABLE IF NOT EXISTS raw.contract_documents (
   retrieved_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+CREATE INDEX IF NOT EXISTS ix_contract_documents_security_id
+  ON raw.contract_documents (security_id);
+
 COMMENT ON TABLE raw.contract_documents IS
   'Narrative filings used to mine preferred-stock contractual clauses: '
   'Certificate of Designation exhibits (Form 8-K Exhibit 3.1/3.2) and '
@@ -414,6 +745,8 @@ CREATE TABLE IF NOT EXISTS preferred.contract_terms (
   confidence NUMERIC,
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+CREATE INDEX IF NOT EXISTS ix_contract_terms_source_document_id
+  ON preferred.contract_terms (source_document_id);
 
 COMMENT ON COLUMN preferred.contract_terms.liquidation_preference IS
   'Liquidation Preference amount, per share, read from the governing document '
@@ -458,14 +791,38 @@ COMMENT ON COLUMN preferred.dividend_snapshot.dividend_evidence_tag IS
   'XBRL/Inline XBRL tag that supplied the dividend evidence, e.g. '
   'us-gaap:CommonStockDividendsPerShareDeclared';
 
+-- Periodic statements are versioned: one row per (period, filing state), not
+-- one row per period. A period is reported in its original filing and again in
+-- every later filing that repeats it as a comparative, and may be restated, so
+-- the relation has to keep every vintage to be queryable point-in-time. A
+-- consumer picks the latest row whose filed date is at or before the date it is
+-- evaluating. Collapsing to the most recently filed value -- which is what this
+-- table did before V0009 -- makes it impossible to ask what was known on a past
+-- date at all. Mirrors V0009_periodic_financials_filing_date.sql; facts with no
+-- filing date are dropped rather than assumed available.
 CREATE TABLE IF NOT EXISTS fundamentals.periodic_financials (
-  security_id UUID REFERENCES reference.securities(security_id),
+  security_id UUID NOT NULL REFERENCES reference.securities(security_id),
   period_end DATE NOT NULL, fiscal_year INT, fiscal_period VARCHAR(16),
+  filed DATE NOT NULL,
   revenue NUMERIC, operating_income NUMERIC, net_income NUMERIC, eps NUMERIC,
   cash NUMERIC, assets NUMERIC, liabilities NUMERIC, debt NUMERIC, equity NUMERIC,
+  -- V0016: the current-basis subtotals, stored separately. They were previously
+  -- XBRL fallbacks for `assets`/`liabilities`, which mixed two accounting bases
+  -- in one column and left assets = liabilities + equity broken on 44,630 rows.
+  current_assets NUMERIC, current_liabilities NUMERIC,
+  -- V0018: the contractual debt maturity ladder (year one, months 13-24).
+  -- 2,748 and 2,740 of 7,079 stored companyfacts disclose these respectively,
+  -- contrary to the specification's claim that XBRL does not expose them.
+  debt_maturing_12m NUMERIC, debt_maturing_year_2 NUMERIC,
+  committed_undrawn_facility NUMERIC,
   operating_cash_flow NUMERIC, capital_expenditures NUMERIC, free_cash_flow NUMERIC,
+  -- V0011: the inputs the leverage ratios need, populated from the stored XBRL
+  -- payload. Stored because they are reported; EBITDA is derived at feature
+  -- time rather than persisted here.
+  depreciation_amortization NUMERIC, interest_expense NUMERIC,
+  shares_outstanding NUMERIC,
   source VARCHAR(64), retrieved_at TIMESTAMPTZ DEFAULT now(),
-  PRIMARY KEY(security_id, period_end, fiscal_period)
+  PRIMARY KEY(security_id, period_end, fiscal_period, filed)
 );
 
 CREATE TABLE IF NOT EXISTS model.features (
@@ -476,6 +833,12 @@ CREATE TABLE IF NOT EXISTS model.features (
   interest_coverage NUMERIC, volatility_252d NUMERIC, momentum_252d NUMERIC,
   momentum_63d NUMERIC, liquidation_discount NUMERIC, legal_rights_score NUMERIC,
   data_quality_score NUMERIC, target_sustainable_dividend INT,
+  -- V0016: quick_liquidity = cash / current_liabilities, from the current-basis
+  -- columns V0016 adds above. Consumed by the CVS (regime.py CVS_WEIGHTS); not
+  -- a declared ML feature, for the same reason debt_to_ebitda is not until V0012.
+  quick_liquidity NUMERIC,
+  -- V0018: maturity cliff over cash. Feeds circuit breaker C4 and the CVS.
+  refinancing_wall NUMERIC,
   PRIMARY KEY(security_id, as_of_date)
 );
 
@@ -484,7 +847,8 @@ CREATE TABLE IF NOT EXISTS model.scores (
   as_of_date DATE NOT NULL, dividend_income_score NUMERIC,
   sustainability_score NUMERIC, legal_rights_score NUMERIC,
   appreciation_score NUMERIC, risk_score NUMERIC, valuation_score NUMERIC,
-  composite_score NUMERIC, PRIMARY KEY(security_id, as_of_date)
+  composite_score NUMERIC, score_coverage NUMERIC(6,4),
+  PRIMARY KEY(security_id, as_of_date)
 );
 
 CREATE TABLE IF NOT EXISTS model.predictions (
@@ -495,6 +859,8 @@ CREATE TABLE IF NOT EXISTS model.predictions (
   created_at TIMESTAMPTZ DEFAULT now(),
   PRIMARY KEY(run_id, security_id, as_of_date)
 );
+CREATE INDEX IF NOT EXISTS ix_predictions_security_id
+  ON model.predictions (security_id);
 
 CREATE TABLE IF NOT EXISTS model.rankings (
   security_id UUID REFERENCES reference.securities(security_id),
@@ -508,6 +874,8 @@ CREATE TABLE IF NOT EXISTS audit.source_lineage (
   filing_date DATE, period DATE, retrieval_date TIMESTAMPTZ DEFAULT now(),
   provider TEXT, confidence_score NUMERIC
 );
+CREATE INDEX IF NOT EXISTS ix_source_lineage_security_id
+  ON audit.source_lineage (security_id);
 
 CREATE TABLE IF NOT EXISTS audit.data_quality (
   security_id UUID REFERENCES reference.securities(security_id),
@@ -545,3 +913,140 @@ CREATE TABLE IF NOT EXISTS audit.nightly_checks (
   findings JSONB NOT NULL DEFAULT '{}',
   notes TEXT
 );
+
+-- Descriptions for the project-owned relations. Column descriptions for
+-- baseline fields are kept beside the canonical schema; V0024 applies the
+-- same comments to existing databases and documents migration-added fields.
+COMMENT ON TABLE audit.model_runs IS
+  'One row per model evaluation run, including test metrics, baseline comparisons, and the readiness gate result';
+COMMENT ON TABLE audit.nightly_checks IS
+  'Auditable result of each nightly data-health verification pass';
+COMMENT ON TABLE audit.nightly_runs IS
+  'Execution summary for each scheduled or manual ETL pipeline run';
+COMMENT ON TABLE audit.source_lineage IS
+  'Field-level provenance for security attributes, including source, provider, filing period, and confidence';
+COMMENT ON TABLE fundamentals.periodic_financials IS
+  'SEC-reported financial statement facts by security, fiscal period, and filing vintage';
+COMMENT ON TABLE model.features IS
+  'Derived model inputs and target label snapshot for one security and as-of date';
+COMMENT ON TABLE model.predictions IS
+  'Model output for one security and as-of date, grouped by immutable run and version identifiers';
+COMMENT ON TABLE model.rankings IS
+  'Security ordering and published composite score for one screening date';
+COMMENT ON TABLE model.scores IS
+  'Component scores, composite score, and market-regime risk adjustments per security and date';
+COMMENT ON TABLE preferred.contract_terms IS
+  'Series-specific contractual redemption terms extracted from governing SEC filings with supporting evidence';
+COMMENT ON TABLE preferred.dividend_snapshot IS
+  'Per-security snapshot of preferred-stock classification and SEC dividend evidence';
+COMMENT ON TABLE preferred.security_terms IS
+  'Preferred-security rate and liquidation terms with their source and review metadata';
+COMMENT ON TABLE raw.contract_documents IS
+  'Stored text of SEC certificates and prospectus filings used to extract preferred contractual terms';
+COMMENT ON TABLE raw.dividend_data IS
+  'Normalized dividend events per security and provider, including source dates and amounts';
+COMMENT ON TABLE raw.market_data IS
+  'Daily security price and volume observations as supplied by market-data providers';
+COMMENT ON TABLE raw.sec_documents IS
+  'Indexed SEC filing documents and extracted concept groups associated with listed securities';
+COMMENT ON TABLE raw.sec_instrument_titles IS
+  'Latest SEC cover-page security title paired to its issuer CIK and trading ticker';
+COMMENT ON TABLE raw.ticker_profile IS
+  'Provider profile and preferred-security terms captured for one listed security';
+COMMENT ON TABLE reference.exchanges IS
+  'Canonical exchange codes and display names used by listed securities';
+COMMENT ON TABLE reference.issuers IS
+  'Canonical SEC registrants keyed by issuer ID and CIK';
+COMMENT ON TABLE reference.securities IS
+  'Canonical listed instruments keyed by security ID, with issuer, classification, and per-security attributes';
+
+COMMENT ON COLUMN audit.nightly_checks.check_id IS
+  'Surrogate key for one verification record';
+COMMENT ON COLUMN audit.nightly_checks.verified_at IS
+  'Timestamp when the verification was completed';
+COMMENT ON COLUMN audit.nightly_checks.run_date IS
+  'ET calendar date whose nightly pipeline health was checked';
+COMMENT ON COLUMN audit.nightly_checks.verified_by IS
+  'Actor or process that recorded the verification';
+COMMENT ON COLUMN audit.nightly_checks.status IS
+  'Overall verification result: ok or attention';
+COMMENT ON COLUMN audit.nightly_checks.findings IS
+  'Structured JSON results from the individual health checks';
+COMMENT ON COLUMN audit.nightly_checks.notes IS
+  'Optional human-readable context for the verification result';
+
+COMMENT ON COLUMN audit.nightly_runs.run_id IS
+  'Surrogate key for one ETL execution';
+COMMENT ON COLUMN audit.nightly_runs.run_date IS
+  'ET calendar date assigned to this nightly execution';
+COMMENT ON COLUMN audit.nightly_runs.trigger IS
+  'Execution origin, such as manual, airflow, or systemd';
+COMMENT ON COLUMN audit.nightly_runs.started_at IS
+  'Timestamp when the pipeline execution began';
+COMMENT ON COLUMN audit.nightly_runs.finished_at IS
+  'Timestamp when the pipeline execution ended; NULL while running';
+COMMENT ON COLUMN audit.nightly_runs.exit_code IS
+  'Process exit code; zero indicates success';
+COMMENT ON COLUMN audit.nightly_runs.stages IS
+  'JSON object mapping each ETL stage to its status';
+COMMENT ON COLUMN audit.nightly_runs.status IS
+  'Overall execution state: running, success, or failed';
+COMMENT ON COLUMN audit.nightly_runs.created_at IS
+  'Timestamp when this execution record was created';
+
+COMMENT ON COLUMN preferred.contract_terms.security_id IS
+  'References reference.securities; one contractual-terms row per listed security';
+COMMENT ON COLUMN preferred.contract_terms.optional_redemption IS
+  'Whether the governing terms grant the issuer an optional redemption right';
+COMMENT ON COLUMN preferred.contract_terms.source_document_id IS
+  'References the stored SEC filing that supplied the extracted terms';
+COMMENT ON COLUMN preferred.contract_terms.confidence IS
+  'Mean extraction confidence for the clauses found, on a zero-to-one scale; NULL when no clause was scored';
+COMMENT ON COLUMN preferred.contract_terms.updated_at IS
+  'Timestamp when the extracted contract terms were last written';
+
+COMMENT ON COLUMN raw.contract_documents.document_id IS
+  'Surrogate key for one stored filing document';
+COMMENT ON COLUMN raw.contract_documents.security_id IS
+  'Listed security associated with the document; NULL when the filing is issuer-wide';
+COMMENT ON COLUMN raw.contract_documents.cik IS
+  'SEC CIK of the registrant that filed the document';
+COMMENT ON COLUMN raw.contract_documents.form_type IS
+  'SEC filing form, such as 8-K, 424B5, S-1, or S-3';
+COMMENT ON COLUMN raw.contract_documents.filing_date IS
+  'Date the filing was submitted to SEC';
+COMMENT ON COLUMN raw.contract_documents.accession_no IS
+  'SEC accession number identifying the filing submission';
+COMMENT ON COLUMN raw.contract_documents.primary_document IS
+  'Primary filing or exhibit filename stored from the SEC archive';
+COMMENT ON COLUMN raw.contract_documents.exhibit_type IS
+  'SEC exhibit designation when the document is a filing exhibit';
+COMMENT ON COLUMN raw.contract_documents.source_url IS
+  'SEC archive URL from which the document was retrieved';
+COMMENT ON COLUMN raw.contract_documents.raw_text IS
+  'Extracted filing text used by the preferred-contract clause parsers';
+COMMENT ON COLUMN raw.contract_documents.content_hash IS
+  'SHA-256 hash of the stored document text for change detection';
+COMMENT ON COLUMN raw.contract_documents.retrieved_at IS
+  'Timestamp when the document text was retrieved or stored';
+
+COMMENT ON COLUMN raw.sec_instrument_titles.cik IS
+  'SEC Central Index Key of the issuer filing the cover page';
+COMMENT ON COLUMN raw.sec_instrument_titles.ticker IS
+  'Trading symbol paired with the title on the SEC filing cover page';
+COMMENT ON COLUMN raw.sec_instrument_titles.title IS
+  'Class-specific dei:SecurityTitle or dei:Security12bTitle value';
+COMMENT ON COLUMN raw.sec_instrument_titles.accession_no IS
+  'SEC accession number of the filing instance that supplied the title';
+COMMENT ON COLUMN raw.sec_instrument_titles.filing_date IS
+  'Date the title source filing was submitted';
+COMMENT ON COLUMN raw.sec_instrument_titles.form_type IS
+  'SEC form type of the title source filing';
+COMMENT ON COLUMN raw.sec_instrument_titles.source_url IS
+  'SEC archive URL of the XBRL filing instance';
+COMMENT ON COLUMN raw.sec_instrument_titles.document_hash IS
+  'SHA-256 hash of the source filing XBRL instance';
+COMMENT ON COLUMN raw.sec_instrument_titles.content_hash IS
+  'SHA-256 hash of the CIK, ticker, title, accession, and source-document hash';
+COMMENT ON COLUMN raw.sec_instrument_titles.retrieved_at IS
+  'Timestamp when the filing instance was fetched and parsed';

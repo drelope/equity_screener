@@ -35,9 +35,13 @@ from datetime import date, timedelta
 
 from sqlalchemy import text
 
+from src.crispdm.config import settings
 from src.crispdm.db import engine
 
-OUTCOME_WINDOW_DAYS = 365
+#: Horizon of the sustainability label. Sourced from settings so that the label
+#: definition and the walk-forward embargo in ``model.walk_forward`` cannot
+#: drift apart: if one moves, the other must move with it.
+OUTCOME_WINDOW_DAYS = settings.label_horizon_days
 
 
 def label_value(has_in_window, last_ex_date, as_of_date):
@@ -60,6 +64,18 @@ def label_targets(cutoff, rebuild=False):
     overwrite = "AND f.target_sustainable_dividend IS NULL" if not rebuild else ""
 
     with engine.begin() as c:
+        if rebuild:
+            # A rebuild must not leave labels from a previous run behind on rows
+            # outside this cutoff's window: those would be carried by a later
+            # run with a wider cutoff and scored as if they were current.
+            cleared = c.execute(
+                text(
+                    "UPDATE model.features SET target_sustainable_dividend = NULL "
+                    "WHERE target_sustainable_dividend IS NOT NULL"
+                )
+            ).rowcount
+            print(f"[label] --rebuild: cleared {cleared} pre-existing labels")
+
         rows = c.execute(
             text(
                 f"""
@@ -84,6 +100,24 @@ def label_targets(cutoff, rebuild=False):
                 END
                 FROM monitor m
                 WHERE m.security_id = f.security_id
+                  -- Only label securities that were actively paying at the
+                  -- observation date. A security whose last positive dividend
+                  -- fell before as_of_date had already stopped; labelling it 0
+                  -- teaches the model that "not paying now" means
+                  -- "unsustainable", which is trivial and swamps the real
+                  -- signal. Measured on 2024 H1: 54.3% of label-0 rows were
+                  -- already stopped at the observation date, and 100% of
+                  -- label-0 rows paid again later (median 581 days after
+                  -- as_of_date) -- the old negative class was measuring
+                  -- payment timing, not sustainability.
+                  AND EXISTS (
+                    SELECT 1 FROM raw.dividend_data d
+                    WHERE d.security_id = f.security_id
+                      AND d.amount > 0
+                      AND d.ex_dividend_date > f.as_of_date
+                                           - INTERVAL '{OUTCOME_WINDOW_DAYS} days'
+                      AND d.ex_dividend_date <= f.as_of_date
+                  )
                   AND f.as_of_date <= :eligible_before
                   {overwrite}
                 RETURNING f.security_id, f.as_of_date, f.target_sustainable_dividend
@@ -92,9 +126,12 @@ def label_targets(cutoff, rebuild=False):
             {"eligible_before": eligible_before},
         ).fetchall()
 
-    total = len(rows)
+    # A row whose evidence was insufficient is updated to NULL, so it appears
+    # in RETURNING without being labeled; counting it as "labeled" overstated the
+    # labeled population by the number of otherwise-eligible but undecided rows.
     positive = sum(1 for _, _, label in rows if label == 1)
     negative = sum(1 for _, _, label in rows if label == 0)
+    total = positive + negative
     return total, positive, negative
 
 

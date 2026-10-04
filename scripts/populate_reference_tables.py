@@ -47,6 +47,7 @@ from src.crispdm.openbb_client import profile as openbb_profile
 from src.crispdm.sec_client import (
     classify_companyfacts,
     classify_instrument,
+    configured_dividend_lookback,
     get_company_tickers,
     get_companyfacts_concepts,
     get_exchange_list,
@@ -54,6 +55,7 @@ from src.crispdm.sec_client import (
     get_legacy_issuer_data,
     match_security_title,
 )
+from src.crispdm.stage import stage_exit_code
 
 
 def get_issuer_info_with_fallback(cik, ticker, title):
@@ -379,6 +381,18 @@ def _security_has_children(conn, security_id):
     return bool(conn.execute(text(f"SELECT EXISTS ({union})"), {"sid": str(security_id)}).scalar())
 
 
+def _deactivate_referenced_security(conn, security_id):
+    """Retain a referenced stale row for history without treating it as active."""
+    conn.execute(
+        text("""
+        UPDATE reference.securities
+        SET active = FALSE, updated_at = now()
+        WHERE security_id = :sid
+    """),
+        {"sid": str(security_id)},
+    )
+
+
 def _cascade_reseed_children(conn, security_id):
     """Drop the reproducible rows that reference a security being reseeded."""
     removed = 0
@@ -400,8 +414,8 @@ def _reconcile_instrument_rows(conn, ticker, cik, keep_type, dividend, log, repo
     stale, so a phantom carrying a different dividend flag is swept too (e.g. a
     placeholder written while the issuer was unclassified). With ``repopulate``
     the reproducible derived rows are rebuilt, so their phantom parent is
-    cleared; otherwise (or when history/index rows still reference the
-    security) it is reported and kept untouched.
+    cleared. Stale rows still referenced by history or audit tables are retained
+    but deactivated.
     """
     stale = (
         conn.execute(
@@ -426,7 +440,8 @@ def _reconcile_instrument_rows(conn, ticker, cik, keep_type, dividend, log, repo
         if repopulate:
             log["cascaded"] += _cascade_reseed_children(conn, row["security_id"])
         if _security_has_children(conn, row["security_id"]):
-            log["kept_with_children"].append((ticker, row["security_type"]))
+            _deactivate_referenced_security(conn, row["security_id"])
+            log["deactivated_with_children"].append((ticker, row["security_type"]))
             continue
         conn.execute(
             text("DELETE FROM reference.securities WHERE security_id = :sid"),
@@ -457,7 +472,8 @@ def _sweep_orphan_securities(conn, log, repopulate=False):
         if repopulate:
             log["cascaded"] += _cascade_reseed_children(conn, row["security_id"])
         if _security_has_children(conn, row["security_id"]):
-            log["kept_with_children"].append((row["ticker"], "orphan"))
+            _deactivate_referenced_security(conn, row["security_id"])
+            log["deactivated_with_children"].append((row["ticker"], "orphan"))
             continue
         conn.execute(
             text("DELETE FROM reference.securities WHERE security_id = :sid"),
@@ -501,6 +517,32 @@ def populate_securities(limit=None, repopulate=False):
         )
         batch_ciks = {row["cik"] for row in raw_tickers if row["cik"] is not None}
 
+        issuer_id_by_cik = {}
+        existing_names_by_key = {}
+        if batch_ciks:
+            issuer_rows = conn.execute(
+                text("""
+                SELECT cik, issuer_id
+                FROM reference.issuers
+                WHERE cik = ANY(:ciks)
+            """),
+                {"ciks": sorted(batch_ciks)},
+            ).mappings()
+            issuer_id_by_cik = {row["cik"]: row["issuer_id"] for row in issuer_rows}
+
+            existing_rows = conn.execute(
+                text("""
+                SELECT cik, ticker, security_type, dividend, security_name
+                FROM reference.securities
+                WHERE cik = ANY(:ciks)
+                ORDER BY updated_at DESC NULLS LAST
+            """),
+                {"ciks": sorted(batch_ciks)},
+            ).mappings()
+            for row in existing_rows:
+                key = (row["cik"], row["ticker"], row["security_type"], row["dividend"])
+                existing_names_by_key.setdefault(key, row["security_name"])
+
         facts_by_cik = {}
         cache_rows = conn.execute(
             text("""
@@ -538,7 +580,9 @@ def populate_securities(limit=None, repopulate=False):
         for row in stored_facts:
             if row["cik"] not in cached_ciks:
                 try:
-                    classification = classify_companyfacts(row["raw_payload"])
+                    classification = classify_companyfacts(
+                        row["raw_payload"], lookback_days=configured_dividend_lookback()
+                    )
                     facts_by_cik[row["cik"]] = classification
                 except Exception:
                     continue
@@ -565,7 +609,9 @@ def populate_securities(limit=None, repopulate=False):
         else:
             for cik in missing_ciks:
                 try:
-                    facts_by_cik[cik] = classify_companyfacts(get_companyfacts_concepts(cik))
+                    facts_by_cik[cik] = classify_companyfacts(
+                        get_companyfacts_concepts(cik), lookback_days=configured_dividend_lookback()
+                    )
                 except Exception as exc:
                     facts_by_cik[cik] = {
                         "security_types": ["other"],
@@ -598,17 +644,14 @@ def populate_securities(limit=None, repopulate=False):
             )
             titles_list_by_cik.setdefault(title_row["cik"], {}).setdefault(title_row["title"], None)
         titles_list_by_cik = {cik: list(titles) for cik, titles in titles_list_by_cik.items()}
-        reconcile_log = {"deleted": 0, "cascaded": 0, "kept_with_children": []}
+        reconcile_log = {"deleted": 0, "cascaded": 0, "deactivated_with_children": []}
 
         for sec in raw_tickers:
             try:
                 cik = sec["cik"]
                 classification = facts_by_cik[cik]
 
-                # Get issuer_id from cik
-                issuer_id = conn.execute(
-                    text("SELECT issuer_id FROM reference.issuers WHERE cik = :cik"), {"cik": cik}
-                ).scalar()
+                issuer_id = issuer_id_by_cik.get(cik)
 
                 ticker_key = sec["ticker"].upper()
                 exact_title = (titles_by_cik.get(cik) or {}).get(ticker_key) or (
@@ -632,15 +675,29 @@ def populate_securities(limit=None, repopulate=False):
                     uuid.NAMESPACE_URL,
                     f"dividend-equity:{sec['ticker'].upper()}:{cik}:{security_type}:{dividend}",
                 )
-                security_name = (
-                    exact_title
-                    or instrument.matched_title
-                    or match_security_title(
-                        cik_titles or classification.get("security_titles", []),
-                        security_type,
-                        fallback=sec["title"],
-                    )
+                title_match = match_security_title(
+                    cik_titles or classification.get("security_titles", []),
+                    security_type,
                 )
+                if exact_title:
+                    security_name = exact_title
+                    title_source = "sec_instrument_title"
+                elif instrument.matched_title:
+                    security_name = instrument.matched_title
+                    title_source = "sec_companyfacts_title"
+                elif title_match:
+                    security_name = title_match
+                    title_source = "unique_sec_title"
+                else:
+                    existing_name = existing_names_by_key.get(
+                        (cik, sec["ticker"], security_type, dividend)
+                    )
+                    security_name = existing_name or sec["title"]
+                    title_source = (
+                        "retained_existing_unverified"
+                        if existing_name
+                        else "issuer_fallback_unresolved"
+                    )
                 exchange_id = _exchange_id_for_symbol(
                     conn,
                     exchange_map,
@@ -651,15 +708,17 @@ def populate_securities(limit=None, repopulate=False):
                     text("""
                     INSERT INTO reference.securities
                     (ticker, cik, security_id, issuer_id, security_name,
-                     security_type, dividend, sec_data_status, exchange_id, currency, active,
+                     security_type, dividend, dividend_last_paid, sec_data_status,
+                     exchange_id, currency, active,
                      classify_source, classify_confidence, classification_evidence)
                     VALUES (:ticker, :cik, :id, :issuer_id, :security_name,
-                        :type, :dividend, :status, :exchange_id,
+                        :type, :dividend, :dividend_last_paid, :status, :exchange_id,
                             :currency, :active,
                             :classify_source, :classify_confidence, CAST(:classify_evidence AS jsonb))
                     ON CONFLICT (cik, ticker, security_type, dividend) DO UPDATE SET
                         issuer_id = EXCLUDED.issuer_id,
                         security_name = EXCLUDED.security_name,
+                        dividend_last_paid = EXCLUDED.dividend_last_paid,
                         sec_data_status = EXCLUDED.sec_data_status,
                         exchange_id = EXCLUDED.exchange_id,
                         currency = EXCLUDED.currency,
@@ -677,6 +736,7 @@ def populate_securities(limit=None, repopulate=False):
                         "security_name": security_name,
                         "type": security_type,
                         "dividend": dividend,
+                        "dividend_last_paid": classification.get("dividend_last_paid"),
                         "status": classification["status"],
                         "exchange_id": exchange_id,
                         "currency": "USD",
@@ -688,6 +748,11 @@ def populate_securities(limit=None, repopulate=False):
                                 "source": instrument.source,
                                 "confidence": instrument.confidence,
                                 "matched_title": instrument.matched_title,
+                                "security_name_source": title_source,
+                                "dividend_last_paid": classification.get("dividend_last_paid"),
+                                "dividend_lookback_start": classification.get(
+                                    "dividend_lookback_start"
+                                ),
                                 "submissions": instrument.submissions,
                                 "evidence": instrument.evidence,
                                 "conflicts": instrument.conflicts,
@@ -725,17 +790,19 @@ def populate_securities(limit=None, repopulate=False):
         conn.commit()
 
     print(f"  Successfully populated {count} securities ({errors} errors).")
+    securities_result = (count + errors, count, errors)
     print(
         f"  Reconcile: deleted {reconcile_log['deleted']} stale rows, "
         f"cascaded {reconcile_log['cascaded']} derived child rows; "
-        f"kept {len(reconcile_log['kept_with_children'])} stale rows still referenced "
-        f"downstream: {reconcile_log['kept_with_children'][:10]}..."
+        f"deactivated {len(reconcile_log['deactivated_with_children'])} stale rows still referenced "
+        f"downstream: {reconcile_log['deactivated_with_children'][:10]}..."
     )
 
-    validate_securities_reference_fk()
+    validate_securities_reference_fk(check_active_identity_duplicates=limit is None)
+    return securities_result
 
 
-def validate_securities_reference_fk():
+def validate_securities_reference_fk(*, check_active_identity_duplicates=True):
     """Enforce referential integrity after the reference stage finishes.
 
     ``populate_raw_tables`` (re)creates fk_securities_company_ticker as NOT
@@ -744,6 +811,26 @@ def validate_securities_reference_fk():
     pairs) is a pipeline defect, so validation failures surface loudly.
     """
     with engine.begin() as conn:
+        if check_active_identity_duplicates:
+            duplicate = (
+                conn.execute(
+                    text("""
+                SELECT cik, ticker, COUNT(*) AS active_rows
+                FROM reference.securities
+                WHERE active = TRUE
+                GROUP BY cik, ticker
+                HAVING COUNT(*) > 1
+                LIMIT 1
+            """)
+                )
+                .mappings()
+                .first()
+            )
+            if duplicate:
+                raise RuntimeError(
+                    "Multiple active reference.securities rows for "
+                    f"(cik={duplicate['cik']}, ticker={duplicate['ticker']})"
+                )
         conn.execute(
             text(
                 "ALTER TABLE reference.securities VALIDATE CONSTRAINT fk_securities_company_ticker"
@@ -788,7 +875,15 @@ def main():
             populate_missing_issuers_from_legacy_sec(args.limit)
 
         if args.securities or populate_all:
-            populate_securities(args.limit, repopulate=args.repopulate)
+            attempted, written, errors = populate_securities(args.limit, repopulate=args.repopulate)
+            # populate_securities bails out after 10 errors, so a run that stops
+            # early can still leave a partially rebuilt universe behind. That is
+            # worth a loud failure; the reconcile log below records how far it got.
+            code = stage_exit_code(
+                "populate_reference_tables (securities)", attempted, written, errors=errors
+            )
+            if code:
+                return code
 
         print("\n✓ Reference tables populated successfully!")
         return 0

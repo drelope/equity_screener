@@ -72,6 +72,7 @@ from src.crispdm.sec_client import (
     get_company_tickers,
     get_companyfacts,
 )
+from src.crispdm.stage import stage_exit_code
 
 try:
     from src.crispdm.openbb_client import dividends as openbb_dividends
@@ -121,16 +122,63 @@ def parse_date(value):
     return None
 
 
+CURRENCY_RE = re.compile(r"^[A-Z]{3}$")
+
+
+def normalize_currency(value):
+    """Map a provider currency label to a bare ISO-4217 alphabetic code.
+
+    SEC XBRL keys units as ``USD/shares`` or ``CAD/per-shares`` and providers
+    occasionally return a decorated label; only the alphabetic prefix is the
+    currency. Anything that is not a plain three-letter code falls back to USD
+    so the value always fits raw.dividend_data.currency (VARCHAR(8)) and
+    satisfies the ``^[A-Z]{3}$`` check on reference.securities.currency.
+    """
+    code = str(value or "").strip().upper().split("/", 1)[0].strip()
+    return code if CURRENCY_RE.match(code) else "USD"
+
+
 FULL_HISTORY_START = "1970-01-01"
 
 SEC_DIVIDEND_CONCEPTS = (
-    "CommonStockDividendsPaid",
     "CommonStockDividendsPerShareDeclared",
-    "PreferredStockDividendsPaid",
-    "DividendsCashPaid",
-    "DividendsCommonStockCash",
-    "StockIssuedDuringPeriodValueCommonStockDividends",
+    "CommonStockDividendsPerShareCashPaid",
+    "PreferredStockDividendsPerShareDeclared",
 )
+
+#: XBRL has no ex-date fact, so fact.end (the period end) is used as the proxy
+#: for ex_dividend_date. That proxy is only as good as the filer's tag, and the
+#: real filings contain typos: MTEX tags a period ending 2108-11-14. Aggregate
+#: dollar concepts and dates outside this window are refused rather than stored
+#: as if they were dividend history.
+MAX_DIVIDEND_HORIZON_YEARS = 2
+MIN_DIVIDEND_YEAR = 1970
+
+#: Filers occasionally tag a per-share concept with the period's aggregate
+#: dollars (HIG files 1,125,000,000 as PreferredStockDividendsPerShareDeclared;
+#: ARR-PC files 306,800,000 as CommonStockDividendsPerShareCashPaid). The stored
+#: median is 0.48 and the 99th percentile is 80, so no real per-share dividend
+#: approaches this; anything larger is a unit error and is refused.
+MAX_PER_SHARE_DIVIDEND = 1000.0
+
+
+def plausible_dividend_date(value, today=None):
+    """Return a dividend date that is a plausible ex-date, else None.
+
+    Guards the ``fact.end`` proxy in two directions: far-future period ends
+    (filer typos, or a units/century error) would otherwise be summed into
+    every later trailing-dividend window and poison the feature forever,
+    since the window is a ``RANGE`` that no future row ever leaves.
+    """
+    parsed = parse_date(value)
+    if parsed is None:
+        return None
+    today = today or date.today()
+    if parsed.year < MIN_DIVIDEND_YEAR:
+        return None
+    if parsed > today.replace(year=today.year + MAX_DIVIDEND_HORIZON_YEARS):
+        return None
+    return parsed
 
 
 def _companyfacts_for_dividends(cik, conn):
@@ -199,7 +247,9 @@ def extract_sec_dividend_data(cik, conn=None):
                         continue
                     if amount <= 0:
                         continue
-                    end = record.get("end")
+                    end = plausible_dividend_date(record.get("end"))
+                    if end is None:
+                        continue
                     rows.append(
                         {
                             "cik": str(int(cik)).zfill(10),
@@ -210,7 +260,7 @@ def extract_sec_dividend_data(cik, conn=None):
                             "payment_date": end,
                             "amount": amount,
                             "frequency": "Annual",
-                            "currency": "USD" if "USD" in unit_type else unit_type,
+                            "currency": normalize_currency(unit_type),
                             "filed_date": record.get("filed"),
                             "form": record.get("form", ""),
                             "accn": record.get("accn", ""),
@@ -230,19 +280,32 @@ def normalize_sec_dividend_rows(ticker, sec_rows):
         amount = safe_float(row.get("amount"))
         if amount is None or amount <= 0:
             continue
+        # An aggregate-dollar fact in the same units column as a per-share
+        # amount is how BAC ended up with 20bn of "dividends" per share, so a
+        # row that is not a per-share concept is dropped here rather than
+        # silently becoming a yield.
+        concept = row.get("concept") or ""
+        if "pershare" not in concept.replace("_", "").replace(" ", "").lower():
+            continue
+        ex_date = plausible_dividend_date(row.get("ex_dividend_date"))
+        if ex_date is None:
+            continue
+        if amount > MAX_PER_SHARE_DIVIDEND:
+            continue
         normalized.append(
             {
                 "ticker": ticker,
                 "provider": "SEC_XBRL",
                 "cik": row.get("cik"),
-                "ex_dividend_date": parse_date(row.get("ex_dividend_date")),
+                "concept": concept,
+                "ex_dividend_date": ex_date,
                 "declaration_date": parse_date(row.get("declaration_date")),
                 "record_date": parse_date(row.get("record_date")),
                 "payment_date": parse_date(row.get("payment_date")),
                 "amount": amount,
                 "adjusted_amount": safe_float(row.get("adjusted_amount")),
                 "frequency": (row.get("frequency") or "Annual").strip() or "Annual",
-                "currency": (row.get("currency") or "USD").upper(),
+                "currency": normalize_currency(row.get("currency")),
             }
         )
     return normalized
@@ -271,6 +334,7 @@ def normalize_openbb_dividend_rows(ticker, data_frame):
             {
                 "ticker": ticker,
                 "provider": "OPENBB",
+                "concept": "",
                 "ex_dividend_date": parse_date(
                     row.get("ex_dividend_date") or row.get("date") or row.get("payment_date")
                 ),
@@ -285,7 +349,7 @@ def normalize_openbb_dividend_rows(ticker, data_frame):
                 ),
                 "frequency": (row.get("frequency") or row.get("period") or "Annual").strip()
                 or "Annual",
-                "currency": (row.get("currency") or "USD").upper(),
+                "currency": normalize_currency(row.get("currency")),
             }
         )
 
@@ -651,6 +715,12 @@ def populate_ticker_profiles(conn, limit=None, tickers=None):
     tickers that issued a dividend. Writes one row per security to
     ``raw.ticker_profile`` (upserted on ``security_id``) so re-runs refresh
     the summary with current values.
+
+    ``coupon_rate`` follows a deliberate precedence: the per-security name parse
+    wins, and any previously stored value (which ``populate_raw_tables``
+    resolved as name-parse-or-SEC-XBRL-fallback) is only used when this stage
+    cannot parse a rate from the title. Both writers use ``COALESCE(new,
+    stored)`` so the outcome does not depend on which stage ran first.
     """
     candidates = get_dividend_paying_securities(conn, limit=limit, tickers=tickers)
 
@@ -664,7 +734,7 @@ def populate_ticker_profiles(conn, limit=None, tickers=None):
             )
             conn.execute(
                 text("""
-                INSERT INTO raw.ticker_profile
+                INSERT INTO raw.ticker_profile AS current_profile
                     (security_id, ticker, provider, sector, industry, security_type,
                      coupon_type, coupon_rate, fixed_period_end, floating_spread,
                      tax_status, call_date, liquidation_preference, raw_payload, retrieved_at)
@@ -674,18 +744,36 @@ def populate_ticker_profiles(conn, limit=None, tickers=None):
                         :liquidation_preference, CAST(:raw_payload AS jsonb), now())
                 ON CONFLICT (security_id) DO UPDATE SET
                     ticker = EXCLUDED.ticker,
-                    provider = EXCLUDED.provider,
-                    sector = EXCLUDED.sector,
-                    industry = EXCLUDED.industry,
-                    security_type = EXCLUDED.security_type,
-                    coupon_type = EXCLUDED.coupon_type,
-                    coupon_rate = EXCLUDED.coupon_rate,
-                    fixed_period_end = EXCLUDED.fixed_period_end,
-                    floating_spread = EXCLUDED.floating_spread,
-                    tax_status = EXCLUDED.tax_status,
-                    call_date = EXCLUDED.call_date,
-                    liquidation_preference = EXCLUDED.liquidation_preference,
-                    raw_payload = EXCLUDED.raw_payload,
+                    provider = CASE
+                        WHEN current_profile.provider = EXCLUDED.provider THEN EXCLUDED.provider
+                        WHEN current_profile.provider IN (
+                            'SEC_XBRL', 'OPENBB_YFINANCE', 'SEC_XBRL+OPENBB_YFINANCE'
+                        ) AND EXCLUDED.provider IN (
+                            'SEC_XBRL', 'OPENBB_YFINANCE', 'SEC_XBRL+OPENBB_YFINANCE'
+                        ) THEN 'SEC_XBRL+OPENBB_YFINANCE'
+                        ELSE EXCLUDED.provider
+                    END,
+                    sector = COALESCE(EXCLUDED.sector, current_profile.sector),
+                    industry = COALESCE(EXCLUDED.industry, current_profile.industry),
+                    security_type = COALESCE(EXCLUDED.security_type, current_profile.security_type),
+                    coupon_type = COALESCE(EXCLUDED.coupon_type, current_profile.coupon_type),
+                    coupon_rate = COALESCE(
+                        EXCLUDED.coupon_rate, current_profile.coupon_rate
+                    ),
+                    fixed_period_end = COALESCE(
+                        EXCLUDED.fixed_period_end, current_profile.fixed_period_end
+                    ),
+                    floating_spread = COALESCE(
+                        EXCLUDED.floating_spread, current_profile.floating_spread
+                    ),
+                    tax_status = COALESCE(EXCLUDED.tax_status, current_profile.tax_status),
+                    call_date = COALESCE(EXCLUDED.call_date, current_profile.call_date),
+                    liquidation_preference = COALESCE(
+                        EXCLUDED.liquidation_preference,
+                        current_profile.liquidation_preference
+                    ),
+                    raw_payload = COALESCE(current_profile.raw_payload, '{}'::jsonb)
+                                 || EXCLUDED.raw_payload,
                     retrieved_at = now()
             """),
                 {**candidate, **summary},
@@ -859,8 +947,9 @@ def populate_dividend_data(
                     "amount": float(div.get("amount", 0)),
                     "adjusted_amount": div.get("adjusted_amount"),
                     "frequency": div.get("frequency", "Annual"),
-                    "currency": div.get("currency", "USD"),
+                    "currency": normalize_currency(div.get("currency")),
                     "provider": div.get("provider", "SEC_XBRL"),
+                    "concept": (div.get("concept") or "")[:96],
                     "retrieved_at": datetime.now(timezone.utc),
                 }
             )
@@ -870,9 +959,11 @@ def populate_dividend_data(
                 text("""
                 INSERT INTO raw.dividend_data
                 (security_id, ex_dividend_date, declaration_date, record_date,
-                 payment_date, amount, adjusted_amount, frequency, currency, provider, retrieved_at)
+                 payment_date, amount, adjusted_amount, frequency, currency, provider,
+                 concept, retrieved_at)
                 VALUES (:sec_id, :ex_date, :decl_date, :rec_date, :pay_date,
-                        :amount, :adjusted_amount, :frequency, :currency, :provider, :retrieved_at)
+                        :amount, :adjusted_amount, :frequency, :currency, :provider,
+                        :concept, :retrieved_at)
                 ON CONFLICT (security_id, ex_dividend_date, provider) DO UPDATE SET
                     declaration_date = EXCLUDED.declaration_date,
                     record_date = EXCLUDED.record_date,
@@ -881,6 +972,7 @@ def populate_dividend_data(
                     adjusted_amount = EXCLUDED.adjusted_amount,
                     frequency = EXCLUDED.frequency,
                     currency = EXCLUDED.currency,
+                    concept = EXCLUDED.concept,
                     retrieved_at = EXCLUDED.retrieved_at
             """),
                 insert_rows,
@@ -900,7 +992,7 @@ def populate_dividend_data(
         with engine.begin() as conn:
             populate_ticker_profiles(conn, limit=limit, tickers=tickers)
 
-    return inserted
+    return inserted, skipped, errors
 
 
 def main():
@@ -956,7 +1048,7 @@ def main():
     selected_sources = ["sec", "openbb"] if args.sources == "all" else [args.sources]
 
     try:
-        populate_dividend_data(
+        inserted, skipped, errors = populate_dividend_data(
             limit=args.limit,
             tickers=tickers_list,
             sources=selected_sources,
@@ -967,6 +1059,14 @@ def main():
             populate_profiles=not args.skip_profiles,
             include_non_dividend=args.include_non_dividend,
         )
+        # A re-run that finds every dividend already stored inserts nothing and
+        # skips everything, which is the stage working. Failing on that would
+        # make the nightly unrunnable on the morning after a good one.
+        code = stage_exit_code(
+            "populate_dividend_data", inserted + errors, inserted, skipped=skipped, errors=errors
+        )
+        if code:
+            return code
         print("\nDividend data population complete!")
         return 0
     except Exception as exc:

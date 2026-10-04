@@ -104,15 +104,41 @@ inside the DAG, and let it own retries/failure emails.
 
 ### Option B — systemd timer (zero extra dependencies, local-first)
 
-Ready-to-edit templates live at `ops/systemd/dividend-etl.service` and
-`ops/systemd/dividend-etl.timer` (daily 03:00 ET). Copy them to
-`/etc/systemd/system/`, fix `WorkingDirectory` / `ExecStart` /
-`EnvironmentFile` for your host, then:
+Templates live at `ops/systemd/dividend-etl.service` and
+`ops/systemd/dividend-etl.timer` (daily 03:00 ET, DST-aware). The paths in them
+already match this host's checkout, so no editing is needed here:
 
 ```bash
+sudo cp ops/systemd/dividend-etl.service ops/systemd/dividend-etl.timer /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl enable --now dividend-etl.timer
+systemctl list-timers dividend-etl.timer    # confirm a NEXT time
 ```
+
+Three things in the unit that are not obvious, each of which silently breaks a
+nightly rather than failing loudly:
+
+- **`TimeoutStartSec=12h` is mandatory.** The systemd default for a `oneshot`
+  is `DefaultTimeoutStartSec=90s`. Without it the ETL is killed 90 seconds in,
+  every night, and records a failed run that looks like a legitimate scheduled
+  attempt. `systemctl show -p DefaultTimeoutStartUSec` returns `1min 30s` on
+  Ubuntu 22.04.
+- **`ExecStartPre` waits for the database.** The warehouse is a Docker container,
+  and `After=docker.service` only *orders* the two units — it does not make
+  docker ready, nor does it make the container up. `ops/systemd/wait_for_db.py`
+  blocks until a real query succeeds (600s budget) so a boot race is not recorded
+  as a pipeline fault. `Wants=`, not `Requires=`, so a docker restart cannot tear
+  down an ETL that is already mid-write.
+- **Journal output.** `StandardOutput=journal` with
+  `SyslogIdentifier=dividend-etl`; read it with
+  `journalctl -u dividend-etl -f`.
+
+**WSL2 caveat (this host).** The timer only fires while the WSL2 VM is running.
+A laptop that is asleep or shut down at 03:00 does not run the ETL then;
+`Persistent=true` catches it up on the next WSL start instead. The 26h freshness
+SLA is therefore bounded by when this machine is awake, not by the clock — do not
+read a green freshness check on a host that sleeps. For a schedule that must hold
+regardless, use a real host (Option C) rather than relying on `Persistent`.
 
 At Azure time this same job becomes an Azure Functions / Container Apps Job
 (`azure/README.md`), so the entrypoint stays `python -m scripts.run_full_etl`

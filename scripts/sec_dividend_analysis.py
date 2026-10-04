@@ -6,7 +6,6 @@ dividend information are returned (ticker is kept as the row identifier).
 """
 
 import sys
-import time
 from datetime import date, timedelta
 from pathlib import Path
 
@@ -16,18 +15,8 @@ import requests
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from src.crispdm.sec_client import SEC_SESSION
 from src.crispdm.xbrl_tags import DIVIDEND_TAGS as _REGISTRY_DIVIDEND_TAGS
-
-SEC_USER_AGENT = "andylopes1@gmail.com"
-
-session = requests.Session()
-session.headers.update(
-    {
-        "User-Agent": SEC_USER_AGENT,
-        "Accept-Encoding": "gzip, deflate",
-        "Host": "www.sec.gov",
-    }
-)
 
 # Dividend-related SEC XBRL tags (canonical set in src.crispdm.xbrl_tags).
 # Some tags may not exist for every company.
@@ -45,13 +34,8 @@ OUTPUT_COLUMNS = [
 
 
 def sec_get(url):
-    """GET JSON from SEC with basic retry handling."""
-    response = session.get(url, timeout=30)
-
-    if response.status_code == 429:
-        time.sleep(5)
-        response = session.get(url, timeout=30)
-
+    """GET JSON from SEC with exponential backoff and throttling."""
+    response = SEC_SESSION.get(url, timeout=30)
     response.raise_for_status()
     return response.json()
 
@@ -249,9 +233,6 @@ def build_dividend_dataset(tickers=None, max_companies=None):
         print(f"Processing {row.ticker} - CIK {row.cik}")
 
         results.append(analyze_ticker(cik=row.cik, ticker=row.ticker))
-
-        # Be polite to SEC servers.
-        time.sleep(0.2)
 
     return pd.DataFrame(results, columns=OUTPUT_COLUMNS)
 

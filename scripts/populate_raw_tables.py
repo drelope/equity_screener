@@ -31,6 +31,7 @@ import json
 import os
 import sys
 import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 
 # Allow direct execution from the repository root as well as `python -m`.
@@ -39,17 +40,24 @@ if __package__ in (None, ""):
 
 from sqlalchemy import text
 
+from scripts.populate_companyfacts import (
+    stored_facts_retrieved_at,
+    upsert_companyfacts,
+)
 from scripts.populate_dividend_data import fetch_ticker_profile
 from src.crispdm.db import engine
 from src.crispdm.sec_client import (
+    build_companyfacts_concept_groups,
     classify_companyfacts,
+    configured_dividend_lookback,
     extract_preferred_terms_from_companyfacts,
     extract_security_titles,
     get_company_tickers,
-    get_companyfacts_concepts,
+    get_companyfacts,
     match_security_title,
     security_type_for_instrument,
 )
+from src.crispdm.stage import stage_exit_code
 
 
 def _offline_enabled():
@@ -139,7 +147,7 @@ def populate_company_tickers(limit=None):
                 entries = entries[:limit]
             _refresh_company_tickers(conn, entries)
         print(f"  Populated {len(entries)} raw company ticker records (offline).")
-        return
+        return len(entries)
 
     tickers_data = get_company_tickers()
     entries = list(tickers_data.values())
@@ -150,6 +158,7 @@ def populate_company_tickers(limit=None):
         _refresh_company_tickers(conn, entries)
 
     print(f"  Populated {len(entries)} raw company ticker records.")
+    return len(entries)
 
 
 def _load_raw_tickers(conn, limit=None):
@@ -219,19 +228,75 @@ def _persist_classification_cache(conn, entries):
         )
 
 
-def _identify_dividend_payers(limit=None):
+def _stored_companyfacts(conn, cik):
+    """Read one issuer's companyfacts payload from the raw cache.
+
+    ``_identify_dividend_payers`` persists every payload as it is fetched, so
+    later phases (preferred-term extraction, security titles) re-read only the
+    issuers they need instead of retaining all ~10k full companyfacts JSON
+    documents in memory (that path OOM-killed the stage on this host).
+    """
+    return conn.execute(
+        text(
+            "SELECT raw_payload FROM raw.companyfacts WHERE cik = :cik AND content_hash IS NOT NULL"
+        ),
+        {"cik": cik},
+    ).scalar()
+
+
+# A CIK SEC has no companyfacts for, or whose payload cannot be read. Classified
+# as a non-payer rather than an error, so one missing issuer cannot fail a scan.
+# How stale a stored companyfacts payload may be and still be reused by this
+# scan instead of re-downloaded. Matches the nightly's --companyfacts-refresh-after-days
+# default so the two stages agree on when a payload is due; a nightly then fetches
+# each CIK once, not twice.
+DEFAULT_REUSE_MAX_AGE_DAYS = 5
+
+_UNAVAILABLE = {
+    "security_types": ["other"],
+    "dividend": False,
+    "security_titles": [],
+    "security_facts": [],
+    "dividend_facts": [],
+    "status": "unavailable",
+}
+
+
+def _identify_dividend_payers(limit=None, reuse_max_age_days=None):
     """Identify dividend-paying tickers among raw.company_ticker via SEC Company Facts.
 
-    SEC Company Facts are fetched once per unique CIK and classified with the
-    same rules used by ``scripts.populate_reference_tables``. Returns one record
-    per dividend payer with the resolved security types and the deterministic
-    security_ids ``scripts.populate_reference_tables`` will generate, so the
-    minimal reference.securities rows created here reconcile cleanly.
+    SEC Company Facts are fetched once per unique CIK, classified with the
+    same rules used by ``scripts.populate_reference_tables``, and persisted to
+    ``raw.companyfacts`` immediately so the payload is never downloaded twice
+    (stage 4 reuses it) and so it is not held in memory for the whole scan.
+    Returns one record per dividend payer with the resolved security types and
+    the deterministic security_ids ``scripts.populate_reference_tables`` will
+    generate, so the minimal reference.securities rows created here reconcile
+    cleanly.
+
+    ``reuse_max_age_days`` bounds how stale a *stored* payload may be and still be
+    classified from without re-downloading it. This scan reads all ~10,400
+    company tickers on every run, and ``upsert_companyfacts`` re-stamps
+    ``retrieved_at = now()`` on every call, so a nightly that fetched each CIK
+    unconditionally re-downloaded the entire table every night and reset the
+    freshness clock that stages 4a-4c exist to maintain. Reusing recent payloads
+    is what the docstring above always claimed ("never downloaded twice") and
+    what the offline path below already did; this parameter extends it to the
+    online path. ``None`` means always reuse whatever is stored, ``0`` forces a
+    re-fetch of everything, and a negative value disables reuse.
     """
     facts_by_cik = {}
-    companyfacts_by_cik = {}
     cache_entries = []
     payers = []
+
+    def _reusable(stored_at, now):
+        """Is the stored payload fresh enough to classify without re-fetching?"""
+        if reuse_max_age_days is None or reuse_max_age_days < 0:
+            return False
+        if stored_at is None:
+            return False
+        age = (now - stored_at).total_seconds() / 86400.0
+        return age <= reuse_max_age_days
 
     with engine.connect() as conn:
         titles_by_cik = {}
@@ -245,10 +310,17 @@ def _identify_dividend_payers(limit=None):
                 title_row["title"]
             )
 
+        stored = stored_facts_retrieved_at(conn)
+        now = datetime.now(timezone.utc)
+        fetched = reused = 0
         for row in _load_raw_tickers(conn, limit):
             cik = row["cik"]
             if cik not in facts_by_cik:
-                if OFFLINE_ON:
+                stored_at = stored.get(cik)
+                if _reusable(stored_at, now):
+                    # Recent enough to classify from what we already hold: no SEC
+                    # request, and crucially no re-stamp of retrieved_at, so this
+                    # stage stops resetting the refresh clock stages 4a-4c own.
                     payload = conn.execute(
                         text(
                             "SELECT raw_payload FROM raw.companyfacts "
@@ -258,7 +330,27 @@ def _identify_dividend_payers(limit=None):
                     ).scalar()
                     if payload is not None:
                         try:
-                            facts_by_cik[cik] = classify_companyfacts(payload)
+                            facts_by_cik[cik] = classify_companyfacts(
+                                payload, lookback_days=configured_dividend_lookback()
+                            )
+                            reused += 1
+                        except Exception as exc:
+                            print(f"  Stored Company Facts unreadable for CIK {cik}: {exc}")
+                    if cik not in facts_by_cik:
+                        facts_by_cik[cik] = _UNAVAILABLE
+                elif OFFLINE_ON:
+                    payload = conn.execute(
+                        text(
+                            "SELECT raw_payload FROM raw.companyfacts "
+                            "WHERE cik = :cik AND content_hash IS NOT NULL"
+                        ),
+                        {"cik": cik},
+                    ).scalar()
+                    if payload is not None:
+                        try:
+                            facts_by_cik[cik] = classify_companyfacts(
+                                payload, lookback_days=configured_dividend_lookback()
+                            )
                         except Exception as exc:
                             print(f"  SEC Company Facts unreadable offline for CIK {cik}: {exc}")
                             facts_by_cik[cik] = {
@@ -270,30 +362,40 @@ def _identify_dividend_payers(limit=None):
                                 "status": "unavailable",
                             }
                     else:
-                        facts_by_cik[cik] = {
-                            "security_types": ["other"],
-                            "dividend": False,
-                            "security_titles": [],
-                            "security_facts": [],
-                            "dividend_facts": [],
-                            "status": "unavailable",
-                        }
+                        facts_by_cik[cik] = _UNAVAILABLE
                 else:
                     try:
-                        concepts = get_companyfacts_concepts(cik)
-                        companyfacts_by_cik[cik] = concepts
-                        facts_by_cik[cik] = classify_companyfacts(concepts)
+                        facts = get_companyfacts(cik)
+                        company_name = facts.get("entityName") if isinstance(facts, dict) else None
+                        grouped = build_companyfacts_concept_groups(facts)
+                        envelope = {
+                            "cik": cik,
+                            "company": company_name,
+                            **grouped,
+                            "full_facts": facts,
+                        }
+                        upsert_companyfacts(
+                            conn,
+                            cik,
+                            {
+                                "cik": cik,
+                                "company": company_name,
+                                "full_facts": facts,
+                                "concept_groups": grouped,
+                            },
+                        )
+                        facts_by_cik[cik] = classify_companyfacts(
+                            envelope, lookback_days=configured_dividend_lookback()
+                        )
+                        fetched += 1
                     except Exception as exc:
                         print(f"  SEC Company Facts unavailable for CIK {cik}: {exc}")
-                        companyfacts_by_cik[cik] = None
-                        facts_by_cik[cik] = {
-                            "security_types": ["other"],
-                            "dividend": False,
-                            "security_titles": [],
-                            "security_facts": [],
-                            "dividend_facts": [],
-                            "status": "unavailable",
-                        }
+                        facts_by_cik[cik] = _UNAVAILABLE
+                    # Commit per CIK. This scan is the longest stage in the nightly
+                    # and used to hold one transaction open across all ~10,400 of
+                    # them, so a timeout or a suspended host discarded the whole
+                    # run -- and a host that suspends is the expected case here.
+                    conn.commit()
                 cache_entries.append((cik, row["ticker"], row["title"], facts_by_cik[cik]))
 
             classification = facts_by_cik[cik]
@@ -315,17 +417,15 @@ def _identify_dividend_payers(limit=None):
                 )
                 for security_type in security_types
             }
+            stored_payload = None if OFFLINE_ON else _stored_companyfacts(conn, cik)
             payers.append(
                 {
                     "ticker": row["ticker"],
                     "cik": cik,
                     "title": row["title"],
                     "classification": classification,
-                    "companyfacts": companyfacts_by_cik.get(cik),
                     "security_titles": classification.get("security_titles")
-                    or extract_security_titles(companyfacts_by_cik[cik])
-                    if companyfacts_by_cik.get(cik)
-                    else [],
+                    or (extract_security_titles(stored_payload) if stored_payload else []),
                     "security_types": security_types,
                     "security_ids": security_ids,
                 }
@@ -334,6 +434,10 @@ def _identify_dividend_payers(limit=None):
         _persist_classification_cache(conn, cache_entries)
         conn.commit()
 
+    print(
+        f"  Companyfacts payloads: {fetched} fetched, {reused} reused from storage.",
+        flush=True,
+    )
     return payers
 
 
@@ -372,7 +476,7 @@ def _upsert_minimal_securities(conn, payer):
         )
 
 
-def populate_ticker_profiles(limit=None):
+def populate_ticker_profiles(limit=None, reuse_max_age_days=DEFAULT_REUSE_MAX_AGE_DAYS):
     """Identify dividend payers in raw.company_ticker and populate raw.ticker_profile.
 
     Fetches a Ticker Profile Summary (via Yahoo Finance / OpenBB) for every
@@ -381,11 +485,17 @@ def populate_ticker_profiles(limit=None):
     reconciles those rows with full issuer/classification data.
     """
     print("Identifying dividend-paying tickers in raw.company_ticker...")
-    payers = _identify_dividend_payers(limit)
+    payers = _identify_dividend_payers(limit, reuse_max_age_days=reuse_max_age_days)
     print(f"  Identified {len(payers)} dividend-paying tickers.")
 
     inserted = errors = 0
-    with engine.begin() as conn:
+    # Commit per payer rather than once at the end. This loop does network I/O for
+    # every payer and takes well over 40 minutes, so a single transaction meant a
+    # timeout, crash, or host suspend discarded the entire run: the stage was
+    # neither resumable nor observable, and the MAX(retrieved_at) that
+    # raw.ticker_profile's freshness check reads could not move until it finished.
+    # populate_companyfacts commits per CIK for the same reason.
+    with engine.connect() as conn:
         for payer in payers:
             try:
                 if OFFLINE_ON:
@@ -417,25 +527,25 @@ def populate_ticker_profiles(limit=None):
                         else None,
                     )
                 sec_terms = {"coupon_rate": None, "liquidation_preference": None}
-                companyfacts = payer["companyfacts"]
-                if OFFLINE_ON:
-                    # Re-fetch just this payer's payload: keep memory bounded.
-                    companyfacts = conn.execute(
-                        text(
-                            "SELECT raw_payload FROM raw.companyfacts "
-                            "WHERE cik = :cik AND content_hash IS NOT NULL"
-                        ),
-                        {"cik": payer["cik"]},
-                    ).scalar()
+                # Read this one issuer's payload from the raw cache instead of
+                # carrying it through the payers list: holding every companyfacts
+                # JSON for the whole scan is what OOM-killed the stage on this host.
+                companyfacts = _stored_companyfacts(conn, payer["cik"])
                 if companyfacts:
                     try:
                         sec_terms = extract_preferred_terms_from_companyfacts(companyfacts)
                     except Exception as exc:
                         print(f"  Error extracting SEC XBRL terms for {payer['ticker']}: {exc}")
 
-                # SEC Company Facts XBRL is the authoritative source; only fall
-                # back to the Yahoo/OpenBB or name-parsed value when SEC has none.
-                if sec_terms.get("coupon_rate") is not None:
+                # Coupon precedence is deliberate, not a side effect of stage
+                # order: the per-security name parse (dei:SecurityTitle /
+                # short_name) is the primary source because it is instrument
+                # specific, and SEC XBRL terms are the fallback for issuers
+                # whose title carries no parsable rate. SEC terms are read from
+                # the issuer's companyfacts, so they are only correct for a
+                # single-series issuer; overwriting a good per-security parse
+                # with them mislabels multi-series issuers.
+                if sec_terms.get("coupon_rate") is not None and summary.get("coupon_rate") is None:
                     summary["coupon_rate"] = sec_terms["coupon_rate"]
                 if sec_terms.get("liquidation_preference") is not None:
                     summary["liquidation_preference"] = sec_terms["liquidation_preference"]
@@ -456,7 +566,7 @@ def populate_ticker_profiles(limit=None):
                 row = {"security_id": payer["security_ids"][payer["security_types"][0]], **summary}
                 conn.execute(
                     text("""
-                    INSERT INTO raw.ticker_profile
+                    INSERT INTO raw.ticker_profile AS current_profile
                         (security_id, ticker, provider, sector, industry, security_type,
                          coupon_type, coupon_rate, fixed_period_end, floating_spread,
                          tax_status, call_date, liquidation_preference, raw_payload, retrieved_at)
@@ -466,18 +576,34 @@ def populate_ticker_profiles(limit=None):
                             :liquidation_preference, CAST(:raw_payload AS jsonb), now())
                     ON CONFLICT (security_id) DO UPDATE SET
                         ticker = EXCLUDED.ticker,
-                        provider = EXCLUDED.provider,
-                        sector = EXCLUDED.sector,
-                        industry = EXCLUDED.industry,
-                        security_type = EXCLUDED.security_type,
-                        coupon_type = EXCLUDED.coupon_type,
-                        coupon_rate = EXCLUDED.coupon_rate,
-                        fixed_period_end = EXCLUDED.fixed_period_end,
-                        floating_spread = EXCLUDED.floating_spread,
-                        tax_status = EXCLUDED.tax_status,
-                        call_date = EXCLUDED.call_date,
-                        liquidation_preference = EXCLUDED.liquidation_preference,
-                        raw_payload = EXCLUDED.raw_payload,
+                        provider = CASE
+                            WHEN current_profile.provider = EXCLUDED.provider THEN EXCLUDED.provider
+                            WHEN current_profile.provider IN (
+                                'SEC_XBRL', 'OPENBB_YFINANCE', 'SEC_XBRL+OPENBB_YFINANCE'
+                            ) AND EXCLUDED.provider IN (
+                                'SEC_XBRL', 'OPENBB_YFINANCE', 'SEC_XBRL+OPENBB_YFINANCE'
+                            ) THEN 'SEC_XBRL+OPENBB_YFINANCE'
+                            ELSE EXCLUDED.provider
+                        END,
+                        sector = COALESCE(EXCLUDED.sector, current_profile.sector),
+                        industry = COALESCE(EXCLUDED.industry, current_profile.industry),
+                        security_type = COALESCE(EXCLUDED.security_type, current_profile.security_type),
+                        coupon_type = COALESCE(EXCLUDED.coupon_type, current_profile.coupon_type),
+                        coupon_rate = COALESCE(EXCLUDED.coupon_rate, current_profile.coupon_rate),
+                        fixed_period_end = COALESCE(
+                            EXCLUDED.fixed_period_end, current_profile.fixed_period_end
+                        ),
+                        floating_spread = COALESCE(
+                            EXCLUDED.floating_spread, current_profile.floating_spread
+                        ),
+                        tax_status = COALESCE(EXCLUDED.tax_status, current_profile.tax_status),
+                        call_date = COALESCE(EXCLUDED.call_date, current_profile.call_date),
+                        liquidation_preference = COALESCE(
+                            EXCLUDED.liquidation_preference,
+                            current_profile.liquidation_preference
+                        ),
+                        raw_payload = COALESCE(current_profile.raw_payload, '{}'::jsonb)
+                                     || EXCLUDED.raw_payload,
                         retrieved_at = now()
                 """),
                     row,
@@ -496,8 +622,19 @@ def populate_ticker_profiles(limit=None):
                     row,
                 )
                 inserted += 1
+                conn.commit()
+                if inserted % 250 == 0:
+                    print(
+                        f"  Progress: {inserted}/{len(payers)} payers, errors={errors}",
+                        flush=True,
+                    )
             except Exception as exc:
                 errors += 1
+                # Postgres aborts the entire transaction on a failed statement, so
+                # without this rollback every later payer would fail with
+                # "current transaction is aborted" -- one bad row would take out
+                # the remaining ~5,700 as collateral.
+                conn.rollback()
                 if errors <= 5:
                     print(f"  Error populating profile for {payer['ticker']}: {exc}")
 
@@ -505,7 +642,7 @@ def populate_ticker_profiles(limit=None):
     print(f"  Identified: {len(payers)} dividend payers")
     print(f"  Inserted/refreshed: {inserted}")
     print(f"  Errors: {errors}")
-    return inserted
+    return len(payers), inserted, errors
 
 
 def main():
@@ -519,14 +656,40 @@ def main():
         help="Only populate raw.company_ticker; skip ticker profiles",
     )
 
+    parser.add_argument(
+        "--reuse-max-age-days",
+        type=float,
+        default=DEFAULT_REUSE_MAX_AGE_DAYS,
+        help="Classify from an already-stored companyfacts payload when it is "
+        f"younger than this many days, instead of re-downloading it (default "
+        f"{DEFAULT_REUSE_MAX_AGE_DAYS}). This scan reads every company ticker on "
+        "every run; without reuse it re-downloaded the whole table nightly, "
+        "~10,400 requests, and reset raw.companyfacts.retrieved_at each time, "
+        "hiding whether the refresh stages are actually keeping it current. Use 0 "
+        "to force a re-fetch of everything, or a negative value to disable reuse.",
+    )
+
     args = parser.parse_args()
 
     try:
-        populate_company_tickers(args.limit)
+        tickers = populate_company_tickers(args.limit)
+        # An empty company_ticker snapshot is a total failure, not an empty
+        # universe: reference.securities is built from this table, so returning
+        # success here leaves every downstream stage reading nothing.
+        code = stage_exit_code("populate_raw_tables (company_ticker)", tickers, tickers)
+        if code:
+            return code
         if args.skip_profiles:
             print("\n✓ Raw tables populated successfully! (profiles skipped)")
         else:
-            populate_ticker_profiles(args.limit)
+            payers, inserted, errors = populate_ticker_profiles(
+                args.limit, reuse_max_age_days=args.reuse_max_age_days
+            )
+            code = stage_exit_code(
+                "populate_raw_tables (ticker_profile)", payers, inserted, errors=errors
+            )
+            if code:
+                return code
             print("\n✓ Raw tables populated successfully!")
         return 0
 

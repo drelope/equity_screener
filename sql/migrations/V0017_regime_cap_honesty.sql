@@ -1,0 +1,70 @@
+-- =====================================================================
+-- V0017 regime_cap_honesty
+-- Retract an invariant V0015 asserted that the layer cannot satisfy.
+--
+-- The bug
+-- -------
+-- V0015 added this to model.scores:
+--
+--   CHECK (credit_modifier IS NULL OR score_cap IS NULL
+--          OR composite_score IS NULL
+--          OR composite_score <= score_cap + 0.0001)
+--
+-- Its stated intent was to pin min(composite_score * credit_modifier,
+-- score_cap) so a future writer could not reorder the modifier and the cap.
+--
+-- But the column it checks is not the value the formula produces.
+-- apply_regime_layer leaves `composite_score` untouched when apply_scores is
+-- False, and False is the default -- deliberately, because a uniform modifier
+-- across an unscorable universe reorders nothing while moving every published
+-- score down by 15%. So the layer publishes the PRE-layer composite_score
+-- alongside a score_cap it did not apply.
+--
+-- The two readings of that row then contradict each other:
+--
+--   composite_score = 0.72, score_cap = 0.45   <- the score the model scored
+--                                                 and the ceiling the regime
+--                                                 layer computed but did not
+--                                                 enforce
+--
+-- which this constraint rejects outright. Every YELLOW and RED override row
+-- would have failed to persist. The failure mode is worse than the bug it was
+-- guarding: not a wrong number, but score_rank exiting non-zero with the
+-- override rows missing while the GREEN rows -- the ones where cap == 1.0 and
+-- the constraint is trivially satisfied -- wrote cleanly. The warehouse would
+-- hold a score table containing exactly the companies the credit overlay
+-- penalised, and nothing would say why it was one-sided.
+--
+-- Nothing caught it because score_cap was 0 non-null rows on every stored
+-- score when this was written. The layer has never completed a
+-- score_rank run, so the constraint has never been evaluated against a
+-- capped row. It is a time bomb, not an active fault.
+--
+-- The fix
+-- -------
+-- Drop it. A CHECK cannot express "this cap has not been applied yet"
+-- without a column saying so, and inventing that column to satisfy a
+-- constraint is the wrong direction of travel.
+--
+-- What replaces it
+-- ----------------
+-- Nothing in the database. The ordering guarantee lives where the operations
+-- happen -- final_score() in src/crispdm/regime.py, which applies the
+-- modifier before the cap, covered by tests/test_regime.py. A constraint on a
+-- column that is deliberately allowed to predate the layer is a constraint on
+-- the wrong quantity; it cannot distinguish "capped at 0.45" from "scored 0.72
+-- and the cap was withheld", and those are not the same claim.
+--
+-- What IS enforced instead, in V0016 and earlier and still in force:
+--   chk_scores_score_cap_range -- 0.0 <= score_cap <= 1.0
+--   chk_scores_market_regime / _credit_environment / _cvs_tier -- the closed
+--     vocabularies, which cannot be shadowed because they are labels, not
+--     arithmetic
+--
+-- If the layer is ever switched to apply_scores=True, the invariant becomes
+-- checkable and should be reintroduced then, when composite_score really is
+-- the post-layer number.
+-- =====================================================================
+
+ALTER TABLE model.scores
+  DROP CONSTRAINT IF EXISTS chk_scores_final_score_invariant;

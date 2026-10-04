@@ -9,8 +9,11 @@ or OpenBB calls, so it is runnable offline and idempotent:
 - ``audit.source_lineage`` records where each decision field (security type,
   issuer name, coupon, liquidation preference, dividend flag) came from,
   including the provider and confidence score.
-- ``audit.data_quality`` scores every security on source reliability,
+- ``audit.data_quality`` scores every active security on source reliability,
   completeness, recency, and consistency for the current run date.
+
+Only active securities are audited, so deactivated tickers do not dilute the
+coverage and quality metrics.
 
 Usage:
     python -m scripts.populate_audit
@@ -66,6 +69,7 @@ def source_lineage(conn, as_of):
                    tp.provider AS provider,
                    COALESCE(:reliability, 0.7) AS confidence_score
             FROM raw.ticker_profile tp
+            JOIN reference.securities s ON s.security_id = tp.security_id AND s.active = TRUE
             WHERE tp.security_type IS NOT NULL
 
             UNION ALL
@@ -74,6 +78,7 @@ def source_lineage(conn, as_of):
                    'raw.ticker_profile', 'raw.ticker_profile', NULL::date,
                    tp.retrieved_at, tp.provider, COALESCE(:reliability, 0.7)
             FROM raw.ticker_profile tp
+            JOIN reference.securities s ON s.security_id = tp.security_id AND s.active = TRUE
             WHERE tp.coupon_rate IS NOT NULL
 
             UNION ALL
@@ -83,6 +88,7 @@ def source_lineage(conn, as_of):
                    'raw.ticker_profile', 'raw.ticker_profile', NULL::date,
                    tp.retrieved_at, tp.provider, COALESCE(:reliability, 0.7)
             FROM raw.ticker_profile tp
+            JOIN reference.securities s ON s.security_id = tp.security_id AND s.active = TRUE
             WHERE tp.liquidation_preference IS NOT NULL
 
             UNION ALL
@@ -91,7 +97,7 @@ def source_lineage(conn, as_of):
                    'raw.companyfacts', 'raw.companyfacts', NULL::date,
                    cf.retrieved_at, 'SEC_XBRL', 1.0
             FROM raw.companyfacts cf
-            JOIN reference.securities s ON s.cik = cf.cik
+            JOIN reference.securities s ON s.cik = cf.cik AND s.active = TRUE
             WHERE cf.company_name IS NOT NULL
 
             UNION ALL
@@ -100,6 +106,7 @@ def source_lineage(conn, as_of):
                    'reference.securities', 'reference.securities',
                    s.updated_at::date, s.updated_at, 'SEC_CLASSIFICATION', 0.9
             FROM reference.securities s
+            WHERE s.active = TRUE
         ) x
         WHERE :as_of IS NOT NULL
         ORDER BY security_id, field_name
@@ -171,6 +178,7 @@ def data_quality(conn, as_of):
             LEFT JOIN raw.ticker_profile tp ON tp.security_id = s.security_id
             LEFT JOIN raw.companyfacts cf ON cf.cik = s.cik
         ) q
+        WHERE s.active = TRUE
         GROUP BY s.security_id
         ORDER BY s.security_id
         ON CONFLICT (security_id, as_of_date) DO UPDATE SET

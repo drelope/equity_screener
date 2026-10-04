@@ -13,10 +13,12 @@ class _Capturer:
     def __init__(self):
         self.statement = None
         self.params = None
+        self.statements = []
 
     def execute(self, statement, params=None):
         self.statement = str(statement)
         self.params = params or {}
+        self.statements.append((self.statement, self.params))
         return _RowCount()
 
 
@@ -55,8 +57,22 @@ def test_upsert_preferred_profile_builds_preferred_row():
     assert params["ticker"] == "ACR-PD"
     assert params["provider"] == "SEC_XBRL"
     assert params["security_type"] == "preferred stock"
-    assert params["coupon_rate"] == 8.5
-    assert params["liquidation_preference"] == 25
+    assert params["coupon_rate"] is None
+    assert params["liquidation_preference"] is None
+    assert '"coupon_rate": 8.5' in params["raw_payload"]
+    assert '"liquidation_preference": 25' in params["raw_payload"]
+    assert '"sec_xbrl_scope": "issuer_level_unallocated"' in params["raw_payload"]
+    assert "sector = COALESCE(EXCLUDED.sector, current_profile.sector)" in capturer.statement
+    assert "industry = COALESCE(EXCLUDED.industry, current_profile.industry)" in capturer.statement
+    assert "SEC_XBRL+OPENBB_YFINANCE" in capturer.statement
+    assert (
+        "coupon_rate = COALESCE(EXCLUDED.coupon_rate, current_profile.coupon_rate)"
+        in capturer.statement
+    )
+    assert "current_profile.liquidation_preference" in capturer.statement
+    assert "COALESCE(current_profile.raw_payload, '{}'::jsonb)" in capturer.statement
+    assert len(capturer.statements) == 1
+    assert "UPDATE reference.securities" not in capturer.statement
 
 
 def test_upsert_preferred_profile_falls_back_when_no_facts():
@@ -75,3 +91,4 @@ def test_upsert_preferred_profile_falls_back_when_no_facts():
     assert capturer.params["coupon_rate"] is None
     assert capturer.params["liquidation_preference"] is None
     assert capturer.params["security_type"] == "preferred stock"
+    assert '"sec_xbrl"' not in capturer.params["raw_payload"]

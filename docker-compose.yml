@@ -1,3 +1,12 @@
+# Published ports are bound to 127.0.0.1, not 0.0.0.0. `5432:5432` exposes the
+# warehouse with a default password to every interface the host has, which on a
+# laptop tethered or on a cloud VM is the internet. Put a tunnel in front of
+# 127.0.0.1 or change the bind address explicitly if you meant to expose it.
+#
+# The container still listens on 0.0.0.0 inside itself -- that is what makes the
+# published port reachable and what lets the services talk to each other.
+x-db-url: &db-url "postgresql+psycopg://dividend:${POSTGRES_PASSWORD:-dividend}@postgres:5432/dividend"
+
 services:
   postgres:
     # Pin a specific minor release to an immutable digest for reproducibility.
@@ -9,14 +18,13 @@ services:
       - "shared_preload_libraries=pg_stat_statements"
       - "-c"
       - "pg_stat_statements.max=10000"
-      - "-c"
       - "pg_stat_statements.track=all"
     environment:
       POSTGRES_DB: dividend
       POSTGRES_USER: dividend
-      POSTGRES_PASSWORD: dividend
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-dividend}
     ports:
-      - "5432:5432"
+      - "127.0.0.1:5432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
       - ./sql/schema.sql:/docker-entrypoint-initdb.d/001_schema.sql:ro
@@ -34,7 +42,7 @@ services:
     build: .
     command: ["python", "-m", "scripts.migrate"]
     environment:
-      DATABASE_URL: postgresql+psycopg://dividend:dividend@postgres:5432/dividend
+      DATABASE_URL: *db-url
     depends_on:
       postgres:
         condition: service_healthy
@@ -44,12 +52,29 @@ services:
     build: .
     command: ["streamlit", "run", "app/streamlit_app.py", "--server.address=0.0.0.0", "--server.port=8501"]
     environment:
-      DATABASE_URL: postgresql+psycopg://dividend:dividend@postgres:5432/dividend
+      DATABASE_URL: *db-url
     ports:
-      - "8501:8501"
+      - "127.0.0.1:8501:8501"
+    # Streamlit serves /_stcore/health once the app is up. There is no auth in
+    # front of it, which is the other reason this stays on the loopback.
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8501/_stcore/health', timeout=3)"
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    # service_completed_successfully, not just service_healthy: postgres being
+    # up says nothing about the schema existing. Without this the app and API
+    # race the migration and fail on the first missing table.
     depends_on:
       postgres:
         condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
     restart: unless-stopped
     security_opt:
       - no-new-privileges:true
@@ -58,13 +83,27 @@ services:
     build: .
     command: ["uvicorn", "api.main:app", "--host", "0.0.0.0", "--port", "8000"]
     environment:
-      DATABASE_URL: postgresql+psycopg://dividend:dividend@postgres:5432/dividend
+      DATABASE_URL: *db-url
       API_KEY: ${API_KEY:?Set API_KEY before starting the API}
     ports:
-      - "8000:8000"
+      - "127.0.0.1:8000:8000"
+    # /health is public by design -- it is the unauthenticated liveness probe,
+    # so it must not become an auth bypass by proxying anything.
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3)"
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
     depends_on:
       postgres:
         condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
     restart: unless-stopped
     security_opt:
       - no-new-privileges:true

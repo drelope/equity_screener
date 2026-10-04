@@ -1,0 +1,12 @@
+# Development and CI tooling. Installs the runtime set too, so
+#   pip install -r requirements-dev.txt
+# is the only command needed to run the lint and test gates. The Dockerfile and
+# the runtime image deliberately install requirements.txt alone -- pytest and
+# ruff have no business in a deployed image.
+#
+# Versions are pinned here and nowhere else. CI used to carry its own
+# `pip install ruff==0.15.22`, which is a second place for the same pin to drift.
+-r requirements.txt
+
+pytest==8.4.2
+ruff==0.15.22

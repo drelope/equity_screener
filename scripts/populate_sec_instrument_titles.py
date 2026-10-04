@@ -35,6 +35,7 @@ from src.crispdm.sec_client import (
     filing_instance_url,
     parse_dei_instrument_titles,
 )
+from src.crispdm.stage import stage_exit_code
 
 
 def _offline_enabled():
@@ -92,8 +93,12 @@ def title_row_hash(cik, ticker, title, accession, document_hash):
 
 
 def load_cik_universe(conn, tickers=None, cik=None, limit=None):
-    """Distinct issuer CIKs to ingest, in deterministic order."""
-    clauses = []
+    """Distinct issuer CIKs to ingest, in deterministic order.
+
+    Defaults to the active reference-securities universe so a bare run never
+    downloads filings for deactivated tickers.
+    """
+    clauses = ["s.active = TRUE"]
     params = {}
     if tickers:
         clauses.append("UPPER(s.ticker) = ANY(:tickers)")
@@ -277,7 +282,7 @@ def populate_sec_instrument_titles(
         f"Completed: issuers={processed}, paired_titles={paired}, "
         f"skipped={skipped}, errors={errors}, resume_skipped={resume_skipped}"
     )
-    return processed
+    return processed, paired, skipped, errors
 
 
 def get_submission_payload(conn, cik):
@@ -326,17 +331,22 @@ def main():
         parser.error("--file requires --cik")
 
     try:
-        populate_sec_instrument_titles(
+        processed, paired, skipped, errors = populate_sec_instrument_titles(
             tickers=tickers,
             cik=args.cik,
             limit=args.limit,
             local_file=args.local_file,
             force=args.force,
         )
+        # An issuer whose filing carries no DEI title matching a known symbol is
+        # a legitimate zero, counted as skipped rather than as a failure.
+        code = stage_exit_code(
+            "populate_sec_instrument_titles", processed, paired, skipped=skipped, errors=errors
+        )
     except Exception as exc:
         print(f"dei title ingest failed: {exc}", file=sys.stderr)
         return 1
-    return 0
+    return code
 
 
 if __name__ == "__main__":

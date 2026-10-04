@@ -26,15 +26,31 @@ def _split_statements(sql_text):
     statements = []
     current = []
     in_string = False
+    dollar_quote = None
     index = 0
     while index < len(sql_text):
         char = sql_text[index]
-        if char == "'":
+        if dollar_quote is not None:
+            if sql_text.startswith(dollar_quote, index):
+                current.append(dollar_quote)
+                index += len(dollar_quote) - 1
+                dollar_quote = None
+            else:
+                current.append(char)
+        elif char == "'":
             if in_string and index + 1 < len(sql_text) and sql_text[index + 1] == "'":
                 current.append("''")
                 index += 1
             else:
                 in_string = not in_string
+                current.append(char)
+        elif not in_string and char == "$":
+            match = re.match(r"\$(?:[A-Za-z_][A-Za-z0-9_]*)?\$", sql_text[index:])
+            if match:
+                dollar_quote = match.group(0)
+                current.append(dollar_quote)
+                index += len(dollar_quote) - 1
+            else:
                 current.append(char)
         elif not in_string and sql_text.startswith("--", index):
             newline = sql_text.find("\n", index)
@@ -176,26 +192,23 @@ migrations = [
         UPDATE reference.securities s
         SET coupon_rate = COALESCE(
                         s.coupon_rate,
-                        tp.coupon_rate,
-                        NULLIF(tp.raw_payload #>> '{sec_xbrl,coupon_rate}', '')::numeric
+                tp.coupon_rate
                 ),
                 liquidation_preference = COALESCE(
                         s.liquidation_preference,
-                        tp.liquidation_preference,
-                        NULLIF(tp.raw_payload #>> '{sec_xbrl,liquidation_preference}', '')::numeric
+                tp.liquidation_preference
                 ),
                 call_date = COALESCE(s.call_date, tp.call_date),
                 updated_at = now()
         FROM raw.ticker_profile tp
         WHERE tp.security_id = s.security_id
+            AND tp.provider IS DISTINCT FROM 'SEC_XBRL'
             AND (
                     (s.coupon_rate IS NULL AND (
                             tp.coupon_rate IS NOT NULL
-                            OR tp.raw_payload #>> '{sec_xbrl,coupon_rate}' IS NOT NULL
                     ))
                     OR (s.liquidation_preference IS NULL AND (
                             tp.liquidation_preference IS NOT NULL
-                            OR tp.raw_payload #>> '{sec_xbrl,liquidation_preference}' IS NOT NULL
                     ))
                     OR (s.call_date IS NULL AND tp.call_date IS NOT NULL)
             );

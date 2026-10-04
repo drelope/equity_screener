@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import secrets
 from datetime import date
 from typing import Any
 
@@ -25,7 +26,13 @@ def require_api_key(x_api_key: str | None = Header(default=None, alias="X-API-Ke
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="API key authentication is not configured",
         )
-    if x_api_key != configured_key:
+    # Compare bytes, not str: compare_digest raises TypeError on a non-ASCII
+    # str, and a header is attacker-controlled, so a unicode key would have
+    # turned a 401 into a 500. Encoding sidesteps that and keeps the constant
+    # time, which is the whole reason for not writing `!=`.
+    if not x_api_key or not secrets.compare_digest(
+        x_api_key.encode("utf-8"), configured_key.encode("utf-8")
+    ):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid or missing API key",
@@ -133,7 +140,7 @@ def facts(ticker: str) -> dict[str, Any]:
         stored = read_df(
             """SELECT cf.raw_payload FROM raw.companyfacts cf
                JOIN reference.securities s ON s.cik = cf.cik
-               WHERE upper(s.ticker) = :ticker
+               WHERE upper(s.ticker) = :ticker AND s.active = TRUE
                ORDER BY cf.retrieved_at DESC LIMIT 1""",
             {"ticker": ticker},
         )
@@ -158,14 +165,50 @@ def facts(ticker: str) -> dict[str, Any]:
 
 
 @app.get("/financials/{ticker}", dependencies=[Depends(require_api_key)])
-def financials(ticker: str, limit: int = Query(default=100, ge=1, le=1000)) -> dict[str, Any]:
+def financials(
+    ticker: str,
+    limit: int = Query(default=100, ge=1, le=1000),
+    as_of: str | None = Query(
+        default=None,
+        description=(
+            "Return the figures as they were known on this date (YYYY-MM-DD). "
+            "Omit for the latest reported vintage of each period."
+        ),
+    ),
+) -> dict[str, Any]:
+    """Reported fundamentals, one row per fiscal period.
+
+    The relation is versioned: a period that was restated appears once per
+    filing, so 87.6% of periods carry more than one row. Selecting straight out
+    of it would return the same period repeatedly -- for one issuer a limit of
+    100 covered only 14 distinct periods -- and the limit would silently buy
+    fewer periods than requested.
+
+    Two readings are legitimate, so both are available. By default each period
+    is reported as most recently filed, which is the current truth. ``as_of``
+    reconstructs what was known on a past date, which is the point-in-time
+    reading and must not be reconstructed by the client from the latest values.
+    """
     ticker = _ticker(ticker)
-    frame = read_df(
-        """SELECT f.* FROM fundamentals.periodic_financials f
-           JOIN reference.securities s ON s.security_id = f.security_id
-           WHERE upper(s.ticker) = :ticker ORDER BY f.period_end DESC LIMIT :limit""",
-        {"ticker": ticker, "limit": limit},
-    )
+    if as_of is None:
+        frame = read_df(
+            """SELECT DISTINCT ON (f.period_end) f.*
+               FROM fundamentals.periodic_financials f
+               JOIN reference.securities s ON s.security_id = f.security_id
+               WHERE upper(s.ticker) = :ticker AND s.active = TRUE
+               ORDER BY f.period_end DESC, f.filed DESC LIMIT :limit""",
+            {"ticker": ticker, "limit": limit},
+        )
+    else:
+        frame = read_df(
+            """SELECT DISTINCT ON (f.period_end) f.*
+               FROM fundamentals.periodic_financials f
+               JOIN reference.securities s ON s.security_id = f.security_id
+               WHERE upper(s.ticker) = :ticker AND s.active = TRUE
+                 AND f.filed <= CAST(:as_of AS date)
+               ORDER BY f.period_end DESC, f.filed DESC LIMIT :limit""",
+            {"ticker": ticker, "as_of": as_of, "limit": limit},
+        )
     return {"ticker": ticker, "items": _records(frame)}
 
 

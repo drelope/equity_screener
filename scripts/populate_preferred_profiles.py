@@ -3,10 +3,9 @@ Populate raw.ticker_profile for the preferred dividend universe from local DB da
 
 DB-only: does not call SEC, Yahoo, or OpenBB. The preferred list is the
 active dividend-payer universe in reference.securities (the same gating set
-used by the downstream ETL stages). Where a SEC XBRL companyfacts payload
-already exists in raw.companyfacts, coupon_rate and liquidation_preference
-are extracted from the stored XBRL tags via
-``src.crispdm.sec_client.extract_preferred_terms_from_companyfacts``.
+used by the downstream ETL stages). SEC Company Facts are issuer-level and do
+not identify which preferred series a numeric fact belongs to, so extracted
+terms are retained as evidence but not assigned to an individual security.
 
 Populating this durable handoff is the prerequisite for
 ``python -m scripts.populate_companyfacts --preferred-facts``, which reads
@@ -37,6 +36,7 @@ from src.crispdm.sec_client import (
     PREFERRED_PAR_VALUE_CONCEPTS,
     extract_preferred_terms_from_companyfacts,
 )
+from src.crispdm.stage import stage_exit_code
 
 DEFAULT_PROVIDER = "SEC_XBRL"
 
@@ -125,6 +125,10 @@ def upsert_preferred_profile(conn, candidate):
 
     sec_terms = _extract_sec_terms(candidate.get("raw_payload"))
 
+    raw_payload = {"sec_xbrl_scope": "issuer_level_unallocated"}
+    if any(value is not None for value in sec_terms.values()):
+        raw_payload["sec_xbrl"] = sec_terms
+
     row = {
         "security_id": candidate["security_id"],
         "ticker": candidate["ticker"],
@@ -133,17 +137,17 @@ def upsert_preferred_profile(conn, candidate):
         "industry": None,
         "security_type": series_type,
         "coupon_type": None,
-        "coupon_rate": sec_terms.get("coupon_rate"),
+        "coupon_rate": None,
         "fixed_period_end": None,
         "floating_spread": None,
         "tax_status": None,
         "call_date": None,
-        "liquidation_preference": sec_terms.get("liquidation_preference"),
-        "raw_payload": json.dumps({"sec_xbrl": sec_terms}),
+        "liquidation_preference": None,
+        "raw_payload": json.dumps(raw_payload),
     }
     result = conn.execute(
         text("""
-        INSERT INTO raw.ticker_profile
+        INSERT INTO raw.ticker_profile AS current_profile
             (security_id, ticker, provider, sector, industry, security_type,
              coupon_type, coupon_rate, fixed_period_end, floating_spread,
              tax_status, call_date, liquidation_preference, raw_payload, retrieved_at)
@@ -153,34 +157,38 @@ def upsert_preferred_profile(conn, candidate):
                 :liquidation_preference, CAST(:raw_payload AS jsonb), now())
         ON CONFLICT (security_id) DO UPDATE SET
             ticker = EXCLUDED.ticker,
-            provider = EXCLUDED.provider,
-            sector = EXCLUDED.sector,
-            industry = EXCLUDED.industry,
-            security_type = EXCLUDED.security_type,
-            coupon_type = EXCLUDED.coupon_type,
-            coupon_rate = EXCLUDED.coupon_rate,
-            fixed_period_end = EXCLUDED.fixed_period_end,
-            floating_spread = EXCLUDED.floating_spread,
-            tax_status = EXCLUDED.tax_status,
-            call_date = EXCLUDED.call_date,
-            liquidation_preference = EXCLUDED.liquidation_preference,
-            raw_payload = EXCLUDED.raw_payload,
+            provider = CASE
+                WHEN current_profile.provider = EXCLUDED.provider THEN EXCLUDED.provider
+                WHEN current_profile.provider IN (
+                    'SEC_XBRL', 'OPENBB_YFINANCE', 'SEC_XBRL+OPENBB_YFINANCE'
+                ) AND EXCLUDED.provider IN (
+                    'SEC_XBRL', 'OPENBB_YFINANCE', 'SEC_XBRL+OPENBB_YFINANCE'
+                ) THEN 'SEC_XBRL+OPENBB_YFINANCE'
+                ELSE EXCLUDED.provider
+            END,
+            sector = COALESCE(EXCLUDED.sector, current_profile.sector),
+            industry = COALESCE(EXCLUDED.industry, current_profile.industry),
+            security_type = COALESCE(EXCLUDED.security_type, current_profile.security_type),
+            coupon_type = COALESCE(EXCLUDED.coupon_type, current_profile.coupon_type),
+            coupon_rate = COALESCE(EXCLUDED.coupon_rate, current_profile.coupon_rate),
+            fixed_period_end = COALESCE(
+                EXCLUDED.fixed_period_end, current_profile.fixed_period_end
+            ),
+            floating_spread = COALESCE(
+                EXCLUDED.floating_spread, current_profile.floating_spread
+            ),
+            tax_status = COALESCE(EXCLUDED.tax_status, current_profile.tax_status),
+            call_date = COALESCE(EXCLUDED.call_date, current_profile.call_date),
+            liquidation_preference = COALESCE(
+                EXCLUDED.liquidation_preference,
+                current_profile.liquidation_preference
+            ),
+            raw_payload = COALESCE(current_profile.raw_payload, '{}'::jsonb)
+                         || EXCLUDED.raw_payload,
             retrieved_at = now()
             """),
         row,
     ).rowcount
-    conn.execute(
-        text("""
-        UPDATE reference.securities
-        SET coupon_rate = COALESCE(:coupon_rate, coupon_rate),
-            liquidation_preference = COALESCE(
-                :liquidation_preference, liquidation_preference
-            ),
-            updated_at = now()
-        WHERE security_id = :security_id
-    """),
-        row,
-    )
     return result
 
 
@@ -209,7 +217,7 @@ def populate_preferred_profiles(tickers=None, limit=None):
     print(f"  Missing SEC companyfacts (coupon/liq will be NULL): {len(missing_facts)}")
     if missing_facts:
         print("  Sample missing:", ", ".join(missing_facts[:10]))
-    return inserted
+    return len(candidates), inserted, errors
 
 
 def main():
@@ -225,8 +233,10 @@ def main():
     )
 
     try:
-        populate_preferred_profiles(tickers=tickers, limit=args.limit)
-        return 0
+        candidates, inserted, errors = populate_preferred_profiles(
+            tickers=tickers, limit=args.limit
+        )
+        return stage_exit_code("populate_preferred_profiles", candidates, inserted, errors=errors)
     except Exception as exc:
         print(f"✗ Error populating preferred profiles: {exc}", file=sys.stderr)
         return 1

@@ -54,6 +54,7 @@ from src.crispdm.sec_client import (
     fetch_filing,
     filing_url,
 )
+from src.crispdm.stage import stage_exit_code
 
 
 def _offline_enabled():
@@ -595,7 +596,7 @@ def populate_contract_terms(tickers=None, cik=None, limit=None, force=False, dis
                     print(f"  Error {security['ticker']}: {exc}")
 
     print(f"Completed: processed={processed}, updated={updated}, errors={errors}")
-    return updated
+    return processed, updated, errors
 
 
 def _persist_contract_terms(conn, security_id, terms):
@@ -630,6 +631,17 @@ def _persist_contract_terms(conn, security_id, terms):
             "confidence": terms["confidence"],
         },
     )
+    if terms["liquidation_preference"] is not None:
+        conn.execute(
+            text("""
+            UPDATE reference.securities
+            SET liquidation_preference = :liq,
+                updated_at = now()
+            WHERE security_id = :sid
+              AND security_type = 'preferred stock'
+        """),
+            {"sid": security_id, "liq": terms["liquidation_preference"]},
+        )
 
 
 def main():
@@ -653,17 +665,18 @@ def main():
         else None
     )
     try:
-        populate_contract_terms(
+        processed, updated, errors = populate_contract_terms(
             tickers=tickers,
             cik=args.cik,
             limit=args.max,
             force=args.force,
             discover_only=args.discover,
         )
+        code = stage_exit_code("populate_contract_terms", processed, updated, errors=errors)
     except Exception as exc:
         print(f"contract terms ingest failed: {exc}", file=sys.stderr)
         return 1
-    return 0
+    return code
 
 
 if __name__ == "__main__":

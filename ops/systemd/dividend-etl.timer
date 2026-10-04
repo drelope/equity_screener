@@ -4,8 +4,16 @@ Description=Nightly trigger for dividend-etl.service
 [Timer]
 # 03:00 Eastern Time (DST-aware). systemd resolves this IANA zone against the
 # system tzdata; Persistent=true catches up a missed run after reboot/idle.
+#
+# Under WSL2 the timer only fires while the VM is running: a host asleep or shut
+# down at 03:00 misses the slot, and Persistent=true runs the ETL on the next
+# boot instead. The freshness SLA is therefore bounded by when this machine is
+# awake, not by the clock.
 OnCalendar=*-*-* 03:00:00 America/New_York
 Persistent=true
+# Do not stack runs: if one is still going, wait for it rather than run a
+# concurrent ETL against the same warehouse.
+AccuracySec=1min
 
 [Install]
 WantedBy=timers.target

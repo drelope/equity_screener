@@ -1,8 +1,10 @@
 import hashlib
+import logging
+import os
 import re
-import time
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field
+from datetime import date, timedelta
 from typing import Optional
 
 import requests
@@ -10,8 +12,10 @@ from bs4 import BeautifulSoup
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
+from .http_retry import Throttle, request_with_backoff
 from .xbrl_tags import (
     DIVIDEND_FACT_TERMS,
+    DIVIDEND_RECENCY_DAYS,
     PREFERRED_COUPON_CONCEPTS,
     PREFERRED_LIQUIDATION_CONCEPTS,
     PREFERRED_PAR_VALUE_CONCEPTS,
@@ -19,6 +23,8 @@ from .xbrl_tags import (
     SECURITY_FACT_RULES,
     normalize_security_type,
 )
+
+logger = logging.getLogger(__name__)
 
 try:
     from .config import settings
@@ -46,12 +52,17 @@ class SECDataUnavailableError(requests.exceptions.HTTPError):
         )
 
 
+SEC_MIN_INTERVAL = float(os.environ.get("SEC_MIN_INTERVAL", "0.15"))
+SEC_THROTTLE = Throttle(SEC_MIN_INTERVAL)
+
+
 class _SecSession(requests.Session):
     """SEC session that enforces the fair-access User-Agent before any request."""
 
     def get(self, url, **kwargs):
         settings.require_sec_user_agent()
-        return super().get(url, **kwargs)
+        SEC_THROTTLE.wait()
+        return request_with_backoff(self, "GET", url, **kwargs)
 
 
 SEC_SESSION = _SecSession()
@@ -64,7 +75,7 @@ SEC_SESSION.mount(
             connect=4,
             read=4,
             backoff_factor=1.5,
-            status_forcelist=(429, 500, 502, 503, 504),
+            status_forcelist=(),
             allowed_methods=frozenset({"GET"}),
             raise_on_status=False,
         )
@@ -94,7 +105,6 @@ def get_company_tickers():
         timeout=(10, 30),
     )
     r.raise_for_status()
-    time.sleep(0.2)
     return r.json()
 
 
@@ -155,7 +165,6 @@ def get_submissions(cik):
         timeout=(10, 30),
     )
     r.raise_for_status()
-    time.sleep(0.2)
     return r.json()
 
 
@@ -277,7 +286,6 @@ def get_all_issuers_from_tickers(limit=None):
                     print(f"Fetched {count} issuers...")
         except Exception as e:
             print(f"Skipping CIK {cik} ({ticker}): {e}")
-            time.sleep(0.5)  # Back off on error
 
     return issuers
 
@@ -662,19 +670,21 @@ def classify_instrument(
                 submissions=anchor,
             )
 
-    # Phase 2c: sole / unanimous dei titles (medium confidence).
-    title_types = {classify_security_type(title) for title in titles}
+    # Phase 2c: sole / unanimous dei titles (medium confidence). A unanimous
+    # type may classify the instrument, but multiple titles cannot identify
+    # which series name belongs to this ticker.
+    typed_titles = [(title, classify_security_type(title)) for title in titles]
+    title_types = {title_type for _title, title_type in typed_titles}
     title_types.discard("other")
     decided_title = None
     if len(titles) == 1 and len(title_types) == 1:
         decided_title = titles[0]
     elif len(title_types) == 1:
-        decided_title = next(
-            (title for title in titles if classify_security_type(title) != "other"),
-            None,
-        )
-    if decided_title is not None:
-        decided_type = next(iter(title_types))
+        matching_titles = [title for title, title_type in typed_titles if title_type != "other"]
+        if len(matching_titles) == 1:
+            decided_title = matching_titles[0]
+    decided_type = next(iter(title_types)) if len(title_types) == 1 else None
+    if decided_type is not None:
         if suffix is not None and suffix.security_type != decided_type:
             conflicts.append(f"suffix:{suffix.security_type} vs title:{decided_type}")
         if suffix is not None and decided_type != "common_stock":
@@ -717,10 +727,8 @@ def classify_instrument(
                 "detail": {"position": anchor["position"]},
             }
         )
-        common_title = next(
-            (title for title in titles if classify_security_type(title) != "other"),
-            None,
-        )
+        common_titles = [title for title, title_type in typed_titles if title_type != "other"]
+        common_title = common_titles[0] if len(common_titles) == 1 else None
         return InstrumentClassification(
             security_type="common_stock",
             source="submissions_leading",
@@ -855,7 +863,6 @@ def get_companyfacts(cik):
     if r.status_code == 404:
         raise SECDataUnavailableError(normalized_cik, url, response=r)
     r.raise_for_status()
-    time.sleep(0.2)
     return r.json()
 
 
@@ -875,7 +882,6 @@ def get_companyconcept(cik, taxonomy, concept):
         timeout=(10, 30),
     )
     r.raise_for_status()
-    time.sleep(0.2)
     return r.json()
 
 
@@ -895,6 +901,7 @@ def _companyfacts_taxonomies(payload):
 # ``src.crispdm.xbrl_tags`` (see XBRL_TAGS table in the registry docstring).
 SECURITY_FACT_RULES = SECURITY_FACT_RULES
 DIVIDEND_FACT_TERMS = DIVIDEND_FACT_TERMS
+DIVIDEND_RECENCY_DAYS = DIVIDEND_RECENCY_DAYS
 PREFERRED_COUPON_CONCEPTS = PREFERRED_COUPON_CONCEPTS
 PREFERRED_LIQUIDATION_CONCEPTS = PREFERRED_LIQUIDATION_CONCEPTS
 PREFERRED_PAR_VALUE_CONCEPTS = PREFERRED_PAR_VALUE_CONCEPTS
@@ -1126,37 +1133,62 @@ def match_security_title(titles, security_type, fallback=None):
 
     ``classify_security_type`` infers a class from a title string, so a row of
     type ``preferred stock`` is matched to titles such as ``Series C Preferred
-    Stock`` while a ``common_stock`` row is matched to ``Common Stock``. Falls
-    back to the sole reported title when the issuer has only one, otherwise to
-    ``fallback`` (the legacy company-title value).
+    Stock`` while a ``common_stock`` row is matched to ``Common Stock``. Returns
+    a title only when exactly one candidate matches; otherwise returns
+    ``fallback`` rather than attributing another series title to this security.
     """
     candidates = [title for title in titles if title and title.strip()]
     if not candidates:
         return fallback
-    normalized_type = (security_type or "").lower()
-    if "preferred" in normalized_type:
-        matched = [title for title in candidates if "preferred" in title.lower()]
-    elif "common" in normalized_type or "equity" in normalized_type:
-        matched = [title for title in candidates if "preferred" not in title.lower()]
-    else:
-        matched = candidates
-    if not matched:
-        matched = candidates
-    return matched[0].strip()
+    normalized_type = normalize_security_type(security_type)
+    matched = [title for title in candidates if classify_security_type(title) == normalized_type]
+    if len(matched) == 1:
+        return matched[0].strip()
+    return fallback
 
 
-def classify_companyfacts(companyfacts):
+def classify_companyfacts(companyfacts, *, as_of=None, lookback_days=DIVIDEND_RECENCY_DAYS):
     """Classify an issuer from SEC XBRL tags and positive reported values.
 
-    Returns normalized security types, dividend status, de-registered security
-    titles, and compact audit evidence suitable for storing in
-    ``reference.securities``.
+    A concept only proves a *current* dividend payer when its positive records
+    are recent. ``lookback_days`` (default ``DIVIDEND_RECENCY_DAYS``) bounds the
+    evidence: facts whose period ``end`` falls on or after
+    ``as_of - lookback_days`` are considered live, and anything older is
+    ignored. Pass ``as_of`` to make the cut deterministic in tests and replays;
+    pass ``lookback_days=None`` to disable the bound entirely (any positive
+    fact counts), which is what ``configured_dividend_lookback`` returns when
+    enforcement is switched off.
+
+    Dividend evidence is read from both the ``us-gaap`` and ``ifrs-full``
+    taxonomies: foreign private issuers file IFRS, and their ``DividendsPaid*``
+    concepts would otherwise be missed. Security-type classification stays on
+    ``us-gaap`` only, because the IFRS concept vocabulary is not mapped into
+    ``SECURITY_FACT_RULES``.
+
+    Returns normalized security types, dividend status, the most recent
+    qualifying dividend period end, de-registered security titles, and compact
+    audit evidence suitable for storing in ``reference.securities``.
     """
+    cutoff = (
+        None if lookback_days is None else (as_of or date.today()) - timedelta(days=lookback_days)
+    )
+    cutoff_iso = cutoff.isoformat() if cutoff is not None else None
     payload = companyfacts.get("full_facts", companyfacts)
-    us_gaap = _companyfacts_taxonomies(payload).get("us-gaap", {})
+    taxonomies = _companyfacts_taxonomies(payload)
+    us_gaap = taxonomies.get("us-gaap", {})
+    # Foreign private issuers file IFRS, not us-gaap, and their dividends live
+    # under ifrs-full concepts (DividendsPaidOrdinaryShares, ...). Scanning only
+    # us-gaap made those issuers invisible unless a long-past us-gaap fact
+    # happened to keep them flagged; with the recency bound that stale crutch is
+    # gone, so the live IFRS evidence has to be read directly.
+    dividend_taxonomies = [us_gaap]
+    ifrs = taxonomies.get("ifrs-full")
+    if ifrs:
+        dividend_taxonomies.append(ifrs)
     security_types = set()
     security_facts = []
     dividend_facts = []
+    dividend_last_paid = None
 
     for concept_name, concept in us_gaap.items():
         normalized_name = "".join(
@@ -1171,24 +1203,41 @@ def classify_companyfacts(companyfacts):
             security_types.add(security_type)
             security_facts.append({"tag": concept_name, "security_type": security_type})
 
-        if any(term in normalized_name for term in DIVIDEND_FACT_TERMS):
+    for taxonomy in dividend_taxonomies:
+        for concept_name, concept in taxonomy.items():
+            normalized_name = "".join(
+                character for character in concept_name.lower() if character.isalnum()
+            )
+            if not any(term in normalized_name for term in DIVIDEND_FACT_TERMS):
+                continue
             positive_records = []
             for unit, record in _fact_values(concept):
                 try:
                     is_positive = float(record.get("val", 0)) > 0
                 except (TypeError, ValueError):
                     is_positive = False
-                if is_positive:
-                    positive_records.append(
-                        {
-                            "unit": unit,
-                            "val": record.get("val"),
-                            "end": record.get("end"),
-                            "filed": record.get("filed"),
-                        }
-                    )
+                end = record.get("end")
+                if not is_positive or not end or (cutoff_iso and str(end) < cutoff_iso):
+                    continue
+                positive_records.append(
+                    {
+                        "unit": unit,
+                        "val": record.get("val"),
+                        "end": end,
+                        "filed": record.get("filed"),
+                    }
+                )
             if positive_records:
-                dividend_facts.append({"tag": concept_name, "records": positive_records[-5:]})
+                # XBRL facts arrive in filing/payload order, not chronological
+                # order, so the tail of the raw list was whichever five facts
+                # happened to be listed last -- not the five most recent periods.
+                # Sort by period end so the stored evidence is the latest window
+                # and the audit trail agrees with dividend_last_paid.
+                recent = sorted(positive_records, key=lambda record: str(record["end"]))
+                dividend_facts.append({"tag": concept_name, "records": recent[-5:]})
+                latest = str(recent[-1]["end"])
+                if dividend_last_paid is None or latest > dividend_last_paid:
+                    dividend_last_paid = latest
 
     if "other_equity" in security_types and "other_debt" in security_types:
         security_types.discard("other_equity")
@@ -1200,11 +1249,26 @@ def classify_companyfacts(companyfacts):
     return {
         "security_types": sorted(normalize_security_type(t) for t in security_types),
         "dividend": bool(dividend_facts),
+        "dividend_last_paid": dividend_last_paid,
+        "dividend_lookback_start": cutoff_iso,
         "security_titles": extract_security_titles(companyfacts),
         "security_facts": security_facts,
         "dividend_facts": dividend_facts,
         "status": "available",
     }
+
+
+def configured_dividend_lookback():
+    """Dividend recency window from settings, or ``None`` when not enforced.
+
+    Enforcement is opt-in via ``ENFORCE_DIVIDEND_RECENCY`` so an unattended
+    nightly ETL cannot silently change the dividend universe. Production
+    classification callers pass this to ``classify_companyfacts``; direct
+    callers keep the bounded ``DIVIDEND_RECENCY_DAYS`` default.
+    """
+    if not settings.enforce_dividend_recency:
+        return None
+    return settings.dividend_recency_days
 
 
 def _latest_positive_fact(us_gaap, concept_names):

@@ -1,18 +1,24 @@
+import pytest
+
 from scripts.dry_run_walk_forward import synthetic_labeled_sample
-from scripts.evaluate_walk_forward import make_checkpoint, split_dates
-from src.crispdm.model import walk_forward
+from src.crispdm.model import naive_baseline, walk_forward
 
 
-def test_dry_run_sample_passes_gate_deterministically():
+def test_dry_run_sample_reports_imbalance_aware_metrics():
     df = synthetic_labeled_sample(seed=7)
-    assert len(df) == 72
     assert df["target_sustainable_dividend"].nunique() == 2
 
-    _, metrics, _ = walk_forward(df, min_recall=0.30)
-    dates, cut = split_dates(df["as_of_date"])
-    checkpoint = make_checkpoint("dry-run", 0.30, metrics, dates, cut, len(df))
+    _, metrics, test = walk_forward(df, max_flag_rate=0.10)
+    baseline = naive_baseline(test.target_sustainable_dividend.astype(int))
     assert metrics["recall"] >= 0.30
-    assert checkpoint["gate_passed"] is True
+    # The dry run exists to exercise the plumbing, so assert the imbalance
+    # metrics and the baseline are both produced and are self-consistent.
+    assert 0.0 <= metrics["balanced_accuracy"] <= 1.0
+    assert 0.0 <= metrics["negative_recall"] <= 1.0
+    assert baseline["balanced_accuracy"] == pytest.approx(0.5)
+    # The label embargo must be exercised, not bypassed.
+    assert metrics["embargo"]["rows_dropped_as_leaky"] > 0
+    assert metrics["n_train"] < metrics["embargo"]["rows_before_embargo"]
 
 
 def test_dry_run_sample_is_synthetic_and_self_contained():
@@ -25,4 +31,6 @@ def test_dry_run_sample_is_synthetic_and_self_contained():
         "target_sustainable_dividend",
     }
     assert df["security_id"].str.startswith("SYN-").all()
-    assert df["as_of_date"].nunique() == 6
+    # 540 daily snapshots: enough for the 365-day label embargo to leave a
+    # trainable set once the 70/30 cut is applied.
+    assert df["as_of_date"].nunique() == 540
