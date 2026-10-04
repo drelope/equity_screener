@@ -696,6 +696,82 @@ COMMENT ON COLUMN preferred.security_terms.liquidation_preference IS
 COMMENT ON COLUMN preferred.security_terms.preferred_series IS
   'Series label parsed from dei:SecurityTitle (e.g. "Series C Preferred Stock")';
 
+-- Issuer-level SEC XBRL preferred terms, recovered from the payloads that
+-- scripts.populate_preferred_profiles.py stores in raw.ticker_profile.
+--
+-- SEC Company Facts are filed per *issuer*, not per registered series, so a
+-- coupon rate or liquidation amount read from them describes the whole issuer
+-- and cannot be attributed to one preferred class. That is precisely why the
+-- per-series term columns on clean.ticker_profile are left NULL instead of
+-- being filled from here: copying one issuer-level figure onto every series of
+-- a multi-series issuer would assert a precision the source does not have.
+-- This view makes the evidence visible without that leap.
+--
+-- Read terms_scope and security_count before using a value: when
+-- security_count > 1 the row describes the issuer, not any single security.
+CREATE OR REPLACE VIEW preferred.issuer_terms AS
+SELECT
+    LPAD(BTRIM(s.cik), 10, '0') AS cik,
+    i.issuer_name,
+    MIN((tp.raw_payload #>> '{sec_xbrl,coupon_rate}')::NUMERIC)
+        AS issuer_coupon_rate_pct,
+    MIN((tp.raw_payload #>> '{sec_xbrl,liquidation_preference}')::NUMERIC)
+        AS issuer_liquidation_or_par_value,
+    COUNT(DISTINCT s.security_id) AS security_count,
+    COUNT(DISTINCT tp.raw_payload #>> '{sec_xbrl,coupon_rate}')
+        AS distinct_coupon_values,
+    COUNT(DISTINCT tp.raw_payload #>> '{sec_xbrl,liquidation_preference}')
+        AS distinct_liquidation_values,
+    'issuer_level_unallocated'::TEXT AS terms_scope
+FROM raw.ticker_profile AS tp
+JOIN reference.securities AS s ON s.security_id = tp.security_id
+LEFT JOIN reference.issuers AS i ON i.issuer_id = s.issuer_id
+WHERE NULLIF(BTRIM(s.cik), '') IS NOT NULL
+  AND tp.raw_payload ? 'sec_xbrl'
+GROUP BY LPAD(BTRIM(s.cik), 10, '0'), i.issuer_name;
+
+COMMENT ON VIEW preferred.issuer_terms IS
+  'SEC XBRL preferred terms at ISSUER granularity, extracted per CIK by '
+  'scripts.populate_preferred_profiles.py and stored under '
+  'raw.ticker_profile.raw_payload->sec_xbrl. Not attributable to a single '
+  'preferred series: SEC Company Facts carry no member dimension. Exposed as '
+  'a view so the evidence is auditable without promoting issuer-level figures '
+  'into the per-series columns of clean.ticker_profile, which stay NULL by '
+  'design.';
+COMMENT ON COLUMN preferred.issuer_terms.cik IS
+  'Zero-padded 10-digit issuer CIK the terms were filed under';
+COMMENT ON COLUMN preferred.issuer_terms.issuer_coupon_rate_pct IS
+  'Issuer coupon rate, percent per annum, from the preferred dividend-rate '
+  'XBRL concepts. Issuer-level: describes the issuer, not one series. NULL '
+  'when the issuer never reported the concept. Not validated: observed '
+  'values include implausible rates (up to 90%), so the concept selected for '
+  'an issuer may not be a preferred dividend rate at all. Sanity-check the '
+  'plausibility of any value before use';
+COMMENT ON COLUMN preferred.issuer_terms.issuer_liquidation_or_par_value IS
+  'Deliberately NOT named "liquidation preference", and NOT guaranteed to be a '
+  'per-share amount. extract_preferred_terms_from_companyfacts falls back to '
+  'the par/stated-value concepts when no liquidation-preference concept is '
+  'filed and stores both under one key. Observed values mix at least three '
+  'incomparable things: real per-share liquidation preferences, par values '
+  '(mostly <10, including common-stock par artifacts from issuers with no '
+  'preferred outstanding), and issuer-level AGGREGATE dollar totals across all '
+  'classes (e.g. one 17-series issuer reports 4.35e9, which is not a per-share '
+  'figure). Treat magnitude as meaningless and corroborate against '
+  'preferred.security_terms or preferred.contract_terms, which are per-security, '
+  'before treating anything here as a liquidation preference';
+COMMENT ON COLUMN preferred.issuer_terms.security_count IS
+  'Number of securities sharing this CIK. Greater than one means the row '
+  'describes the issuer rather than any individual instrument';
+COMMENT ON COLUMN preferred.issuer_terms.distinct_coupon_values IS
+  'Distinct coupon values seen across this issuer securities; > 1 would mean '
+  'the per-security extraction disagreed';
+COMMENT ON COLUMN preferred.issuer_terms.distinct_liquidation_values IS
+  'Distinct liquidation/par values seen across this issuer securities; > 1 '
+  'would mean the per-security extraction disagreed';
+COMMENT ON COLUMN preferred.issuer_terms.terms_scope IS
+  'Constant issuer_level_unallocated: marks these values as issuer-scoped '
+  'evidence that must not be joined onto a single preferred series';
+
 -- Narrative contract documents (Certificate of Designation exhibits in 8-Ks,
 -- and prospectus / prospectus supplement filings), fetched by
 -- scripts/populate_contract_terms.py for clause extraction. Stored in raw

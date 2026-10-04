@@ -563,6 +563,7 @@ call_date, liquidation_preference (par), raw_payload (JSONB), retrieved_at
 |---|---|---|
 | `preferred.security_terms` | Preferred-stock legal/economic terms | `security_id` PK, `preferred_series`, `dividend_rate`, `liquidation_preference`, `confidence_score`, `reviewed_by` |
 | `preferred.dividend_snapshot` | Preferred issuers with dividend evidence (built by `scripts.sec_xbrl_dividend_tags`); `active=False` flags issuers whose latest dividend fact falls outside the lookback window | `security_id` PK, `ticker`, `cik`, `preferred_flag`, `pays_dividend`, `active`, `dividend_evidence_tag`, `latest_dividend_period_end/filed/form` |
+| `preferred.issuer_terms` | **View.** SEC XBRL preferred terms at *issuer* granularity, recovered from `raw.ticker_profile.raw_payload->sec_xbrl` where `populate_preferred_profiles` parks them. Exists because Company Facts carry no series dimension, so these values are deliberately **not** promoted into `clean.ticker_profile`'s per-series columns | `cik` (grouping key), `issuer_name`, `issuer_coupon_rate_pct`, `issuer_liquidation_or_par_value`, `security_count`, `distinct_coupon_values`, `distinct_liquidation_values`, `terms_scope` (constant `issuer_level_unallocated`) |
 
 Rows are seeded by the dividend stage's preferred-term gap-fill and by
 `scripts.populate_companyfacts --preferred`. The dividend-stage gap-fill uses
@@ -601,6 +602,7 @@ name. The tag prefixes are `dei` (Document and Entity Information), `us-gaap`
 | `preferred.security_terms.dividend_rate` | `us-gaap:PreferredStockDividendRatePercentage` (seeded from the latest `raw.dividend_data` amount when no XBRL rate was filed) |
 | `raw.ticker_profile.call_date` | parsed from `dei:SecurityTitle` (`...RedemptionPricePerShare` supplies the price, not the date) |
 | `raw.ticker_profile.coupon_type` / `fixed_period_end` / `floating_spread` / `tax_status`, `preferred.security_terms.preferred_series` | parsed from `dei:SecurityTitle` / iXBRL filing language, not standalone us-gaap facts |
+| `clean.ticker_profile.coupon_rate` / `coupon_type` / `fixed_period_end` / `floating_spread` / `tax_status` / `call_date` / `liquidation_preference` | consensus of `raw.ticker_profile`, which is **NULL for almost every row by design**, not by failure. Two independent causes: (1) the name-based parsers match almost nothing — over all 11,659 `reference.securities` names, `coupon_rate` matches 0.3% and `call_date` / `fixed_period_end` / `floating_spread` / `tax_status` match **0%**; (2) the rich SEC XBRL terms are issuer-level and are quarantined in `raw.ticker_profile.raw_payload->sec_xbrl` rather than assigned to a series (see `preferred.issuer_terms`). ~67% of `clean.ticker_profile` is `common_stock`, where these fields are not applicable |
 | `raw.company_taxonomy` | preferred-stock concepts fetched once per CIK via the XBRL Data API `companyconcept` endpoint (`PREFERRED_STOCK_TAXONOMY_CONCEPTS`) |
 
 The tag lists used by each extractor (`DIVIDEND_TAGS`,
