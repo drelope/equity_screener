@@ -57,3 +57,69 @@ This is a schema and operational audit, not a financial validation of every vend
 ## Remediation Status
 
 V0028, V0029, and V0030 are applied and `scripts.migrate --check` is clean. The latest FK audit reports **25 FKs: 24 with full leading indexes, 1 with a valid nullable partial index, and 0 without an index**. The duplicate `idx_periodic_financials_security_filed` index (48 MB, zero recorded scans) was dropped; the identical `periodic_financials_filed_idx` remains (86 MB, 11,023 recorded scans). Remaining work is source-backed review of the 431 lower-ranked classification alternatives, corroborating units for other provider ratios, and plan-guided review of lineage/fact scans.
+
+---
+
+# Universe-Scoped Data Quality Audit
+
+**Audit date:** 2026-10-04 (data quality snapshot), 2026-10-02 (model output)
+**Scope:** Every table carrying a `security_id`, checked for rows attached to securities that are no longer active. Method: read-only catalog queries for table inventory, plus per-`as_of_date` breakdowns.
+
+## Executive Summary
+
+No live universe leak exists. Every dated table has **zero rows for inactive securities at its latest `as_of_date`**, so all published current-state output is correctly scoped to the active universe. The inactive rows that remain are point-in-time history in dated tables, or landing-zone/reference data in undated tables, and are correct to retain.
+
+One genuine coverage gap was found: **394 of 6,012 active dividend payers (6.5%) have no row in the latest `model.features`, `model.scores`, or `model.rankings`** and therefore cannot be scored.
+
+## Inactive-Security Inventory
+
+| Table | Rows | Inactive | Latest `as_of` | Inactive at latest | Assessment |
+|---|---|---|---|---|---|
+| `model.features` | 8,537,438 | 275,613 | 2026-10-02 | **0** | Point-in-time history |
+| `raw.market_data` | 9,274,415 | 275,613 | n/a | n/a | Landing zone |
+| `fundamentals.periodic_financials` | 1,253,679 | 26,181 | `period_end` | n/a | Statement history |
+| `model.scores` / `rankings` / `predictions` | 21,392 each | 958 | 2026-10-02 | **0** | 4 `as_of` dates; inactive only in the 3 older ones |
+| `raw.ticker_profile` / `raw.sec_documents` | 6,382 / 6,377 | 370 / 370 | n/a | n/a | Landing zone |
+| `preferred.security_terms` | 1,288 | 257 | n/a | n/a | Reference enrichment |
+| `preferred.dividend_snapshot` | 907 | 103 | n/a | n/a | Reference enrichment |
+| `clean.ticker_profile` | 5,951 | 0 | n/a | n/a | Clean |
+| `audit.data_quality` | 10,681 | 0 | 2026-10-04 | **0** | Clean |
+| `audit.source_lineage` | 30,768 | 0 | n/a | n/a | Clean |
+| `raw.companyfacts` / `raw.dividend_data` / `preferred.contract_terms` | — | 0 | n/a | n/a | Clean |
+
+Orphan check (rows whose `security_id` is absent from `reference.securities`): **zero in every table**.
+
+`model.features` shows the expected point-in-time signature for correct behaviour: the inactive count rises monotonically from 148 on 2022-10-31 to 321 on 2026-10-01, because each historical date retains the securities that were active when it was captured and have since been deactivated. This is why these rows must not be pruned — doing so would destroy the backtest history. The distinction from `audit.data_quality` is that a quality snapshot describes the *current* universe, whereas a feature row is keyed to the universe as it stood on its `as_of_date`.
+
+## Finding: 394 payers are unscoreable
+
+`model.features` emits a row for a security only when it has an observation inside the feature window. There is no last-observation carry-forward, so a security whose newest print is a few days old is dropped entirely rather than scored on its last known price.
+
+| Bucket | Securities |
+|---|---|
+| Priced on the latest date, scored | 5,618 |
+| Priced 1–7 days earlier, **not** scored | 113 |
+| Priced 7–30 days earlier, **not** scored | 32 |
+| Priced 30–90 days earlier, **not** scored | 9 |
+| Priced same day, **not** scored | 1 |
+| No market data at all | 239 |
+| **Total unscoreable** | **394** |
+
+Market data itself is fresh: `raw.market_data` holds 5,619 rows on 2026-10-02 and ~5,600–6,000 on every recent trading day, and 5,619 of the 5,773 priced payers have a same-day print. The gap is in feature assembly, not ingestion.
+
+Fixing this requires a decision, not a mechanical change: carrying a stale price forward changes model inputs, so it requires rebuilding `model.features` and re-running `score_rank`, and it interacts with the stale-price question that recency enforcement (`ENFORCE_DIVIDEND_RECENCY`, currently `false`) would otherwise answer. Left open pending that decision.
+
+## Fixed during this audit
+
+| Finding | Resolution |
+|---|---|
+| `audit.data_quality.recency` was unclamped, so 5,951 rows scored above 1.0 (max 1.0010) because `as_of` is midnight while rows are retrieved later the same day | Clamped with `LEAST(1.0, GREATEST(0.0, …))` on both branches. `max(recency)` is now 1.0 with zero components outside `[0,1]`. `quality_score` was never affected because its weights sum to 1. |
+| `audit.data_quality` held 78,716 rows over 8 dates; 6,152 belonged to inactive securities and inflated completeness/quality averages over a universe the pipeline no longer processes | V0033 deleted the 7 pre-fix dates (68,035 rows), retaining only the 10,681-row 2026-10-04 snapshot, then regenerated so it carries the clamped values. Those snapshots had a different denominator and were not comparable to the corrected ones. No archive table, by design. |
+
+## Open, not acted on
+
+- **`dividend_last_paid` is NULL for all 6,012 active payers.** The R1 writer exists but the reference stage has not been re-run since it was added. Inert today because no consumer reads the column; populating it requires lifting the hold on that stage.
+- **`preferred.contract_terms` has 2 rows.** Contract-document mining has effectively never run at scale.
+- **`classification_evidence` is NULL for 5 active payers.**
+- **370 inactive securities still carry `dividend = TRUE`.** The accepted consequence of keeping recency enforcement dark: a deactivating security keeps its dividend flag until enforcement is switched on.
+- **Preferred-term structure is sparse.** 1,015 of 1,022 active preferred payers have `preferred.security_terms` rows, but only 366 have a non-NULL `clean.ticker_profile.coupon_rate`. `preferred.issuer_terms` is issuer-level evidence and is deliberately not promoted into per-series clean columns.
