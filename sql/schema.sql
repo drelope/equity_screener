@@ -939,6 +939,24 @@ CREATE TABLE IF NOT EXISTS model.predictions (
 CREATE INDEX IF NOT EXISTS ix_predictions_security_id
   ON model.predictions (security_id);
 
+-- The current prediction for each security and as-of date. Read this instead of
+-- model.predictions directly: that table accumulates a complete set of rows per
+-- run, so several conflicting sets can exist for the same (security_id,
+-- as_of_date) and an unfiltered query returns an arbitrary one. Resolution is
+-- per security rather than per run, because a newer run may cover only part of
+-- an older date (feature carry-forward writes a few rows at earlier dates) and
+-- dropping the remainder would hide securities that still have a current
+-- prediction there.
+--
+-- Superseded runs are deliberately retained in model.predictions as the audit
+-- trail of which model produced which number; pruning them is a retention
+-- decision, taken separately. V0043 defined this per run, which shadowed the
+-- fuller runs beneath a newer partial one; V0044 corrected it.
+CREATE OR REPLACE VIEW model.current_predictions AS
+SELECT DISTINCT ON (p.security_id, p.as_of_date) p.*
+FROM model.predictions p
+ORDER BY p.security_id, p.as_of_date, p.created_at DESC, p.run_id;
+
 CREATE TABLE IF NOT EXISTS model.rankings (
   security_id UUID REFERENCES reference.securities(security_id),
   as_of_date DATE NOT NULL, rank INT, composite_score NUMERIC, probability NUMERIC,
@@ -1027,7 +1045,9 @@ COMMENT ON TABLE fundamentals.periodic_financials IS
 COMMENT ON TABLE model.features IS
   'Derived model inputs and target label snapshot for one security and as-of date';
 COMMENT ON TABLE model.predictions IS
-  'Model output for one security and as-of date, grouped by immutable run and version identifiers';
+  'Model output for one security and as-of date, grouped by immutable run and version identifiers. Append-only across runs: re-scoring a date leaves every prior run in place, so query model.current_predictions for the current prediction';
+COMMENT ON VIEW model.current_predictions IS
+  'For each security and as_of_date, the prediction from the most recent run that has a row for it';
 COMMENT ON TABLE model.rankings IS
   'Security ordering and published composite score for one screening date';
 COMMENT ON TABLE model.scores IS

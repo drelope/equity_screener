@@ -314,3 +314,69 @@ measurement rather than a suspicion. None of these block a publish.
    title. The remaining 1,323 need the series parsed out of filings; `security_name`
    is a display label that no `model.*` table stores and no scoring path reads, so
    the 4 changes cannot move a score.
+
+## Prediction retention: resolved with a view, not a deletion
+
+The repair run in the incident section created the ambiguity this section settles.
+`score_rank` was re-run without `--prune-superseded` so the old run's numbers
+survived the recovery, which is the right call for an incident and the wrong steady
+state: `model.predictions` is append-only across runs, so the latest date now holds
+**two** complete sets, one per run, and nothing but `created_at` separates them.
+
+It is not a cosmetic overlap:
+
+- 9 runs, 27,636 prediction rows in total.
+- `2026-10-02` holds 2 runs × 5,618 securities = 11,236 rows.
+- Of the 5,618 securities present in both, **5,395 disagree on probability**. The
+  5,395 that differ are exactly the 5,395 with a non-NULL composite: every scored
+  security has two different published predictions.
+- Earlier dates carry up to 7 runs each, for the same reason — a scoring-policy
+  change forces every date to be recomputed.
+
+An unfiltered query therefore returns an arbitrary run, which is what
+`model.predictions`' own docstring warns about and what an incident of this class
+makes expensive to guess at.
+
+**Decision: add `model.current_predictions`; delete nothing.** Every superseded run
+is the record of which model produced which number on which date, and the incident
+above is a demonstration of how hard those numbers are to reproduce from the inputs
+alone. Retention is now a policy question that can be answered later without
+recovering anything, because the ambiguity that made deletion tempting is gone.
+
+The view resolves per `(security_id, as_of_date)` — the most recent run that has a
+row for that pair. Two migrations, because the first attempt was wrong in a way
+worth recording:
+
+- **V0043** resolved per *run*: newest `run_id` per `as_of_date`, all its rows.
+  This passes any check that only looks at the latest date, where the newest run
+  happens to be the widest. It is wrong at older dates, and visibly so. Feature
+  carry-forward means each run writes a handful of rows at earlier `as_of_date`s, so
+  the newest run shadowed the run beneath it: the view reported **20 rows** for
+  `2026-10-01`, where 5,430 predictions exist. A consumer would have concluded most
+  securities have no prediction on that date.
+- **V0044** resolves per *security*, so a security the newest run did not touch
+  keeps its newest available prediction instead of vanishing. Per-date row counts
+  then equal `model.scores` for the same date on all 6 dates (5,430 / 4,909 /
+  5,445 for `10-01` / `09-30` / `09-29`).
+
+`tests/test_current_predictions_view.py` pins the per-security resolution against a
+regression to the per-run form; reverting the view in place fails 2 of its 7 tests
+with the shadowing condition named. It also asserts the view never omits coverage
+that some single run had, and that `model.predictions` still holds runs the view
+does not — so the audit trail cannot be quietly bought with a deletion.
+
+## Gap found while verifying: `--check` cannot see schema drift
+
+While mutation-testing the view above, `migrate --check` reported *"schema is up to
+date; no pending migrations"* against a database whose view I had just replaced with
+the broken definition. `scripts/migrate` compares only the `schema_migrations`
+ledger, so it cannot detect an object that was altered or dropped out of band — and
+it will not re-apply a migration to repair it. The view had to be restored by
+executing V0044's DDL directly.
+
+This is the second time in this audit that the ledger and reality diverged (the first
+was the destroyed score rows, which no schema check would have caught either). A
+drift check that compares `pg_views`/`information_schema` against `schema.sql` would
+close the mechanical half of this. Not implemented: it needs a decision on whether
+`schema.sql` or the migrations are the source of truth when they disagree.
+
