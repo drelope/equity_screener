@@ -609,6 +609,7 @@ CREATE TABLE IF NOT EXISTS raw.company_classification (
   security_facts JSONB NOT NULL DEFAULT '[]'::jsonb,
   dividend_facts JSONB NOT NULL DEFAULT '[]'::jsonb,
   dividend BOOLEAN NOT NULL DEFAULT FALSE,
+  dividend_last_paid DATE,
   status VARCHAR(32) NOT NULL DEFAULT 'unavailable',
   content_hash VARCHAR(64),
   retrieved_at TIMESTAMPTZ NOT NULL DEFAULT now()

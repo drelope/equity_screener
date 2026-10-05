@@ -7,6 +7,7 @@ import streamlit as st
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from src.crispdm.db import read_df
+from src.crispdm.feature_window import carry_forward_days, dashboard_features_sql
 
 st.set_page_config(page_title="Dividend Equity CRISP-DM", layout="wide")
 st.title("Dividend Equity Decision System")
@@ -14,18 +15,13 @@ st.caption(
     "Income 25% | Sustainability 20% | Legal/Economic Rights 25% | Appreciation 15% | Risk 10% | Valuation 5%"
 )
 
-df = read_df("""
-SELECT s.ticker,s.security_type,f.as_of_date,f.current_price,f.dividend_yield,
-       f.dividend_growth,f.fcf_payout,f.dividend_coverage,
-       f.debt_to_ebitda,f.interest_coverage,
-       f.volatility_252d,sc.composite_score,sc.score_coverage
-FROM model.features f
-JOIN reference.securities s ON s.security_id=f.security_id
-LEFT JOIN model.scores sc ON sc.security_id=f.security_id AND sc.as_of_date=f.as_of_date
-WHERE f.as_of_date=(SELECT MAX(as_of_date) FROM model.features)
-  AND s.active = TRUE
-ORDER BY sc.composite_score DESC NULLS LAST
-""")
+df = read_df(
+    dashboard_features_sql(
+        "f.current_price,f.dividend_yield,f.dividend_growth,f.fcf_payout,"
+        "f.dividend_coverage,f.debt_to_ebitda,f.interest_coverage,f.volatility_252d"
+    ),
+    params={"carry_days": carry_forward_days()},
+)
 if df.empty:
     st.warning("No data. Run ETL, feature engineering, and scoring first.")
     st.stop()

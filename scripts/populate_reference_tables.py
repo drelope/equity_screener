@@ -547,7 +547,7 @@ def populate_securities(limit=None, repopulate=False):
         cache_rows = conn.execute(
             text("""
             SELECT cik, security_types, security_titles, security_facts,
-                   dividend_facts, dividend, status
+                   dividend_facts, dividend, dividend_last_paid, status
             FROM raw.company_classification
             WHERE content_hash IS NOT NULL
         """)
@@ -559,6 +559,7 @@ def populate_securities(limit=None, repopulate=False):
                 "dividend": row["dividend"],
                 "security_facts": row["security_facts"],
                 "dividend_facts": row["dividend_facts"],
+                "dividend_last_paid": row["dividend_last_paid"],
                 "status": row["status"],
             }
 

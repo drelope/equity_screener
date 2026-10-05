@@ -31,6 +31,15 @@ class Settings(BaseSettings):
     #: features were structurally empty and the run could not be evaluated.
     #: 2019-01-01 leaves roughly five years of embargoed training history.
     price_lookback_start: date = date(2019, 1, 1)
+    #: How far back a security's latest feature row may be and still be read on
+    #: the current run. model.features holds one row per real observation date, so
+    #: a security that did not trade on the run date has no row for it and used to
+    #: drop out of the composite entirely: 155 active dividend payers had a print
+    #: but no 2026-10-02 feature row, and this window makes 114 of them readable.
+    #: It does not make them scoreable -- all 114 fall below MIN_PRESENT_WEIGHT --
+    #: so expect this to widen the read window without moving any score. Set to 0
+    #: for the strict common-date behaviour.
+    feature_carry_forward_days: int = 7
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
     def require_sec_user_agent(self) -> None:

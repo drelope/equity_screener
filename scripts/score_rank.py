@@ -5,6 +5,7 @@ import pandas as pd
 from sqlalchemy import text
 
 from src.crispdm.db import engine, read_df
+from src.crispdm.feature_window import carry_forward_days, scoring_features_sql
 from src.crispdm.features import db_value
 from src.crispdm.regime import MacroState, determine_market_regime
 from src.crispdm.regime_pipeline import apply_regime_layer, summarize
@@ -52,12 +53,17 @@ def main():
     # for the date just scored, keeping the one just written.
     prune_superseded = "--prune-superseded" in sys.argv
 
-    df = read_df("""
-    SELECT f.*,s.ticker,s.security_type
-    FROM model.features f JOIN reference.securities s ON s.security_id=f.security_id
-    WHERE f.as_of_date=(SELECT MAX(as_of_date) FROM model.features)
-      AND s.active = TRUE
-    """)
+    # Each security's most recent feature row within the carry-forward window,
+    # not one global as_of_date. See src.crispdm/feature_window.py for why.
+    carry_days = carry_forward_days()
+    df = read_df(scoring_features_sql(), params={"carry_days": carry_days})
+    if not df.empty:
+        carried = int((df["as_of_date"] < df["as_of_date"].max()).sum())
+        if carried:
+            print(
+                f"Read {carried} securities from an earlier feature date "
+                f"(tolerance {carry_days}d; latest {df['as_of_date'].max()})."
+            )
     if df.empty:
         # Exit 1, not 0. An empty feature table is the same defect this script's
         # stage guard exists to catch, in the one place that could not see it: the
@@ -239,7 +245,11 @@ def main():
                     "prob": db_value(r.probability),
                 },
             )
-    as_of = x["as_of_date"].iloc[0]
+    # The run is dated by the newest feature observation, not by whichever row
+    # happens to come first: carry-forward means as_of_date is no longer
+    # constant across the frame, so iloc[0] would date the whole run to one
+    # security's (possibly stale) row.
+    as_of = x["as_of_date"].max()
     if prune_superseded:
         with engine.begin() as c:
             deleted = c.execute(
@@ -275,7 +285,7 @@ def main():
     unscorable = x["composite_score"].isna()
     print(
         f"\nScored {int((~unscorable).sum())} of {len(x)} securities at "
-        f"{x['as_of_date'].iloc[0]} ({unscorable.mean():.1%} below the coverage floor)"
+        f"{x['as_of_date'].max()} ({unscorable.mean():.1%} below the coverage floor)"
     )
     if "score_coverage" in x.columns:
         print(

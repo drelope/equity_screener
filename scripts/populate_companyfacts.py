@@ -263,12 +263,12 @@ def upsert_classification(conn, cik, ticker, companyfacts):
         text("""
         INSERT INTO raw.company_classification
             (cik, ticker, company_name, security_types, security_titles,
-             security_facts, dividend_facts, dividend, status, content_hash,
-             retrieved_at)
+             security_facts, dividend_facts, dividend, dividend_last_paid,
+             status, content_hash, retrieved_at)
         VALUES (:cik, :ticker, :company_name, CAST(:security_types AS jsonb),
                 CAST(:security_titles AS jsonb), CAST(:security_facts AS jsonb),
                 CAST(:dividend_facts AS jsonb),
-                :dividend, :status, :content_hash, now())
+                :dividend, :dividend_last_paid, :status, :content_hash, now())
         ON CONFLICT (cik) DO UPDATE SET
             ticker = EXCLUDED.ticker,
             company_name = EXCLUDED.company_name,
@@ -277,6 +277,7 @@ def upsert_classification(conn, cik, ticker, companyfacts):
             security_facts = EXCLUDED.security_facts,
             dividend_facts = EXCLUDED.dividend_facts,
             dividend = EXCLUDED.dividend,
+            dividend_last_paid = EXCLUDED.dividend_last_paid,
             status = EXCLUDED.status,
             content_hash = EXCLUDED.content_hash,
             retrieved_at = now()
@@ -290,6 +291,7 @@ def upsert_classification(conn, cik, ticker, companyfacts):
             "security_facts": json.dumps(classification["security_facts"]),
             "dividend_facts": json.dumps(classification["dividend_facts"]),
             "dividend": classification["dividend"],
+            "dividend_last_paid": classification.get("dividend_last_paid"),
             "status": classification["status"],
             "content_hash": payload_hash(classification["dividend_facts"]),
         },

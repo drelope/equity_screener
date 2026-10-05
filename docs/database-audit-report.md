@@ -4,7 +4,7 @@
 **Database:** `dividend`  
 **Method:** Read-only catalog, constraint, data-quality, and PostgreSQL usage-stat queries. Reproducible queries are in [sql/audit_database.sql](../sql/audit_database.sql).
 
-**Remediation update:** V0028 added the audited FK indexes, V0029 applied dividend recency, and V0030 added corroborated dividend-yield units. One redundant index was removed. Current classification and unit results are listed below.
+**Remediation update:** V0028 added the audited FK indexes, V0029 applied dividend recency, and V0030 added corroborated dividend-yield units. One redundant index was removed. A later pass added V0033 (prune pre-fix audit snapshots), V0034 (inactive dividend-flag cleanup), V0035/V0036 (restore `dividend_last_paid`), and V0037 (index `model.features(as_of_date)`). Current classification and unit results are listed below.
 
 ## Executive Summary
 
@@ -69,7 +69,7 @@ V0028, V0029, and V0030 are applied and `scripts.migrate --check` is clean. The 
 
 No live universe leak exists. Every dated table has **zero rows for inactive securities at its latest `as_of_date`**, so all published current-state output is correctly scoped to the active universe. The inactive rows that remain are point-in-time history in dated tables, or landing-zone/reference data in undated tables, and are correct to retain.
 
-One genuine coverage gap was found: **394 of 6,012 active dividend payers (6.5%) have no row in the latest `model.features`, `model.scores`, or `model.rankings`** and therefore cannot be scored.
+One genuine coverage gap remains: **389 of 6,007 active dividend payers (6.5%) have no row in the latest `model.scores` or `model.rankings`** and therefore cannot be scored. Carry-forward has since been implemented and, as documented below, it closed none of this gap: the securities it made readable are too thin to clear the coverage floor.
 
 ## Inactive-Security Inventory
 
@@ -91,9 +91,9 @@ Orphan check (rows whose `security_id` is absent from `reference.securities`): *
 
 `model.features` shows the expected point-in-time signature for correct behaviour: the inactive count rises monotonically from 148 on 2022-10-31 to 321 on 2026-10-01, because each historical date retains the securities that were active when it was captured and have since been deactivated. This is why these rows must not be pruned — doing so would destroy the backtest history. The distinction from `audit.data_quality` is that a quality snapshot describes the *current* universe, whereas a feature row is keyed to the universe as it stood on its `as_of_date`.
 
-## Finding: 394 payers are unscoreable
+## Finding: unscoreable payers (carry-forward attempted; did not close the gap)
 
-`model.features` emits a row for a security only when it has an observation inside the feature window. There is no last-observation carry-forward, so a security whose newest print is a few days old is dropped entirely rather than scored on its last known price.
+`model.features` emits a row for a security only when it has an observation inside the feature window, and both consumers used to read only `MAX(as_of_date)`, so a security whose newest print was a few days old was dropped entirely rather than scored on its last known price.
 
 | Bucket | Securities |
 |---|---|
@@ -107,7 +107,22 @@ Orphan check (rows whose `security_id` is absent from `reference.securities`): *
 
 Market data itself is fresh: `raw.market_data` holds 5,619 rows on 2026-10-02 and ~5,600–6,000 on every recent trading day, and 5,619 of the 5,773 priced payers have a same-day print. The gap is in feature assembly, not ingestion.
 
-Fixing this requires a decision, not a mechanical change: carrying a stale price forward changes model inputs, so it requires rebuilding `model.features` and re-running `score_rank`, and it interacts with the stale-price question that recency enforcement (`ENFORCE_DIVIDEND_RECENCY`, currently `false`) would otherwise answer. Left open pending that decision.
+### Carry-forward: implemented, and it changed no scores
+
+`feature_carry_forward_days` (default 7) now makes both consumers read each security's most recent feature row inside the window instead of one global date; `src/crispdm/feature_window.py` holds the query so the two cannot drift. Set it to 0 for the old behaviour.
+
+It works as designed and it did not help:
+
+| | Rows read | Composite scores | Unscoreable |
+|---|---|---|---|
+| Strict common date | 5,618 | 5,618 | 394 |
+| Carry-forward, 7d | 5,732 | 5,618 | 389 |
+
+All 114 securities newly in scope produced a **NULL** composite: their present inputs fall below `MIN_PRESENT_WEIGHT` (50% of total weight), so `score_rank` declines to score them. The 5-row improvement is from V0034 deactivating five securities, not from carry-forward.
+
+The conclusion is that this was never a date-plumbing problem. Of the 394, 239 have no `raw.market_data` at all and no window can help them; the other 155 are readable but too thin to clear the coverage floor. Closing the gap means either denser inputs or a lower floor, and lowering `MIN_PRESENT_WEIGHT` changes composite methodology and the rankings, so it is not a mechanical fix. Left open pending that decision.
+
+Separately, `model.scores` is upsert-only and never pruned, so a security whose composite goes NULL keeps its previous same-date row and `predictions` and `scores` then disagree about the run. This run left 0 such rows, but the mechanism is live.
 
 ## Fixed during this audit
 
@@ -115,11 +130,17 @@ Fixing this requires a decision, not a mechanical change: carrying a stale price
 |---|---|
 | `audit.data_quality.recency` was unclamped, so 5,951 rows scored above 1.0 (max 1.0010) because `as_of` is midnight while rows are retrieved later the same day | Clamped with `LEAST(1.0, GREATEST(0.0, …))` on both branches. `max(recency)` is now 1.0 with zero components outside `[0,1]`. `quality_score` was never affected because its weights sum to 1. |
 | `audit.data_quality` held 78,716 rows over 8 dates; 6,152 belonged to inactive securities and inflated completeness/quality averages over a universe the pipeline no longer processes | V0033 deleted the 7 pre-fix dates (68,035 rows), retaining only the 10,681-row 2026-10-04 snapshot, then regenerated so it carries the clamped values. Those snapshots had a different denominator and were not comparable to the corrected ones. No archive table, by design. |
+| 370 inactive securities carried `dividend = TRUE` | V0034 set them to `FALSE`. Five unevidenced `TRUE` duplicates (`BTLN`, `OCAC`, `OCAC-RI`, `OCAC-UN`, `OCAC-WT`) were deactivated instead of re-flagged: four collided with `ux_security_cik_ticker_type_dividend`, and their existing `FALSE` siblings are the valid rows. Active payers 6,012 → 6,007; duplicate active `(cik,ticker)` pairs 66 → 61. |
+| `dividend_last_paid` was NULL for all 6,012 active payers | Root cause was V0035's cache column gap, not the writer: `classify_companyfacts()` returned the key, the cached branch of `populate_securities` dropped it, and with the column never populated a re-run could not recover it. V0035 added `raw.company_classification.dividend_last_paid` and V0036 backfilled it from the already-persisted `dividend_facts` (no network). All 6,007 active payers now carry a value, mirrored into `classification_evidence`. |
+| Every `MAX(as_of_date) FROM model.features` was a full scan of 8.5M rows | V0037 added `idx_features_as_of`. The carry-forward query went from 28s / 42.7M buffer hits (a correlated `MAX`, which the planner de-correlated into a join across every feature row) to 54ms via a per-security `LATERAL … ORDER BY as_of_date DESC LIMIT 1` on `features_pkey`. |
+| The two `preferred.contract_terms` rows looked inconsistent — one had `first_call_date` + a schedule, the other NULL + `[]` | Not an inconsistency, and no change was made. Re-extracting both from the stored document text reproduces every stored field exactly (Series D is callable from 2026-05-21; Series C is redeemable at any time, so it has no date). The apparent mismatch was a real difference between the two series. |
 
 ## Open, not acted on
 
-- **`dividend_last_paid` is NULL for all 6,012 active payers.** The R1 writer exists but the reference stage has not been re-run since it was added. Inert today because no consumer reads the column; populating it requires lifting the hold on that stage.
-- **`preferred.contract_terms` has 2 rows.** Contract-document mining has effectively never run at scale.
-- **`classification_evidence` is NULL for 5 active payers.**
-- **370 inactive securities still carry `dividend = TRUE`.** The accepted consequence of keeping recency enforcement dark: a deactivating security keeps its dividend flag until enforcement is switched on.
+- **`dividend_last_paid` is NULL for all 6,012 active payers.** Resolved by V0035/V0036; see the table above.
+- **`preferred.contract_terms` has 2 rows.** Contract-document mining has effectively never run at scale. Both rows were verified correct rather than normalized, so the coverage gap — not a data defect — is what remains. Separately, `reference.securities.security_name` is the issuer name for preferreds (`ACRES Commercial Realty Corp.` for both `ACR-PC` and `ACR-PD`), so `series_pattern_from_security` has to fall back to the ticker suffix to tell the series apart; naming the series in `security_name` would make per-series scoping reliable.
+- **`classification_evidence` is NULL for 5 payers.** They were the five unevidenced `TRUE` duplicates, now deactivated by V0034, so no active payer lacks evidence. No evidence was fabricated for them.
+- **Five inactive `dividend = TRUE` rows remain.** These are the V0034 exceptions above; the unique key is occupied by their valid `FALSE` siblings, so they cannot be re-flagged without deleting or re-keying the survivors.
+- **Five `dividend_last_paid` values are in the future** (`MTEX` 2108-11-14; `SQFT`, `SQFTP`, `SQFTW`, `UBSI` 2026-12-31). The dividend-concept match is broad enough to admit dividend-payable and forward-dated facts. Left as extracted rather than silently altering the dividend universe; `ENFORCE_DIVIDEND_RECENCY` is `false`, so nothing rejects them.
+- **61 duplicate active `(cik,ticker)` pairs remain**, all `dividends = [true, true]` with differing `security_type`. `populate_reference_tables` would reject them (`validate_securities_reference_fk`), which is one reason a full stage re-run stays unsafe.
 - **Preferred-term structure is sparse.** 1,015 of 1,022 active preferred payers have `preferred.security_terms` rows, but only 366 have a non-NULL `clean.ticker_profile.coupon_rate`. `preferred.issuer_terms` is issuer-level evidence and is deliberately not promoted into per-series clean columns.
