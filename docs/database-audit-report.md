@@ -179,26 +179,85 @@ avoiding throughout.
 
 ## Maintenance backlog (next safe window)
 
-Ordered by risk. None of these block a publish.
+Items 2, 3, 4 and 5 are closed (V0039–V0042). Item 1 is split: the part that was
+safe is done, the part that changes the universe is not, and the reason is now a
+measurement rather than a suspicion. None of these block a publish.
 
-1. **Narrow the dividend-concept matcher** in `sec_client.classify_companyfacts()` so
-   dividend-payable and forward-dated facts stop setting `dividend_last_paid`. This
-   changes the dividend universe, so it needs its own reviewed run — not a fold-in to
-   any other migration. Afterwards, re-extract and set `resolved_at` on the five
-   `audit.quarantined_values` rows.
-2. **Resolve the 61 duplicate active `(cik,ticker)` pairs.** All are
-   `dividends = [true, true]` with differing `security_type`. Whatever merges them must
-   decide which `security_id` survives, and that decision propagates into
-   `preferred.security_terms` and `model.*`, so it wants a migration of its own.
-   `validate_securities_reference_fk` already rejects them, which is what keeps a full
-   stage re-run unsafe until this is settled.
-3. **Clear the five inactive `dividend = TRUE` exceptions.** The unique key is occupied
-   by their valid `FALSE` siblings, so they need deleting or re-keying rather than a
-   flag update.
-4. **Decide `model.scores` pruning semantics.** Upsert-without-delete means a security
-   whose composite goes NULL keeps a stale same-date row. Dormant now; worth a decision
-   before a run where it is not.
-5. **Prefer naming the series in `reference.securities.security_name` for preferreds.**
-   Both `ACR-PC` and `ACR-PD` currently carry the issuer name, so
-   `series_pattern_from_security` has to fall back to the ticker suffix to scope
-   per-series extraction.
+1. **Narrow the dividend-concept matcher** — **partially done, and the remaining
+   part is deliberately deferred.**
+
+   `DIVIDEND_FACT_TERMS = ("dividend", "distributionstoowners")` is matched as a
+   substring, so it admits `DividendsPayableCurrentAndNoncurrent` and
+   `CommonStockDividendsPerShareDeclared`. UBSI shows the concept list alone cannot
+   fix this: `CashDividendsPaidToParentCompanyByConsolidatedSubsidiaries` says
+   "Paid" and still carried period end `2026-12-31`.
+
+   Done (V0040): `classify_companyfacts()` now clamps the running max to the run
+   date, since a dividend cannot have been paid after it. The five impossible
+   dates are corrected and their quarantine rows resolved. The flag did not move,
+   so no score, prediction or ranking changed.
+
+   **Deferred, with the number attached:** dropping the payable/receivable/declared
+   families instead would clear `dividend` for **3,611 of the 8,105 cached CIKs**
+   carrying `dividend_facts` — roughly 45% of the payer population. That is not a
+   fold-in to any migration; it needs the reference-stage rebuild that is
+   currently unsafe. Re-measure and decide then.
+
+2. **Resolve the 61 duplicate active `(cik, ticker)` pairs** — **done (V0039).**
+   They were never arbitrary collisions: each pair is one economic security
+   described twice, because `security_type` was inferred from `security_name` and a
+   re-classification minted a second row when the name or type changed. `ALTI`
+   existed as both `common_stock` "Class A ordinary shares, par value …" and
+   `preferred_stock` "AlTi Global, Inc.", so the same ticker was ingested,
+   feature-built and scored twice. Survivor rule: keep the most recently created
+   row in each group, which is the 2026-09-23 13:08 re-classification batch
+   against older rows. Verified before applying: **none** of the 61 deactivated
+   rows held a `composite_score` at the run date (their twin did, in every case),
+   so the published universe is unchanged — `model.scores` at `2026-10-02` is still
+   5,618 and active payers went 6,007 → 5,946. `validate_securities_reference_fk`
+   should now pass on this population: `validate_securities_reference_fk()` with its
+   default `check_active_identity_duplicates=True` was re-run and returned clean.
+   That check was one of the things making a full reference-stage re-run unsafe, so
+   this removes one of those blockers; the others are unchanged.
+
+3. **Clear the five inactive `dividend = TRUE` exceptions** — **done (V0041).** Two
+   structurally different cases, which is what made this look dangerous. `OCAC`
+   has no same-key sibling, so it is a plain flag flip. `BTLN` and `OCAC-RI/UN/WT`
+   each have an *active* `dividend = FALSE` sibling, so a flag update would violate
+   `ux_security_cik_ticker_type_dividend`, and their `fundamentals.periodic_financials`
+   rows all collide with the survivor's on `(period_end, fiscal_year, fiscal_period)`.
+   Those counterparts were compared column by column: all 105 BTLN rows (3 each for
+   the others) match on every value column, differing only in `security_id` and
+   `retrieved_at` — the same figures re-extracted a day later. So the duplicate
+   rows are deleted, while `clean.ticker_profile`, `raw.ticker_profile` and
+   `audit.source_lineage` are *moved* to the survivor (it owned none, and these are
+   the only rows holding the profile for that `(cik, ticker)`). `audit.data_quality`
+   is deleted instead, because its PK is `(security_id, as_of_date)` and the
+   survivor already has a row for that date. None of the four carried any
+   `model.*` or `preferred.*` row, so no score could move.
+
+4. **`model.scores` pruning semantics** — **decided and implemented.**
+   `model.scores` and `model.rankings` are keyed by `(security_id, as_of_date)` and
+   carry no `run_id`, so the upsert refreshed the rows it wrote and left every
+   other row at that date untouched; a security that fell out of the frame kept its
+   old `composite_score` and still looked scoreable. `model.predictions` never had
+   this problem because it is keyed by `run_id`. `prune_stale_run_rows()` now
+   deletes both tables at the **run date only**, before the upsert and inside the
+   same transaction, so the surviving set is exactly what the run writes and a later
+   failure rolls the prune back. Earlier dates are never touched: they are
+   point-in-time history, and a re-run at the newest feature date must not delete
+   the record of what a security scored on the day it actually scored.
+
+5. **Name the series in `reference.securities.security_name` for preferreds** —
+   **partially done (V0042), and the blocker is now identified.**
+   All 1,327 active preferreds carried an issuer name with no series, so
+   `series_pattern_from_security` could not see one. The obvious source,
+   `preferred.security_terms.preferred_series`, is populated with **issuer names**:
+   916 distinct values, **0** of which are a bare series letter, reading
+   "FEDERAL HOME LOAN MORTGAGE CORP", "Public Storage", "BANK OF AMERICA CORP /DE/".
+   The column name says series and the contents say issuer — that mis-population,
+   not a missing join, is the real blocker. Four preferreds with an SEC instrument
+   title naming a series (`NXDT-PA`, `IMPPP`, `NTRSO`, `ZIONP`) now use the filed
+   title. The remaining 1,323 need the series parsed out of filings; `security_name`
+   is a display label that no `model.*` table stores and no scoring path reads, so
+   the 4 changes cannot move a score.

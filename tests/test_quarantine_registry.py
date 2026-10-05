@@ -125,16 +125,59 @@ class TestRegistryTracksReality:
         All five are published. Excluding the securities to suppress a bad date
         would silently shrink the scored universe, which is the thing this whole
         exercise has been avoiding.
+
+        The registry keeps resolved rows (resolution is recorded by stamping
+        resolved_at, never by deleting), so this deliberately ignores resolved_at:
+        the guarantee is about the *security*, and it has to keep holding after
+        the value it referred to was corrected. Filtering on
+        "still unresolved" here would make the test pass vacuously once V0040
+        resolved all five, which is exactly when the guarantee still matters.
         """
         with self._conn() as conn:
             active = conn.exec_driver_sql(
                 """
                 SELECT count(*) FROM audit.quarantined_values q
                 JOIN reference.securities s ON s.security_id::text = q.row_key
-                WHERE q.resolved_at IS NULL AND s.active
+                WHERE s.active
                 """
             ).scalar()
         assert active > 0, "quarantine deactivated the securities instead"
+
+    def test_resolved_quarantine_rows_still_have_their_security_published(self):
+        """Resolving a quarantined value must not have deactivated its security.
+
+        V0040 clamped the five future dividend_last_paid values to today and
+        stamped resolved_at. The correction was supposed to touch the value
+        only; the securities stay in the scored universe.
+        """
+        with self._conn() as conn:
+            row = (
+                conn.exec_driver_sql(
+                    """
+                SELECT
+                    count(*) FILTER (WHERE q.resolved_at IS NOT NULL) AS resolved,
+                    count(*) FILTER (
+                        WHERE q.resolved_at IS NOT NULL AND s.active
+                    ) AS resolved_still_active,
+                    count(*) FILTER (
+                        WHERE q.resolved_at IS NOT NULL
+                          AND s.dividend_last_paid <= current_date
+                    ) AS resolved_value_now_valid
+                FROM audit.quarantined_values q
+                JOIN reference.securities s ON s.security_id::text = q.row_key
+                WHERE q.column_name = 'dividend_last_paid'
+                """
+                )
+                .mappings()
+                .one()
+            )
+        assert row["resolved"] > 0, "expected at least one resolved quarantine row"
+        assert row["resolved_still_active"] == row["resolved"], (
+            "resolving a quarantined value must not deactivate its security"
+        )
+        assert row["resolved_value_now_valid"] == row["resolved"], (
+            "a resolved row still holds a future dividend_last_paid"
+        )
 
 
 def test_registry_is_idempotent_by_construction():

@@ -29,6 +29,41 @@ def read_macro_state(features):
     return MacroState(None, None, None)
 
 
+def prune_stale_run_rows(c, as_of, scored_sids):
+    """Delete scores/rankings at ``as_of`` that this run does not rewrite.
+
+    Both tables are keyed by (security_id, as_of_date) and carry no run_id, so the
+    upsert that follows refreshes the rows it writes but silently leaves every
+    other row at that date untouched. A security that fell out of the frame --
+    deactivated, or it lost its features -- kept its old composite_score and still
+    looked scoreable downstream.
+
+    Only ``as_of`` is pruned. Earlier dates are point-in-time history: a re-run at
+    the newest feature date must not reach back and delete the record of what a
+    security scored at the date it actually scored.
+
+    Called with the caller's open transaction so the surviving set is exactly what
+    this run writes, and so a failure later in the run rolls the prune back with
+    it rather than leaving the date half-deleted.
+
+    Returns {table: rows_deleted}.
+    """
+    pruned = {}
+    for table in ("scores", "rankings"):
+        pruned[table] = c.execute(
+            text(f"""
+            DELETE FROM model.{table} t
+            WHERE t.as_of_date = :d
+              AND NOT EXISTS (
+                SELECT 1 FROM unnest(CAST(:sids AS uuid[])) k(security_id)
+                WHERE k.security_id = t.security_id
+              )
+            """),
+            {"d": as_of, "sids": [str(s) for s in scored_sids]},
+        ).rowcount
+    return pruned
+
+
 def main():
     """Score the latest feature date into model.scores, predictions and rankings.
 
@@ -133,7 +168,21 @@ def main():
     pred = predictions(x, run_id, threshold=0.5)
     rank = rankings(x, pred)
 
+    # The run is dated by the newest feature observation, not by whichever row
+    # happens to come first: carry-forward means as_of_date is no longer
+    # constant across the frame, so iloc[0] would date the whole run to one
+    # security's (possibly stale) row.
+    as_of = x["as_of_date"].max()
+
+    # Security ids this run writes a score for, at the run date only.
+    scored_sids = x.loc[x["as_of_date"] == as_of, "security_id"].tolist()
+
     with engine.begin() as c:
+        # Drop scores/rankings left at the run date by a previous run for
+        # securities this run does not score.
+        for table, pruned in prune_stale_run_rows(c, as_of, scored_sids).items():
+            if pruned:
+                print(f"Pruned {pruned} stale model.{table} rows at {as_of}")
         for _, r in x.iterrows():
             c.execute(
                 text("""
@@ -249,7 +298,6 @@ def main():
     # happens to come first: carry-forward means as_of_date is no longer
     # constant across the frame, so iloc[0] would date the whole run to one
     # security's (possibly stale) row.
-    as_of = x["as_of_date"].max()
     if prune_superseded:
         with engine.begin() as c:
             deleted = c.execute(

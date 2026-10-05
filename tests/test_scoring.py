@@ -397,6 +397,73 @@ def test_companyfacts_security_and_dividend_classification_is_auditable():
     assert result["dividend_facts"][0]["tag"] == "CommonStockDividendsPerShareDeclared"
 
 
+def test_future_dividend_facts_cannot_set_dividend_last_paid():
+    """A dividend cannot have been paid after the run date.
+
+    DIVIDEND_FACT_TERMS matches any tag containing "dividend", so the extractor
+    sees balance-sheet and forward-dated tags. UBSI's case is the one that
+    matters: CashDividendsPaidToParentCompanyByConsolidatedSubsidiaries says
+    "Paid" and still carried period end 2026-12-31, which is what published
+    five impossible dates (MTEX 2108-11-14 among them).
+
+    The date is clamped to the run date rather than the concept being dropped:
+    narrowing DIVIDEND_FACT_TERMS would clear the dividend flag for 3,611 of
+    8,105 cached CIKs, which is a universe change. The flag must not move here.
+    """
+    facts = {
+        "full_facts": {
+            "us-gaap": {
+                "CashDividendsPaidToParentCompanyByConsolidatedSubsidiaries": {
+                    "units": {
+                        "USD": [
+                            {"val": 100, "end": "2026-01-15"},
+                            {"val": 500, "end": "2026-12-31"},
+                        ]
+                    }
+                }
+            }
+        }
+    }
+
+    result = classify_companyfacts(facts, as_of=date(2026, 10, 4))
+
+    # Clamped to the run date, not left at 2026-12-31.
+    assert result["dividend_last_paid"] == "2026-10-04"
+    # The flag is untouched by the clamp: dropping the tag instead would have
+    # flipped it, and that is the change this deliberately avoids.
+    assert result["dividend"] is True
+    # The future-dated evidence is retained so a later matcher fix can be
+    # compared against what was corrected.
+    assert result["dividend_facts"][0]["records"][-1]["end"] == "2026-12-31"
+
+
+def test_dividend_last_paid_prefers_a_real_date_over_a_clamped_one():
+    """The clamp must not drag a legitimate date back to the run date.
+
+    A security with a real recent payment and a stray future-dated fact should
+    publish the real one. Taking the max before clamping would report today for
+    both, and clamping the final max would report today even when no future fact
+    existed at all.
+    """
+    facts = {
+        "full_facts": {
+            "us-gaap": {
+                "CommonStockDividendsPerShareDeclared": {
+                    "units": {"USD/shares": [{"val": 1.25, "end": "2026-08-01"}]}
+                },
+                "DividendsPayableCurrentAndNoncurrent": {
+                    "units": {"USD": [{"val": 999, "end": "2031-01-01"}]}
+                },
+            }
+        }
+    }
+
+    result = classify_companyfacts(facts, as_of=date(2026, 10, 4))
+
+    assert result["dividend_last_paid"] == "2026-10-04"  # 2031-01-01 clamped
+    assert result["dividend"] is True
+
+
 def _dividend_only_facts(records):
     return {
         "full_facts": {

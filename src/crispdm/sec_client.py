@@ -1173,6 +1173,9 @@ def classify_companyfacts(companyfacts, *, as_of=None, lookback_days=DIVIDEND_RE
         None if lookback_days is None else (as_of or date.today()) - timedelta(days=lookback_days)
     )
     cutoff_iso = cutoff.isoformat() if cutoff is not None else None
+    # Upper bound for a *paid* dividend: the run date. cutoff_iso is the lower
+    # bound (the lookback floor) and must not be used as the ceiling.
+    today_iso = (as_of or date.today()).isoformat()
     payload = companyfacts.get("full_facts", companyfacts)
     taxonomies = _companyfacts_taxonomies(payload)
     us_gaap = taxonomies.get("us-gaap", {})
@@ -1235,7 +1238,24 @@ def classify_companyfacts(companyfacts, *, as_of=None, lookback_days=DIVIDEND_RE
                 # and the audit trail agrees with dividend_last_paid.
                 recent = sorted(positive_records, key=lambda record: str(record["end"]))
                 dividend_facts.append({"tag": concept_name, "records": recent[-5:]})
+                # A dividend cannot have been *paid* after today. The concept
+                # list is deliberately broad (any us-gaap tag mentioning
+                # "dividend"), so it picks up balance-sheet and forward-looking
+                # tags whose period end is in the future --
+                # DividendsPayableCurrentAndNoncurrent, and even
+                # CashDividendsPaidToParentCompanyByConsolidatedSubsidiaries
+                # filed against a future fiscal year end. Taking the raw maximum
+                # published a paid date of 2108-11-14 (MTEX) and 2026-12-31.
+                #
+                # Excluding those tags instead is not a safe local fix: dropping
+                # the payable/receivable/declared families flips the dividend
+                # flag off for 3,611 of 8,105 cached CIKs, which is a universe
+                # change requiring a reference-stage rebuild. Clamping the date
+                # to today fixes the anomaly without moving the flag, and the
+                # future-dated evidence stays in dividend_facts for an auditor.
                 latest = str(recent[-1]["end"])
+                if latest > today_iso:
+                    latest = today_iso
                 if dividend_last_paid is None or latest > dividend_last_paid:
                     dividend_last_paid = latest
 
