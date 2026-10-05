@@ -120,9 +120,11 @@ It works as designed and it did not help:
 
 All 114 securities newly in scope produced a **NULL** composite: their present inputs fall below `MIN_PRESENT_WEIGHT` (50% of total weight), so `score_rank` declines to score them. The 5-row improvement is from V0034 deactivating five securities, not from carry-forward.
 
-The conclusion is that this was never a date-plumbing problem. Of the 394, 239 have no `raw.market_data` at all and no window can help them; the other 155 are readable but too thin to clear the coverage floor. Closing the gap means either denser inputs or a lower floor, and lowering `MIN_PRESENT_WEIGHT` changes composite methodology and the rankings, so it is not a mechanical fix. Left open pending that decision.
+The conclusion is that this was never a date-plumbing problem. Of the 394, 239 have no `raw.market_data` at all and no window can help them; the other 155 are readable but too thin to clear the coverage floor. Closing the gap means either denser inputs or a lower floor, and lowering `MIN_PRESENT_WEIGHT` changes composite methodology and the rankings, so it is not a mechanical fix.
 
-Separately, `model.scores` is upsert-only and never pruned, so a security whose composite goes NULL keeps its previous same-date row and `predictions` and `scores` then disagree about the run. This run left 0 such rows, but the mechanism is live.
+**Decision: leave them unscored.** The floor stays where it is, carry-forward stays at 7 days, and the 389 stay out of the published universe. Carry-forward is retained because it is the correct read semantics and costs nothing, not because it fixed anything.
+
+Separately, `model.scores` is upsert-only and never pruned, so a security whose composite goes NULL keeps its previous same-date row and `predictions` and `scores` then disagree about the run. This run left 0 such rows, so the hazard is dormant; accepted as-is for this publish.
 
 ## Fixed during this audit
 
@@ -141,6 +143,62 @@ Separately, `model.scores` is upsert-only and never pruned, so a security whose 
 - **`preferred.contract_terms` has 2 rows.** Contract-document mining has effectively never run at scale. Both rows were verified correct rather than normalized, so the coverage gap — not a data defect — is what remains. Separately, `reference.securities.security_name` is the issuer name for preferreds (`ACRES Commercial Realty Corp.` for both `ACR-PC` and `ACR-PD`), so `series_pattern_from_security` has to fall back to the ticker suffix to tell the series apart; naming the series in `security_name` would make per-series scoping reliable.
 - **`classification_evidence` is NULL for 5 payers.** They were the five unevidenced `TRUE` duplicates, now deactivated by V0034, so no active payer lacks evidence. No evidence was fabricated for them.
 - **Five inactive `dividend = TRUE` rows remain.** These are the V0034 exceptions above; the unique key is occupied by their valid `FALSE` siblings, so they cannot be re-flagged without deleting or re-keying the survivors.
-- **Five `dividend_last_paid` values are in the future** (`MTEX` 2108-11-14; `SQFT`, `SQFTP`, `SQFTW`, `UBSI` 2026-12-31). The dividend-concept match is broad enough to admit dividend-payable and forward-dated facts. Left as extracted rather than silently altering the dividend universe; `ENFORCE_DIVIDEND_RECENCY` is `false`, so nothing rejects them.
+- **Five `dividend_last_paid` values are in the future** (`MTEX` 2108-11-14; `SQFT`, `SQFTP`, `SQFTW`, `UBSI` 2026-12-31). The dividend-concept match is broad enough to admit dividend-payable and forward-dated facts, and `ENFORCE_DIVIDEND_RECENCY` is `false`, so nothing rejects them. Quarantined in `audit.quarantined_values` by V0038 — left in place, recorded, and unreachable from the composite — rather than silently altering the dividend universe. Matcher fix is backlog item 1.
 - **61 duplicate active `(cik,ticker)` pairs remain**, all `dividends = [true, true]` with differing `security_type`. `populate_reference_tables` would reject them (`validate_securities_reference_fk`), which is one reason a full stage re-run stays unsafe.
 - **Preferred-term structure is sparse.** 1,015 of 1,022 active preferred payers have `preferred.security_terms` rows, but only 366 have a non-NULL `clean.ticker_profile.coupon_rate`. `preferred.issuer_terms` is issuer-level evidence and is deliberately not promoted into per-series clean columns.
+
+## Publish decision (2026-10-04)
+
+Today's scores are published **as-is, with no methodology change**. Everything below was
+reviewed and explicitly accepted rather than deferred by omission:
+
+| Item | Decision | Why it is safe today |
+|---|---|---|
+| 389 unscoreable payers | Leave unscored; do not relax `MIN_PRESENT_WEIGHT` | They fail on input density, not on scoring rules. Lowering the floor would change the composite and reorder the ranking to accommodate thin names. |
+| 5 future `dividend_last_paid` values | Quarantined (V0038), kept in place | Nothing in the composite path reads the column — `build_features()` reads `raw.market_data` and `raw.dividend_data`. All five keep their scores, computed on the same inputs as anyone else. |
+| 61 duplicate active `(cik,ticker)` pairs | Run allowed; cleanup scheduled | Hygiene, not correctness: the latest dated outputs carry zero inactive rows, so there is no cross-state contamination. |
+| `model.scores` upsert-only | Accepted as-is | 0 stale same-date rows on this run, so the hazard is dormant. |
+| Full reference-stage re-run | Not performed | The stage hardcodes `active = TRUE` and would reactivate the 370 rows V0034 just cleaned up. Staying incremental is the lower-risk path. |
+
+Gate evidence for this publish: 480 tests passed, ruff clean, migrations to V0038 with
+none pending, zero inactive securities at the latest score date, and a single
+`model.predictions` run (`6bd1b6c4`).
+
+### How quarantine works here
+
+V0038 adds `audit.quarantined_values`, an append-only registry. The five values stay
+in `reference.securities` — NULLing or deleting them would hide a real matcher defect
+and destroy the evidence needed to verify the fix — and are recorded with the
+predicate that found them (`dividend_last_paid > now()::date`). Resolution is recorded
+by setting `resolved_at`, never by deleting the row. No constraint blocks ingestion: a
+CHECK rejecting future dates would fail the classification write for the whole issuer.
+
+The quarantine covers a *value*, not a *security*. Excluding those five from scoring
+would have shrunk the published universe, which is the failure mode this audit has been
+avoiding throughout.
+
+## Maintenance backlog (next safe window)
+
+Ordered by risk. None of these block a publish.
+
+1. **Narrow the dividend-concept matcher** in `sec_client.classify_companyfacts()` so
+   dividend-payable and forward-dated facts stop setting `dividend_last_paid`. This
+   changes the dividend universe, so it needs its own reviewed run — not a fold-in to
+   any other migration. Afterwards, re-extract and set `resolved_at` on the five
+   `audit.quarantined_values` rows.
+2. **Resolve the 61 duplicate active `(cik,ticker)` pairs.** All are
+   `dividends = [true, true]` with differing `security_type`. Whatever merges them must
+   decide which `security_id` survives, and that decision propagates into
+   `preferred.security_terms` and `model.*`, so it wants a migration of its own.
+   `validate_securities_reference_fk` already rejects them, which is what keeps a full
+   stage re-run unsafe until this is settled.
+3. **Clear the five inactive `dividend = TRUE` exceptions.** The unique key is occupied
+   by their valid `FALSE` siblings, so they need deleting or re-keying rather than a
+   flag update.
+4. **Decide `model.scores` pruning semantics.** Upsert-without-delete means a security
+   whose composite goes NULL keeps a stale same-date row. Dormant now; worth a decision
+   before a run where it is not.
+5. **Prefer naming the series in `reference.securities.security_name` for preferreds.**
+   Both `ACR-PC` and `ACR-PD` currently carry the issuer name, so
+   `series_pattern_from_security` has to fall back to the ticker suffix to scope
+   per-series extraction.

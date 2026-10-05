@@ -981,6 +981,26 @@ CREATE TABLE IF NOT EXISTS audit.nightly_runs (
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+-- V0038. Known-wrong values left in place and excluded from downstream use.
+-- Append-only: a quarantined value is never deleted from its own table, and its
+-- resolution is recorded here by setting resolved_at.
+CREATE TABLE IF NOT EXISTS audit.quarantined_values (
+  quarantine_id BIGSERIAL PRIMARY KEY,
+  table_schema VARCHAR(64) NOT NULL,
+  table_name VARCHAR(64) NOT NULL,
+  column_name VARCHAR(64) NOT NULL,
+  row_key TEXT NOT NULL,                  -- PK of the offending row, as text
+  cik VARCHAR(10),
+  ticker VARCHAR(16),
+  observed_value TEXT NOT NULL,           -- the quarantined value, verbatim
+  reason TEXT NOT NULL,                   -- why it cannot be trusted
+  rule TEXT NOT NULL,                     -- the predicate that detected it
+  detected_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  resolved_at TIMESTAMPTZ,                -- NULL while still quarantined
+  resolution_note TEXT,
+  UNIQUE (table_schema, table_name, column_name, row_key, observed_value)
+);
+
 CREATE TABLE IF NOT EXISTS audit.nightly_checks (
   check_id BIGSERIAL PRIMARY KEY,
   verified_at TIMESTAMPTZ NOT NULL DEFAULT now(),
