@@ -575,8 +575,13 @@ def populate_securities(limit=None, repopulate=False):
             WHERE cik IS NOT NULL AND content_hash IS NOT NULL
               AND cik = ANY(:ciks)
         """)
+        # Only CIKs missing from the classification cache need their payload
+        # parsed. Selecting every CIK buffered the whole payload set client-side
+        # and was OOM-killed at ~14.5 GB on the 2026-10-05 nightly run, so the
+        # rows are also streamed instead of materialised.
         stored_facts = conn.execute(
-            stored_sql, {"ciks": sorted(cached_ciks | batch_ciks)}
+            stored_sql.execution_options(stream_results=True),
+            {"ciks": sorted(batch_ciks - cached_ciks)},
         ).mappings()
         for row in stored_facts:
             if row["cik"] not in cached_ciks:

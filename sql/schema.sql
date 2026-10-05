@@ -1008,6 +1008,7 @@ CREATE TABLE IF NOT EXISTS audit.nightly_runs (
   exit_code INT,
   stages JSONB NOT NULL DEFAULT '{}',       -- {module: ok|failed|skipped}
   status TEXT NOT NULL DEFAULT 'running',   -- running | success | failed
+  row_counts JSONB NOT NULL DEFAULT '{}',   -- V0048 end-of-run snapshot
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 

@@ -82,19 +82,55 @@ def run_module(name, args, skip=False):
     return result.returncode == 0
 
 
+_ROW_COUNT_QUERIES = {
+    "securities_total": "SELECT count(*) FROM reference.securities",
+    "securities_active": "SELECT count(*) FROM reference.securities WHERE active",
+    "dividend_payers_active": (
+        "SELECT count(*) FROM reference.securities WHERE active AND dividend"
+    ),
+    "active_duplicate_cik_ticker": (
+        "SELECT count(*) FROM (SELECT 1 FROM reference.securities WHERE active "
+        "GROUP BY cik, ticker HAVING count(*) > 1) d"
+    ),
+    "features_latest": (
+        "SELECT count(*) FROM model.features "
+        "WHERE as_of_date = (SELECT max(as_of_date) FROM model.features)"
+    ),
+    "predictions_latest": (
+        "SELECT count(*) FROM model.predictions "
+        "WHERE as_of_date = (SELECT max(as_of_date) FROM model.predictions)"
+    ),
+    "preferred_terms": "SELECT count(*) FROM preferred.security_terms",
+}
+
+
+def collect_row_counts():
+    """Snapshot universe sizes for churn tracking; empty dict if unavailable."""
+    counts = {}
+    try:
+        with engine.connect() as c:
+            for key, sql in _ROW_COUNT_QUERIES.items():
+                counts[key] = int(c.execute(text(sql)).scalar() or 0)
+    except Exception as exc:
+        print(f"[run_full_etl] could not collect row counts: {exc}", file=sys.stderr)
+    return counts
+
+
 def record_nightly_run(trigger, started_at, stages, exit_code):
     """Write the run into audit.nightly_runs; never fail the ETL on recording."""
     try:
         status = "success" if exit_code == 0 else "failed"
         finished = datetime.now(timezone.utc)
+        row_counts = collect_row_counts()
         with engine.begin() as c:
             c.execute(
                 text(
                     """
                     INSERT INTO audit.nightly_runs
-                      (run_date, trigger, started_at, finished_at, exit_code, stages, status)
+                      (run_date, trigger, started_at, finished_at, exit_code, stages, status,
+                       row_counts)
                     VALUES (:run_date, :trigger, :started_at, :finished_at,
-                            :exit_code, :stages, :status)
+                            :exit_code, :stages, :status, CAST(:row_counts AS jsonb))
                     """
                 ),
                 {
@@ -105,6 +141,7 @@ def record_nightly_run(trigger, started_at, stages, exit_code):
                     "exit_code": exit_code,
                     "stages": json.dumps(stages, default=str),
                     "status": status,
+                    "row_counts": json.dumps(row_counts),
                 },
             )
     except Exception as exc:

@@ -447,6 +447,24 @@ def _upsert_minimal_securities(conn, payer):
     """Create the reference.securities rows referenced by raw.ticker_profile."""
     classification = payer["classification"]
     for security_type in payer["security_types"]:
+        # security_id is a hash that includes `dividend`. A legacy row whose flag
+        # was flipped in place keeps the old id, so the new key's id collides on
+        # securities_security_id_key. Skip it: the instrument already has a
+        # current row, and re-keying legacy rows touches 13 child FKs.
+        holder = conn.execute(
+            text(
+                "SELECT cik, ticker, security_type, dividend FROM reference.securities "
+                "WHERE security_id = :id"
+            ),
+            {"id": payer["security_ids"][security_type]},
+        ).first()
+        if holder is not None and tuple(holder) != (
+            payer["cik"],
+            payer["ticker"],
+            security_type,
+            classification["dividend"],
+        ):
+            return False
         security_name = match_security_title(
             payer.get("security_titles", []),
             security_type,
@@ -456,11 +474,14 @@ def _upsert_minimal_securities(conn, payer):
             text("""
             INSERT INTO reference.securities
             (ticker, cik, security_id, security_name,
-             security_type, dividend, sec_data_status, currency, active)
+             security_type, dividend, dividend_last_paid, sec_data_status, currency, active)
             VALUES (:ticker, :cik, :id, :security_name,
-                    :type, :dividend, :status, 'USD', TRUE)
+                    :type, :dividend, :dividend_last_paid, :status, 'USD', TRUE)
             ON CONFLICT (cik, ticker, security_type, dividend) DO UPDATE SET
                 security_name = EXCLUDED.security_name,
+                dividend_last_paid = COALESCE(
+                    EXCLUDED.dividend_last_paid, reference.securities.dividend_last_paid
+                ),
                 sec_data_status = EXCLUDED.sec_data_status,
                 currency = EXCLUDED.currency,
                 active = EXCLUDED.active,
@@ -473,9 +494,31 @@ def _upsert_minimal_securities(conn, payer):
                 "security_name": security_name,
                 "type": security_type,
                 "dividend": classification["dividend"],
+                "dividend_last_paid": classification.get("dividend_last_paid"),
                 "status": classification["status"],
             },
         )
+        # The key carries `dividend` and `security_type`, so a flipped flag mints
+        # a new row beside the old one. Retire the older twin now rather than
+        # leaving two active rows until the reference stage reconciles them
+        # (V0047). Deactivated, not deleted: raw.ticker_profile may reference it.
+        conn.execute(
+            text("""
+            UPDATE reference.securities
+            SET active = FALSE, updated_at = now()
+            WHERE cik = :cik AND ticker = :ticker AND active
+              AND security_id <> :id
+              AND (security_type, dividend) IS DISTINCT FROM (:type, :dividend)
+        """),
+            {
+                "ticker": payer["ticker"],
+                "cik": payer["cik"],
+                "id": payer["security_ids"][security_type],
+                "type": security_type,
+                "dividend": classification["dividend"],
+            },
+        )
+    return True
 
 
 def populate_ticker_profiles(limit=None, reuse_max_age_days=DEFAULT_REUSE_MAX_AGE_DAYS):
@@ -490,7 +533,7 @@ def populate_ticker_profiles(limit=None, reuse_max_age_days=DEFAULT_REUSE_MAX_AG
     payers = _identify_dividend_payers(limit, reuse_max_age_days=reuse_max_age_days)
     print(f"  Identified {len(payers)} dividend-paying tickers.")
 
-    inserted = errors = 0
+    inserted = errors = skipped_legacy = 0
     # Commit per payer rather than once at the end. This loop does network I/O for
     # every payer and takes well over 40 minutes, so a single transaction meant a
     # timeout, crash, or host suspend discarded the entire run: the stage was
@@ -564,7 +607,10 @@ def populate_ticker_profiles(limit=None, reuse_max_age_days=DEFAULT_REUSE_MAX_AG
                     default=str,
                 )
 
-                _upsert_minimal_securities(conn, payer)
+                if _upsert_minimal_securities(conn, payer) is False:
+                    skipped_legacy += 1
+                    conn.rollback()
+                    continue
                 row = {"security_id": payer["security_ids"][payer["security_types"][0]], **summary}
                 conn.execute(
                     text("""
@@ -644,6 +690,8 @@ def populate_ticker_profiles(limit=None, reuse_max_age_days=DEFAULT_REUSE_MAX_AG
     print(f"  Identified: {len(payers)} dividend payers")
     print(f"  Inserted/refreshed: {inserted}")
     print(f"  Errors: {errors}")
+    if skipped_legacy:
+        print(f"  Skipped (security_id held by a legacy row): {skipped_legacy}")
     return len(payers), inserted, errors
 
 

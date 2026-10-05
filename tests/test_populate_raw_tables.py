@@ -256,3 +256,72 @@ def test_no_coupon_is_stored_when_neither_source_has_a_rate():
     _run_profile_stage(conn, parsed_coupon=None, sec_coupon=None)
 
     assert conn.profile_rows[0]["coupon_rate"] is None
+
+
+def test_minimal_security_upsert_writes_last_paid_and_retires_flipped_twin():
+    import uuid
+
+    from scripts import populate_raw_tables as prt
+
+    statements = []
+
+    class _R:
+        def first(self):
+            return None
+
+    class FakeConn:
+        def execute(self, stmt, params=None):
+            statements.append((str(stmt), params))
+            return _R()
+
+    sid = uuid.uuid4()
+    payer = {
+        "ticker": "BTLN",
+        "cik": "0001854445",
+        "title": "Brightline",
+        "security_titles": [],
+        "security_types": ["common_stock"],
+        "security_ids": {"common_stock": sid},
+        "classification": {
+            "dividend": True,
+            "status": "available",
+            "dividend_last_paid": "2026-06-30",
+        },
+    }
+    prt._upsert_minimal_securities(FakeConn(), payer)
+
+    _lookup, insert, retire = statements
+    assert insert[1]["dividend_last_paid"] == "2026-06-30"
+    assert "dividend_last_paid" in insert[0]
+    assert "SET active = FALSE" in retire[0]
+    assert retire[1]["id"] == sid and retire[1]["dividend"] is True
+
+
+def test_minimal_security_upsert_skips_when_legacy_row_holds_security_id():
+    import uuid
+
+    from scripts import populate_raw_tables as prt
+
+    calls = []
+
+    class FakeConn:
+        def execute(self, stmt, params=None):
+            calls.append(str(stmt))
+
+            class R:
+                def first(self):
+                    return ("0001842566", "AISP", "preferred stock", False)
+
+            return R()
+
+    payer = {
+        "ticker": "AISP",
+        "cik": "0001842566",
+        "title": "Airship",
+        "security_titles": [],
+        "security_types": ["preferred stock"],
+        "security_ids": {"preferred stock": uuid.uuid4()},
+        "classification": {"dividend": True, "status": "available"},
+    }
+    assert prt._upsert_minimal_securities(FakeConn(), payer) is False
+    assert len(calls) == 1

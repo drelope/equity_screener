@@ -27,6 +27,12 @@ EnvironmentFile=/mnt/d/dividend_equity_crispdm_implementation/dividend_equity_cr
 # dividends, market data, companyfacts refresh and fundamentals derivation.
 TimeoutStartSec=12h
 
+# Cap the ETL so a memory spike kills only this unit's cgroup instead of the
+# host OOM killer picking another process. The 2026-10-05 run was killed at
+# ~14.5 GB; the reference stage now peaks well under 1 GB.
+MemoryHigh=6G
+MemoryMax=8G
+
 # The warehouse is a docker container; make sure it accepts queries before the
 # pipeline starts, so a boot race is not reported as a pipeline fault.
 ExecStartPre=/mnt/d/dividend_equity_crispdm_implementation/dividend_equity_crispdm/.venv/bin/python /mnt/d/dividend_equity_crispdm_implementation/dividend_equity_crispdm/ops/systemd/wait_for_db.py --timeout 600
