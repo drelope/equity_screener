@@ -15,6 +15,7 @@ that reached back and deleted old dates would destroy the record of what a
 security scored on the day it actually scored.
 """
 
+from contextlib import contextmanager
 from pathlib import Path
 
 import pytest
@@ -58,18 +59,37 @@ def test_prune_targets_both_scores_and_rankings():
 
 @pytest.mark.skipif(_live_engine() is None, reason="no live database")
 class TestPruneRemovesStaleRows:
+    @staticmethod
+    @contextmanager
+    def _rolled_back_conn():
+        """Yield a connection whose transaction is *always* rolled back.
+
+        These tests delete real rows on purpose, so they must not be able to
+        commit even when every assertion passes. An earlier version used
+        ``engine.begin()``, which commits on normal exit: the DELETE fired, the
+        assertions passed, and a green test run destroyed 5,617 published score
+        and ranking rows at the run date. Rolling back in a finally block makes
+        the destructive step safe regardless of how the test ends.
+        """
+        conn = _live_engine().connect()
+        trans = conn.begin()
+        try:
+            yield conn
+        finally:
+            trans.rollback()
+            conn.close()
+
     def test_stale_row_at_run_date_is_removed_and_kept_rows_survive(self):
         from scripts.score_rank import prune_stale_run_rows
 
-        engine = _live_engine()
-        with engine.begin() as conn:
+        with self._rolled_back_conn() as conn:
             run_date = _scalar(conn, "SELECT max(as_of_date) FROM model.scores")
             if run_date is None:
                 pytest.skip("no scores to test against")
 
             # The full set this run is assumed to write: every security that
-            # already has a row at the run date, plus the victim inserted below.
-            # Passing only one id would (correctly) prune the entire date.
+            # already has a row at the run date. Passing a partial set would
+            # (correctly) prune the rest of the date.
             scored_sids = [
                 r[0]
                 for r in conn.execute(
@@ -147,8 +167,7 @@ class TestPruneRemovesStaleRows:
         """Point-in-time history must survive a prune of a later run date."""
         from scripts.score_rank import prune_stale_run_rows
 
-        engine = _live_engine()
-        with engine.begin() as conn:
+        with self._rolled_back_conn() as conn:
             newest = _scalar(conn, "SELECT max(as_of_date) FROM model.scores")
             earlier = _scalar(
                 conn,

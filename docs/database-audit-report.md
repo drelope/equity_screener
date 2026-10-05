@@ -164,6 +164,59 @@ Gate evidence for this publish: 480 tests passed, ruff clean, migrations to V003
 none pending, zero inactive securities at the latest score date, and a single
 `model.predictions` run (`6bd1b6c4`).
 
+## Incident: published scores destroyed by a test, then re-scored
+
+Recorded because it changed the published numbers and because the cause is a
+pattern worth not repeating.
+
+`tests/test_score_pruning.py` exercised `prune_stale_run_rows()` — which issues a
+real `DELETE` — inside `engine.begin()`. That context manager **commits on normal
+exit**, and every assertion passed, so the transaction committed. The delete
+removed **5,617 `model.scores` rows and 5,617 `model.rankings` rows at
+`2026-10-02`**, leaving 1 row against 5,618 `model.predictions`: a passing test
+run silently destroyed published state.
+
+Two things made it worse than a single bad row:
+
+- The test passed a *partial* `scored_sids` list, so the prune correctly deleted
+  almost the entire date. The production call site passes the full frame, but the
+  test did not exercise that contract.
+- There was no backup, and the run was **not reproducible**: the one surviving row
+  recomputed to `0.36862` against a stored `0.36975`. `score()` fills
+  positionally (`ffill`/`bfill`), so V0039's 58 deactivations shifted fills for
+  their neighbours. The old numbers were gone, not merely displaced.
+
+Repair, by decision: `scripts/score_rank.py` was re-run **without**
+`--prune-superseded`, so run `6bd1b6c4`'s 5,732 predictions were retained as the
+audit trail alongside the new run.
+
+| | before | after |
+|---|---|---|
+| published run | `6bd1b6c4` | `a94cdc58` |
+| `model.scores` @ `2026-10-02` | 5,618 (5,467 scored) | 5,618 (5,395 scored) |
+| scored composites | 5,467 | 5,395 |
+| active payers | 6,007 | 5,946 |
+
+The 72 fewer scored composites are **not** a methodology change and the floor was
+not relaxed: all 223 unscored run-date rows sit below `MIN_PRESENT_WEIGHT`, with a
+maximum coverage of `0.214` against the `0.5` floor. The reduction is the 58
+V0039 deactivations plus 14 further rows whose positional fills moved across the
+coverage boundary. `model.scores` rows at the run date (5,618) still match
+`model.features` rows at that date exactly.
+
+Post-repair verification: zero inactive securities and zero non-payers at the
+latest score date, zero predictions without a score row, zero scored rows without
+a ranking, and 499 tests passing.
+
+The test itself was fixed to run inside an always-rolled-back transaction
+(`_rolled_back_conn()`), so it cannot commit regardless of how it ends. Verified
+inert by comparing `model.scores` and `model.predictions` totals either side of a
+full suite run: unchanged at 5,618 and 27,636.
+
+The general lesson: any test that calls a function issuing `DELETE` against the
+live warehouse needs an explicit rollback, not a context manager that commits on
+success.
+
 ### How quarantine works here
 
 V0038 adds `audit.quarantined_values`, an append-only registry. The five values stay
