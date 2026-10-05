@@ -294,8 +294,34 @@ migrations = [
     END $$;
     """,
     "ALTER TABLE reference.securities ALTER COLUMN security_type SET DEFAULT 'other'",
-    "ALTER TABLE reference.securities DROP CONSTRAINT IF EXISTS securities_pkey",
-    "ALTER TABLE reference.securities ADD CONSTRAINT securities_pkey PRIMARY KEY (security_id)",
+    # Historically the primary key was (cik, ticker) and had to be moved onto
+    # security_id. On a database built from schema.sql the primary key is
+    # already security_id, and dropping it there is not merely a no-op: 17
+    # foreign keys reference reference.securities(security_id), so PostgreSQL
+    # refuses the DROP with DependentObjectsStillExist and initialization fails.
+    # Only swap the constraint when it is genuinely not what we want.
+    """
+    DO $$
+    DECLARE
+        pk_name TEXT;
+        pk_cols TEXT;
+    BEGIN
+        SELECT con.conname,
+               (SELECT string_agg(att.attname, ',' ORDER BY k.ord)
+                  FROM unnest(con.conkey) WITH ORDINALITY AS k(attnum, ord)
+                  JOIN pg_attribute att
+                    ON att.attrelid = con.conrelid AND att.attnum = k.attnum)
+          INTO pk_name, pk_cols
+          FROM pg_constraint con
+         WHERE con.conrelid = 'reference.securities'::regclass AND con.contype = 'p';
+
+        IF pk_name IS DISTINCT FROM 'securities_pkey' OR pk_cols IS DISTINCT FROM 'security_id' THEN
+            ALTER TABLE reference.securities DROP CONSTRAINT IF EXISTS securities_pkey;
+            ALTER TABLE reference.securities
+                ADD CONSTRAINT securities_pkey PRIMARY KEY (security_id);
+        END IF;
+    END $$;
+    """,
     "DROP INDEX IF EXISTS reference.ux_security_ticker_active",
     """
     DELETE FROM reference.securities duplicate

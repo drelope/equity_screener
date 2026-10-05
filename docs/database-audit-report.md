@@ -365,18 +365,95 @@ with the shadowing condition named. It also asserts the view never omits coverag
 that some single run had, and that `model.predictions` still holds runs the view
 does not — so the audit trail cannot be quietly bought with a deletion.
 
-## Gap found while verifying: `--check` cannot see schema drift
+## Closed: schema drift is now detectable, and the repository can rebuild itself
 
 While mutation-testing the view above, `migrate --check` reported *"schema is up to
-date; no pending migrations"* against a database whose view I had just replaced with
-the broken definition. `scripts/migrate` compares only the `schema_migrations`
-ledger, so it cannot detect an object that was altered or dropped out of band — and
-it will not re-apply a migration to repair it. The view had to be restored by
-executing V0044's DDL directly.
+date; no pending migrations"* against a database whose view had just been replaced
+with the broken definition. `scripts/migrate.py` compares only the
+`schema_migrations` ledger, so it cannot see an object altered out of band, and it
+will not re-apply a migration to repair one. The view had to be restored by
+executing V0044's DDL by hand.
 
-This is the second time in this audit that the ledger and reality diverged (the first
-was the destroyed score rows, which no schema check would have caught either). A
-drift check that compares `pg_views`/`information_schema` against `schema.sql` would
-close the mechanical half of this. Not implemented: it needs a decision on whether
-`schema.sql` or the migrations are the source of truth when they disagree.
+The fix is `scripts/check_schema_drift.py`, which builds a scratch database from
+the repository — `sql/schema.sql`, `init_db.py`'s inline migrations, then V0001+ —
+and diffs its catalog against the live one. It reports tables, columns, indexes,
+constraints, views, enums and functions, keyed by name so a table's primary key,
+foreign keys and checks cannot overwrite each other. It reads nothing from live
+data, and the scratch database is dropped whatever happens.
+
+The reference is a build rather than a checked-in expectation file on purpose. An
+expectation file drifts too — this repository already had `sql/schema.sql` 51
+objects behind, including every column added to `model.features` since V0015. A
+build either reproduces the schema or it does not.
+
+**Verified to fail, not just to pass.** Reverting `model.current_predictions` to
+the V0043 definition in place makes the check exit 1 naming `viewdef
+model.current_predictions` — the exact drift `migrate --check` missed. It currently
+exits 0 with two accepted differences.
+
+Building the reference is also what surfaced the two findings below. Neither is
+visible to the ledger; both were sitting in the bootstrap.
+
+### The bootstrap could not build a database
+
+`scripts/init_db.py` runs `ALTER TABLE reference.securities DROP CONSTRAINT IF
+EXISTS securities_pkey` unconditionally. On a database created from `schema.sql`
+that drop fails: **17 foreign keys** into `reference.securities(security_id)` depend
+on that index, so PostgreSQL raises `DependentObjectsStillExist` and initialization
+aborts. Since `schema.sql` already declares `PRIMARY KEY (security_id)`, the swap
+exists only for databases whose primary key was once `(cik, ticker)` — it was
+unnecessary on a fresh build and fatal.
+
+Confirmed by building a fresh database and running the statement verbatim: fails.
+**Nobody can rebuild this database from the repository.** The migration is now a
+conditional `DO` block that reads the existing primary key and swaps only when the
+columns are not already `security_id`, so it stays a no-op on a fresh build and
+still does its job on an old one. `tests/test_schema_drift.py` fails if the
+unconditional form returns.
+
+### `schema.sql` was missing an index that enforces the V0039 fix
+
+`ux_security_cik_ticker_type_dividend` — the unique index that makes the V0039
+duplicate fix hold — is created by `init_db.py`, not by `schema.sql`. A rebuild from
+`schema.sql` plus migrations alone therefore produced **no such index**, and nothing
+would have said so: the uniqueness that stops a re-classification minting a second
+row for the same instrument would simply be absent. It is now declared in
+`schema.sql`.
+
+`schema.sql` also declared `ix_contract_documents_security_id`, an index name no
+database ever had; V0028 created `ix_contract_documents_security`. A rebuild added
+a duplicate index rather than the one that exists. Corrected.
+
+### Two smaller alignments
+
+- **V0046** validates `fk_securities_company_ticker`. `init_db.py` adds it `NOT
+  VALID` so initialization cannot fail on unresolved ticker/cik pairs, which is the
+  right trade there — but nothing ever validated it afterwards, so a rebuild
+  produced a structurally different and weaker database. Live had it validated
+  already, and `VALIDATE CONSTRAINT` is a no-op there.
+- The `NOT VALID` marker is the only difference the FK had, which is why it surfaced
+  at all: `pg_get_constraintdef` reports validation state, so the check compares it.
+
+### Accepted, not fixed
+
+`reference.securities_security_id_key` is a redundant `UNIQUE(security_id)`
+alongside the primary key, on an 11,660-row table. It looks free to drop and is
+not: `raw.market_data`'s foreign key was created against this index rather than
+`securities_pkey`, so removing it means dropping that FK and re-validating it against
+**9,274,415 rows** — a pair of `ACCESS EXCLUSIVE` locks on the largest raw table, to
+save a duplicate index on a small one. Declared in `ACCEPTED_DIFFERENCES` with that
+reason; the check prints accepted differences rather than hiding them, so the count
+stays visible. The fix, for a maintenance window: re-point
+`market_data_security_id_fkey` at the primary key, then drop this.
+
+### Not wired into the nightly
+
+`migrate --check` stays a cheap ledger check. The drift check builds a database and
+costs roughly a minute, which is too expensive for every stage preflight; it is a
+deploy-time gate run deliberately:
+
+```
+python -m scripts.check_schema_drift     # exit 0 = matches the repository, 1 = does not
+```
+
 

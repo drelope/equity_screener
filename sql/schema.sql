@@ -74,6 +74,14 @@ CREATE INDEX IF NOT EXISTS ix_securities_exchange_id
 CREATE INDEX IF NOT EXISTS ix_securities_ticker_cik
   ON reference.securities (ticker, cik);
 
+-- One row per economic security. cik+ticker is not unique on its own: a
+-- re-classification mints a second row for the same instrument with a different
+-- security_type, which is how 61 duplicate active pairs got scored twice (V0039).
+-- Carrying security_type and dividend in the key is what makes it hold the right
+-- rows instead of forcing a merge of rows that are legitimately distinct.
+CREATE UNIQUE INDEX IF NOT EXISTS ux_security_cik_ticker_type_dividend
+  ON reference.securities (cik, ticker, security_type, dividend);
+
 -- Converge databases created before the XBRL-term columns existed so the
 -- COMMENT statements below and the profile/taxonomy writers always apply.
 ALTER TABLE reference.securities
@@ -792,7 +800,11 @@ CREATE TABLE IF NOT EXISTS raw.contract_documents (
   retrieved_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
-CREATE INDEX IF NOT EXISTS ix_contract_documents_security_id
+-- Named as V0028 created it. The previous name here ended in _security_id, which
+-- is the column name rather than this project's index-name convention, and no
+-- database ever had an index by that name: a fresh build produced an extra index
+-- instead of the one that exists everywhere else.
+CREATE INDEX IF NOT EXISTS ix_contract_documents_security
   ON raw.contract_documents (security_id);
 
 COMMENT ON TABLE raw.contract_documents IS

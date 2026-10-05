@@ -455,6 +455,20 @@ issuers with many listed series such as BAC or PSA), re-key
 `raw.companyfacts`, `raw.sec_submissions` and `raw.company_taxonomy` on `cik`,
 and create `raw.company_classification`.
 
+Changes after that baseline are versioned SQL files in
+`sql/migrations/`, applied in order by `scripts.migrate` and recorded in the
+`schema_migrations` table.
+
+- `python -m scripts.migrate --check` reports whether any migration is pending. It
+  compares the ledger, so it cannot see an object that was altered outside the
+  migration runner.
+- `python -m scripts.check_schema_drift` answers the other question — whether the
+  database matches the repository at all. It builds a scratch database from
+  `sql/schema.sql`, the inline migrations in `scripts/init_db.py` and every
+  versioned migration, then diffs that against the live catalog. Exit status 0
+  means they agree. It is not a stage preflight: it creates and drops a database,
+  so run it deliberately when deploying.
+
 ### reference — master data
 
 | Table | Purpose | Key columns |
