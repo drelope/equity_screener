@@ -592,7 +592,7 @@ def test_feature_sql_joins_on_filing_date_not_period_end():
     # of a period matches any given observation date. A plain filed <= join
     # would match every restatement of the period at once, double counting a
     # restated quarter in the trailing-twelve-month sum.
-    assert "LEAD(pf.filed) OVER" in sql
+    assert "LEAD(GREATEST(pf.filed, pf.period_end)) OVER" in sql
     assert "f.observation_date >= v.filed" in sql
     assert "f.observation_date < v.filed_next" in sql
     assert "ORDER BY pf.filed DESC) vr" not in sql, (
@@ -733,6 +733,137 @@ def test_ttm_chain_is_per_metric_so_a_missing_label_cannot_mask_a_published_valu
     assert fcf1 == "40"
     # A filer with fewer than four reported quarters sums what it has.
     assert eps2 == "4.00" and fcf2 == "40"
+
+
+def test_a_vintage_is_not_visible_before_its_period_has_ended():
+    """A filed date earlier than period_end is a bad date, not an early filing.
+
+    966 stored rows are filed before the period they report ends, 612 of them by
+    more than a year. Taking filed at face value shows the figures to observation
+    dates before the period existed, which is look-ahead into the future of the
+    issuer. The vintage has to wait for period_end.
+    """
+    pytest.importorskip("sqlalchemy")
+    engine = _live_connection()
+    if engine is None:
+        pytest.skip("no database available")
+    from sqlalchemy import text
+
+    cte = (
+        _production_quarterly_ctes()
+        .replace("fundamentals.periodic_financials pf", "tmp_pf pf")
+        .replace("raw.market_data", "tmp_mkt")
+    )
+    params = {"date_from": date(2000, 1, 1), "date_to": date(2100, 1, 1)}
+    ddl = """
+    DROP TABLE IF EXISTS tmp_pf, tmp_mkt;
+    CREATE TEMP TABLE tmp_pf (security_id int, period_end date, fiscal_period text,
+                              filed date, eps numeric, free_cash_flow numeric,
+                              operating_income numeric, depreciation_amortization numeric,
+                              interest_expense numeric, revenue numeric);
+    CREATE TEMP TABLE tmp_mkt (security_id int, observation_date date, close numeric);
+    -- Filed 75 days before its own period ends. Visible from 2021-03-31, not 2021-01-15.
+    INSERT INTO tmp_pf (security_id, period_end, fiscal_period, filed, eps) VALUES
+     (1,'2021-03-31','Q1','2021-01-15',1.00);
+    INSERT INTO tmp_mkt VALUES (1,'2021-02-01',10),(1,'2021-04-01',10);
+    """
+    query = (
+        cte
+        + """
+    SELECT observation_date::text, coalesce(eps_ttm::text,'NULL') FROM q
+    ORDER BY observation_date"""
+    )
+
+    with engine.connect() as conn:
+        conn.execute(text(ddl))
+        rows = dict(conn.execute(text(query), params).fetchall())
+
+    assert rows.get("2021-02-01", "NULL") == "NULL", (
+        "a quarter filed before it ended was visible while the period was still open"
+    )
+    assert rows["2021-04-01"] == "1.00"
+
+
+def _production_return_ctes():
+    """The dividend, return and trailing-window CTEs of the real feature query.
+
+    Extracted rather than restated, for the reason _production_quarterly_ctes is.
+    """
+    import inspect
+
+    from src.crispdm import features
+
+    src = inspect.getsource(features.build_features)
+    block = src[
+        src.index("    WITH d AS (") : src.index(
+            "    -- One annual dividend per (security, as_of_date)"
+        )
+    ]
+    block = "\n".join(line[4:] if line.startswith("    ") else line for line in block.splitlines())
+    return block.rstrip().rstrip(",").rstrip() + "\n"
+
+
+def test_momentum_is_total_return_and_ignores_impossible_payments():
+    """Price momentum undercounts a payer by exactly the income it paid.
+
+    The series below are flat at 100 for 40 days, then 98. A 2.00 dividend goes
+    ex on the day the price drops, so a holder lost nothing: total return is 0
+    where price return is -2%. The same data with no dividend must stay at -2%
+    (no dividend is not a reason to invent one), and a 1,000,000 per-share
+    "dividend" -- the stored data has one -- must be ignored rather than turn the
+    return into a number nobody earned.
+    """
+    pytest.importorskip("sqlalchemy")
+    engine = _live_connection()
+    if engine is None:
+        pytest.skip("no database available")
+    from sqlalchemy import text
+
+    cte = (
+        _production_return_ctes()
+        .replace("raw.market_data", "tmp_mkt")
+        .replace("raw.dividend_data", "tmp_div")
+    )
+    ddl = """
+    DROP TABLE IF EXISTS tmp_mkt, tmp_div;
+    CREATE TEMP TABLE tmp_mkt (security_id int, observation_date date, close numeric);
+    CREATE TEMP TABLE tmp_div (security_id int, ex_dividend_date date, amount numeric,
+                               provider text, frequency text, concept text);
+    -- 71 daily rows per security: price 100 through day 39, 98 from day 40.
+    INSERT INTO tmp_mkt
+    SELECT s, DATE '2021-01-01' + n, CASE WHEN n < 40 THEN 100 ELSE 98 END
+    FROM generate_series(1, 4) s, generate_series(0, 70) n;
+    -- Security 4 has no price row on the ex-date itself (a gap in the stored history).
+    DELETE FROM tmp_mkt WHERE security_id = 4 AND observation_date = DATE '2021-01-01' + 40;
+    INSERT INTO tmp_div VALUES
+      (1, DATE '2021-01-01' + 40, 2, 'OPENBB', 'Annual', NULL),
+      (4, DATE '2021-01-01' + 40, 2, 'OPENBB', 'Annual', NULL),
+      (3, DATE '2021-01-01' + 40, 1000000, 'OPENBB', 'Annual', NULL);
+    UPDATE tmp_mkt SET close = 100 WHERE security_id = 3;
+    """
+    query = (
+        cte
+        + """
+    SELECT security_id, EXP(tr_sum_63) - 1 AS tr63, tr_samples_63
+    FROM p WHERE observation_date = DATE '2021-01-01' + 70 ORDER BY security_id"""
+    )
+
+    with engine.connect() as conn:
+        conn.execute(text(ddl))
+        rows = {
+            r[0]: (float(r[1]), r[2])
+            for r in conn.execute(text(query), {"max_payment_ratio": 1.0}).fetchall()
+        }
+
+    assert rows[1][1] == 63 and rows[2][1] == 63
+    # Dividend credited on the day the price fell by it: nothing lost.
+    assert abs(rows[1][0]) < 1e-9, f"dividend not credited: {rows[1][0]}"
+    # Security 2 pays nothing, so total return is the price return.
+    assert abs(rows[2][0] - (98 / 100 - 1)) < 1e-9, f"invented a dividend: {rows[2][0]}"
+    # The impossible payment is ignored, not compounded.
+    assert abs(rows[3][0]) < 1e-9, f"impossible dividend reached the return: {rows[3][0]}"
+    # An ex-date with no price row is booked to the next observation, not dropped.
+    assert abs(rows[4][0]) < 1e-9, f"dividend on a non-trading day was lost: {rows[4][0]}"
 
 
 def _fact(concept, value, *, end="2025-12-31", filed="2026-02-01", fp="FY", fy=2025):
@@ -1073,6 +1204,7 @@ def test_a_failing_issuer_does_not_abort_the_remaining_ones(monkeypatch):
         survived.append(security_id)
         return len(rows)
 
+    monkeypatch.setattr(pf, "count_candidates", lambda *a, **k: len(candidates))
     monkeypatch.setattr(pf, "load_candidates", lambda *a, **k: candidates)
     monkeypatch.setattr(pf, "extract_periodic_financials", fake_extract)
     monkeypatch.setattr(pf, "upsert_periodic_financials", fake_upsert)
@@ -1096,13 +1228,18 @@ class _CandidateResult:
     def all(self):
         return self._rows
 
+    def scalar_one(self):
+        return 0
+
 
 class _CandidateConnection:
     def __init__(self):
         self.statements = []
+        self.params = []
 
     def execute(self, statement, params=None):
         self.statements.append(str(statement))
+        self.params.append(params)
         return _CandidateResult([])
 
 
@@ -1118,3 +1255,176 @@ def test_load_candidates_scopes_to_active_dividend_securities():
     sql = conn.statements[0]
     assert "s.active = TRUE" in sql
     assert "s.dividend = TRUE" in sql
+
+
+def test_load_candidates_advances_the_keyset_cursor():
+    """A batch must resume strictly after the previous batch's last row."""
+    from scripts import populate_fundamentals as pf
+
+    conn = _CandidateConnection()
+    pf.load_candidates(conn, after_security_id="cursor-uuid")
+
+    assert "s.security_id > :after_security_id" in conn.statements[0]
+    assert conn.params[0]["after_security_id"] == "cursor-uuid"
+    # Without a cursor the filter must not appear (first page).
+    conn2 = _CandidateConnection()
+    pf.load_candidates(conn2)
+    assert "s.security_id >" not in conn2.statements[0]
+
+
+def test_count_candidates_uses_the_same_universe_filter():
+    """count(*) drives the batching loop, so it must agree with the load."""
+    from scripts import populate_fundamentals as pf
+
+    conn = _CandidateConnection()
+    pf.count_candidates(conn, tickers=["aapl"])
+
+    sql = conn.statements[0]
+    assert "s.active = TRUE" in sql
+    assert "s.dividend = TRUE" in sql
+    assert "UPPER(s.ticker) = ANY(:tickers)" in sql
+    assert conn.params[0]["tickers"] == ["AAPL"]
+
+
+class _FakeNested:
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+
+class _FakeConn:
+    def begin_nested(self):
+        return _FakeNested()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+
+class _FakeEngine:
+    """Enough of src.crispdm.db.engine for the batching loop."""
+
+    def __init__(self):
+        self.begins = 0
+
+    def connect(self):
+        return _FakeConn()
+
+    def begin(self):
+        self.begins += 1
+        return _FakeConn()
+
+
+def test_populate_fundamentals_paginates_in_batches(monkeypatch, capsys):
+    """The stage must page the universe with a keyset, one transaction per batch.
+
+    The stage used to materialize every issuer payload with .all() before
+    processing any of them; the full universe is gigabytes of jsonb, which
+    pinned the process against the unit's MemoryMax and left it thrashing in
+    reclaim for hours with a transaction open the whole time. Each batch must
+    start after the previous batch's last security_id, and each batch must run
+    in its own transaction so the stage commits progress incrementally.
+    """
+    from scripts import populate_fundamentals as pf
+
+    universe = [
+        {"security_id": i, "ticker": f"T{i}", "cik": f"{i:010d}", "us_gaap": {}}
+        for i in range(1, 6)
+    ]
+    engine = _FakeEngine()
+    loads = []
+    upserted = []
+
+    def fake_load(conn, tickers=None, limit=None, after_security_id=None):
+        loads.append((after_security_id, limit))
+        rows = [
+            c for c in universe if after_security_id is None or c["security_id"] > after_security_id
+        ]
+        return rows[:limit]
+
+    monkeypatch.setattr(pf, "engine", engine)
+    monkeypatch.setattr(pf, "count_candidates", lambda *a, **k: len(universe))
+    monkeypatch.setattr(pf, "load_candidates", fake_load)
+    monkeypatch.setattr(
+        pf, "extract_periodic_financials", lambda payload: [{"period_end": None, "eps": 1.0}]
+    )
+    monkeypatch.setattr(
+        pf,
+        "upsert_periodic_financials",
+        lambda conn, security_id, rows: (upserted.append(security_id), len(rows))[1],
+    )
+
+    result = pf.populate_fundamentals(batch_size=2)
+
+    # Keyset chain: first page from the start, each later page resumes strictly
+    # after the previous page's last row, and the limit shrinks with the tail.
+    assert loads == [(None, 2), (2, 2), (4, 1)]
+    # One transaction per batch, not one for the whole stage.
+    assert engine.begins == 3
+    # Every candidate processed exactly once, in security_id order.
+    assert upserted == [1, 2, 3, 4, 5]
+    assert result.candidates == 5
+    assert result.securities == 5
+    assert result.periods == 5
+    assert result.errors == 0
+    out = capsys.readouterr().out
+    assert "2/5 candidates processed" in out
+    assert "5/5 candidates processed" in out
+
+
+def test_empty_universe_short_circuits_without_loading(monkeypatch):
+    """count(*) = 0 must not open a batch transaction or call load at all."""
+    from scripts import populate_fundamentals as pf
+
+    engine = _FakeEngine()
+
+    def fail_load(*a, **k):
+        raise AssertionError("load_candidates must not run for an empty universe")
+
+    monkeypatch.setattr(pf, "engine", engine)
+    monkeypatch.setattr(pf, "count_candidates", lambda *a, **k: 0)
+    monkeypatch.setattr(pf, "load_candidates", fail_load)
+
+    result = pf.populate_fundamentals()
+
+    assert result.candidates == 0
+    assert result.periods == 0
+    assert engine.begins == 0
+
+
+def test_a_count_overestimate_terminates_instead_of_looping(monkeypatch):
+    """If count is stale and the keyset runs dry, the loop must stop.
+
+    Without the empty-batch break the stage would spin forever re-asking for
+    rows that no longer exist.
+    """
+    from scripts import populate_fundamentals as pf
+
+    universe = [
+        {"security_id": i, "ticker": f"T{i}", "cik": f"{i:010d}", "us_gaap": {}} for i in (1, 2)
+    ]
+    engine = _FakeEngine()
+    loads = []
+
+    def fake_load(conn, tickers=None, limit=None, after_security_id=None):
+        loads.append(after_security_id)
+        rows = [
+            c for c in universe if after_security_id is None or c["security_id"] > after_security_id
+        ]
+        return rows[:limit]
+
+    monkeypatch.setattr(pf, "engine", engine)
+    monkeypatch.setattr(pf, "count_candidates", lambda *a, **k: 5)  # stale: universe has 2
+    monkeypatch.setattr(pf, "load_candidates", fake_load)
+    monkeypatch.setattr(pf, "extract_periodic_financials", lambda payload: [{"eps": 1.0}])
+    monkeypatch.setattr(pf, "upsert_periodic_financials", lambda *a: 1)
+
+    result = pf.populate_fundamentals(batch_size=2)
+
+    assert loads == [None, 2]  # second page came back empty and stopped the loop
+    assert result.candidates == 5  # reported count is what count(*) claimed
+    assert result.periods == 2  # only real rows were processed

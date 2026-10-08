@@ -170,6 +170,23 @@ class TestBootstrapIsRebuildable:
             "cannot tell whether a swap is needed"
         )
 
+    def test_company_ticker_fk_is_not_reset_to_not_valid(self):
+        """Re-running init_db must not undo V0046's VALIDATE CONSTRAINT.
+
+        Dropping and re-adding the constraint always yields NOT VALID, so an
+        init_db run after V0046 left the live FK unvalidated while the ledger still
+        said the migration had been applied.
+        """
+        statements = init_db_inline_migrations()
+        assert not any(
+            "DROP CONSTRAINT IF EXISTS fk_securities_company_ticker" in s for s in statements
+        ), "init_db drops fk_securities_company_ticker again; re-adding it resets validation"
+        add = [s for s in statements if "ADD CONSTRAINT fk_securities_company_ticker" in s]
+        assert add, "the company-ticker foreign key is no longer created by init_db"
+        assert all("IF NOT EXISTS" in s for s in add), (
+            "the foreign key is added unconditionally; it must only be added when absent"
+        )
+
     def test_schema_declares_the_uniqueness_index_that_duplicate_protection_needs(self):
         """V0039 stopped duplicate active securities by adding a unique index.
 

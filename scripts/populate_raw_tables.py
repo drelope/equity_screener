@@ -33,12 +33,14 @@ import sys
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import NamedTuple
 
 # Allow direct execution from the repository root as well as `python -m`.
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from sqlalchemy import text
+from sqlalchemy.exc import SQLAlchemyError
 
 from scripts.populate_companyfacts import (
     stored_facts_retrieved_at,
@@ -46,6 +48,7 @@ from scripts.populate_companyfacts import (
 )
 from scripts.populate_dividend_data import fetch_ticker_profile
 from src.crispdm.db import engine
+from src.crispdm.dividend_universe import observed_payer_keys
 from src.crispdm.sec_client import (
     build_companyfacts_concept_groups,
     classify_companyfacts,
@@ -66,42 +69,133 @@ def _offline_enabled():
 
 OFFLINE_ON = _offline_enabled()
 
+TICKER_CIK_CONFLICT = "TICKER_CIK_CONFLICT"
+
+#: audit.quarantined_values.ticker is VARCHAR(16); the full ticker is the row key.
+REGISTRY_TICKER_WIDTH = 16
+
+
+class TickerRefresh(NamedTuple):
+    """Outcome of one raw.company_ticker refresh.
+
+    ``seen`` is the snapshot entries the run tried to apply, ``ingested`` those it
+    wrote, and ``conflicts`` the entries it deliberately left alone.
+    """
+
+    seen: int
+    ingested: int
+    conflicts: list
+
+
+def _referenced_ticker_owners(conn):
+    """Map ticker -> the stored row that a reference.securities row still points at.
+
+    Only these rows are protected by fk_securities_company_ticker, so only these can
+    make an upsert that changes the CIK fail. A row nothing references is free to
+    be refreshed, and stays on the existing path.
+    """
+    rows = (
+        conn.execute(
+            text("""
+            SELECT c.ticker, c.cik, c.title, count(s.security_id) AS securities
+            FROM raw.company_ticker c
+            JOIN reference.securities s ON s.ticker = c.ticker AND s.cik = c.cik
+            GROUP BY c.ticker, c.cik, c.title
+        """)
+        )
+        .mappings()
+        .all()
+    )
+    return {row["ticker"]: row for row in rows}
+
+
+def _normalise_entry(entry):
+    """Return (ticker, zero-padded cik, title) for a snapshot entry, or None if unusable."""
+    ticker = (entry.get("ticker") or "").strip().upper()
+    if not ticker or entry.get("cik_str") is None:
+        return None
+    return ticker, str(int(entry["cik_str"])).zfill(10), (entry.get("title") or "").strip()
+
+
+def _conflict_record(owners, ticker, cik, title):
+    """The TICKER_CIK_CONFLICT for one normalised entry, or None if it does not conflict."""
+    owner = owners.get(ticker)
+    if owner is None or owner["cik"] == cik:
+        return None
+    return {
+        "conflict_type": TICKER_CIK_CONFLICT,
+        "ticker": ticker,
+        "incoming_cik": cik,
+        "incoming_issuer": title,
+        "existing_cik": owner["cik"],
+        "existing_issuer": owner["title"],
+        "referencing_securities": int(owner["securities"]),
+        "action": "SKIPPED",
+        "resolution": "MANUAL_REVIEW_REQUIRED",
+    }
+
 
 def _refresh_company_tickers(conn, entries):
-    """Apply the raw.company_ticker snapshot: FK guard + per-ticker upsert."""
-    conn.execute(
-        text("ALTER TABLE raw.company_ticker DROP CONSTRAINT IF EXISTS company_ticker_cik_key")
-    )
+    """Apply the raw.company_ticker snapshot: FK guard + per-ticker upsert.
+
+    A ticker that the snapshot now assigns to a different CIK than the one a
+    security still references is skipped and reported, never reassigned. Containment
+    only: this does not decide which issuer owns the ticker, and it does not touch
+    the existing row. Every other failure still raises.
+    """
+    # The legacy UNIQUE(cik) constraint (company_ticker_cik_key) and the old
+    # securities_cik_fkey no longer exist in schema.sql or in the live schema,
+    # and nothing re-adds them; dropping them nightly was a no-op statement
+    # still charged ACCESS EXCLUSIVE -- measured at ~43 min of lock wait per
+    # run behind an overnight reader. The guards that remain are the unique
+    # index and the composite FK below.
     conn.execute(
         text(
             "CREATE UNIQUE INDEX IF NOT EXISTS "
             "ux_company_ticker_ticker_cik ON raw.company_ticker(ticker, cik)"
         )
     )
-    conn.execute(
-        text("ALTER TABLE reference.securities DROP CONSTRAINT IF EXISTS securities_cik_fkey")
-    )
-    conn.execute(
-        text(
-            "ALTER TABLE reference.securities "
-            "DROP CONSTRAINT IF EXISTS fk_securities_company_ticker"
-        )
-    )
+    # Add only when absent. Dropping and re-adding always yields NOT VALID, so every
+    # nightly undid V0046's validation and put the live schema back out of step with
+    # the repository.
     conn.execute(
         text("""
-        ALTER TABLE reference.securities
-        ADD CONSTRAINT fk_securities_company_ticker
-        FOREIGN KEY (ticker, cik)
-        REFERENCES raw.company_ticker(ticker, cik)
-        NOT VALID
+        DO $$
+        BEGIN
+            IF NOT EXISTS (
+                SELECT 1 FROM pg_constraint
+                 WHERE conrelid = 'reference.securities'::regclass
+                   AND conname = 'fk_securities_company_ticker'
+            ) THEN
+                ALTER TABLE reference.securities
+                ADD CONSTRAINT fk_securities_company_ticker
+                FOREIGN KEY (ticker, cik)
+                REFERENCES raw.company_ticker(ticker, cik)
+                NOT VALID;
+            END IF;
+        END $$;
     """)
     )
 
+    owners = _referenced_ticker_owners(conn)
+    seen = ingested = 0
+    conflicts = []
+    conflicted = set()
+
     for entry in entries:
-        ticker = (entry.get("ticker") or "").strip().upper()
-        if not ticker or entry.get("cik_str") is None:
+        normalised = _normalise_entry(entry)
+        if normalised is None:
             continue
-        cik = str(int(entry["cik_str"])).zfill(10)
+        ticker, cik, title = normalised
+        seen += 1
+
+        conflict = _conflict_record(owners, ticker, cik, title)
+        if conflict is not None:
+            if (ticker, cik) not in conflicted:
+                conflicted.add((ticker, cik))
+                conflicts.append(conflict)
+            continue
+
         conn.execute(
             text("""
             INSERT INTO raw.company_ticker
@@ -116,9 +210,97 @@ def _refresh_company_tickers(conn, entries):
             {
                 "ticker": ticker,
                 "cik": cik,
-                "title": (entry.get("title") or "").strip(),
+                "title": title,
                 "raw_payload": json.dumps(entry),
             },
+        )
+        ingested += 1
+
+    return TickerRefresh(seen=seen, ingested=ingested, conflicts=conflicts)
+
+
+def record_ticker_conflicts(conn, conflicts, *, sweep):
+    """Keep the quarantine registry in step with the conflicts this run skipped.
+
+    The stage exits 0 on a conflict, so the registry is what lets the morning check
+    see one without reading the journal. An open row is written once and left alone
+    on later nights; a row an operator already resolved is reopened if the conflict
+    returns. ``sweep`` resolves open rows the SEC file no longer reports, and is only
+    valid for a full, online snapshot: a ``--limit`` run or the offline re-read sees
+    a subset and would wrongly close the rest.
+
+    Runs in a savepoint and never raises: a registry problem must not roll back the
+    ticker upserts it is reporting on.
+    """
+    try:
+        with conn.begin_nested():
+            for conflict in conflicts:
+                conn.execute(
+                    text("""
+                    INSERT INTO audit.quarantined_values
+                        (table_schema, table_name, column_name, row_key, cik, ticker,
+                         observed_value, reason, rule)
+                    VALUES ('raw', 'company_ticker', 'cik', :ticker, :existing_cik, :short,
+                            :incoming_cik, :reason, :rule)
+                    ON CONFLICT (table_schema, table_name, column_name, row_key, observed_value)
+                    DO UPDATE SET resolved_at = NULL, resolution_note = NULL,
+                                  detected_at = now(), reason = EXCLUDED.reason
+                    WHERE audit.quarantined_values.resolved_at IS NOT NULL
+                """),
+                    {
+                        "ticker": conflict["ticker"],
+                        "short": conflict["ticker"][:REGISTRY_TICKER_WIDTH],
+                        "existing_cik": conflict["existing_cik"],
+                        "incoming_cik": conflict["incoming_cik"],
+                        "reason": (
+                            f"SEC now lists {conflict['ticker']} under "
+                            f"{conflict['incoming_issuer']} (CIK {conflict['incoming_cik']}) "
+                            f"while {conflict['referencing_securities']} security row(s) still "
+                            f"reference {conflict['existing_issuer']} "
+                            f"(CIK {conflict['existing_cik']}); mapping left unchanged"
+                        ),
+                        "rule": TICKER_CIK_CONFLICT,
+                    },
+                )
+            if sweep:
+                still_open = [f"{c['ticker']}|{c['incoming_cik']}" for c in conflicts]
+                conn.execute(
+                    text("""
+                    UPDATE audit.quarantined_values
+                    SET resolved_at = now(),
+                        resolution_note = 'no longer reported by the SEC ticker file'
+                    WHERE rule = :rule AND table_schema = 'raw' AND resolved_at IS NULL
+                      AND (row_key || '|' || observed_value) <> ALL(CAST(:still_open AS text[]))
+                """),
+                    {"rule": TICKER_CIK_CONFLICT, "still_open": still_open},
+                )
+    except SQLAlchemyError as exc:
+        print(f"[populate_raw_tables] could not record ticker conflicts: {exc}", file=sys.stderr)
+
+
+def report_ticker_conflicts(conflicts):
+    """Print the conflicts as one machine-readable line each, then a plain summary.
+
+    The stage still exits 0, and run_full_etl has no status between ok and failed, so
+    this output is the only place the conflict is visible. It goes to stderr so a
+    journal reader filtering for warnings finds it.
+    """
+    if not conflicts:
+        return
+    for conflict in conflicts:
+        print(f"[ticker_cik_conflict] {json.dumps(conflict, sort_keys=True)}", file=sys.stderr)
+    print(
+        f"WARNING: {len(conflicts)} ticker(s) skipped because a security still references "
+        "them under a different CIK. No existing ticker mapping was modified.",
+        file=sys.stderr,
+    )
+    for conflict in conflicts:
+        print(
+            f"  {conflict['ticker']}: incoming {conflict['incoming_issuer']} "
+            f"(CIK {conflict['incoming_cik']}) vs existing {conflict['existing_issuer']} "
+            f"(CIK {conflict['existing_cik']}); SKIPPED, manual entity-resolution review "
+            "required",
+            file=sys.stderr,
         )
 
 
@@ -145,9 +327,9 @@ def populate_company_tickers(limit=None):
             ]
             if limit:
                 entries = entries[:limit]
-            _refresh_company_tickers(conn, entries)
-        print(f"  Populated {len(entries)} raw company ticker records (offline).")
-        return len(entries)
+            result = _refresh_company_tickers(conn, entries)
+        print(f"  Populated {result.ingested} raw company ticker records (offline).")
+        return result
 
     tickers_data = get_company_tickers()
     entries = list(tickers_data.values())
@@ -155,10 +337,11 @@ def populate_company_tickers(limit=None):
         entries = entries[:limit]
 
     with engine.begin() as conn:
-        _refresh_company_tickers(conn, entries)
+        result = _refresh_company_tickers(conn, entries)
+        record_ticker_conflicts(conn, result.conflicts, sweep=not limit)
 
-    print(f"  Populated {len(entries)} raw company ticker records.")
-    return len(entries)
+    print(f"  Populated {result.ingested} raw company ticker records.")
+    return result
 
 
 def _load_raw_tickers(conn, limit=None):
@@ -301,6 +484,7 @@ def _identify_dividend_payers(limit=None, reuse_max_age_days=None):
         return age <= reuse_max_age_days
 
     with engine.connect() as conn:
+        observed = observed_payer_keys(conn)
         titles_by_cik = {}
         for title_row in conn.execute(
             text("""
@@ -402,7 +586,10 @@ def _identify_dividend_payers(limit=None, reuse_max_age_days=None):
 
             classification = facts_by_cik[cik]
             if not classification["dividend"]:
-                continue
+                if (cik, row["ticker"]) not in observed:
+                    continue
+                # A payment seen in the stored series keeps the flag when the tags lag it.
+                classification = {**classification, "dividend": True}
 
             exact_title = (titles_by_cik.get(cik) or {}).get(str(row["ticker"]).upper())
             security_type = security_type_for_instrument(
@@ -722,15 +909,25 @@ def main():
     args = parser.parse_args()
 
     try:
-        tickers = populate_company_tickers(args.limit)
+        refresh = populate_company_tickers(args.limit)
+        report_ticker_conflicts(refresh.conflicts)
         # An empty company_ticker snapshot is a total failure, not an empty
         # universe: reference.securities is built from this table, so returning
-        # success here leaves every downstream stage reading nothing.
-        code = stage_exit_code("populate_raw_tables (company_ticker)", tickers, tickers)
+        # success here leaves every downstream stage reading nothing. Conflicts are
+        # deliberately not passed as ``skipped``: a run in which every ticker
+        # conflicted wrote nothing and has to fail like any other empty write.
+        code = stage_exit_code(
+            "populate_raw_tables (company_ticker)", refresh.seen, refresh.ingested
+        )
         if code:
             return code
+        outcome = (
+            f"completed with warnings ({len(refresh.conflicts)} ticker/CIK conflict(s) skipped)"
+            if refresh.conflicts
+            else "populated successfully"
+        )
         if args.skip_profiles:
-            print("\n✓ Raw tables populated successfully! (profiles skipped)")
+            print(f"\n✓ Raw tables {outcome}! (profiles skipped)")
         else:
             payers, inserted, errors = populate_ticker_profiles(
                 args.limit, reuse_max_age_days=args.reuse_max_age_days
@@ -740,7 +937,7 @@ def main():
             )
             if code:
                 return code
-            print("\n✓ Raw tables populated successfully!")
+            print(f"\n✓ Raw tables {outcome}!")
         return 0
 
     except Exception as e:

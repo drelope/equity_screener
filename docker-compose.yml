@@ -14,11 +14,35 @@ services:
     image: postgres:17.11@sha256:f4c66b820c6f974249089d3d16d86a3698eae11e8746eb6644b2271031e91232
     command:
       - "postgres"
+      # Warehouse tuning for 11 GB on NVMe; the shipped defaults are sized for
+      # a spinning disk (shared_buffers 128 MB, work_mem 4 MB, random_page_cost
+      # 4, checkpoint every 5 min). pg_stat_statements stays loaded -- it is
+      # what makes a slow stage attributable. log_lock_waits=1s makes a queued
+      # DDL statement name its blocker in the journal instead of waiting
+      # silently for ~43 min, as the raw stage did on three consecutive runs.
+      # Waits longer than deadlock_timeout (1 s) are what gets logged.
       - "-c"
       - "shared_preload_libraries=pg_stat_statements"
       - "-c"
       - "pg_stat_statements.max=10000"
+      - "-c"
       - "pg_stat_statements.track=all"
+      - "-c"
+      - "shared_buffers=2GB"
+      - "-c"
+      - "work_mem=32MB"
+      - "-c"
+      - "maintenance_work_mem=1GB"
+      - "-c"
+      - "random_page_cost=1.1"
+      - "-c"
+      - "effective_io_concurrency=200"
+      - "-c"
+      - "checkpoint_timeout=15min"
+      - "-c"
+      - "max_wal_size=4GB"
+      - "-c"
+      - "log_lock_waits=on"
     environment:
       POSTGRES_DB: dividend
       POSTGRES_USER: dividend
@@ -28,6 +52,16 @@ services:
     volumes:
       - pgdata:/var/lib/postgresql/data
       - ./sql/schema.sql:/docker-entrypoint-initdb.d/001_schema.sql:ro
+    # Parallel hash/sort segments live in /dev/shm, whose default is 64 MB --
+    # one 32 MB work_mem per participant would overflow it. 512 MB is ample
+    # for the default parallelism (2 workers + leader).
+    shm_size: 512m
+    # Cap so postgres and a peak-memory ETL stage can never jointly exceed the
+    # 24 GB WSL2 VM (.wslconfig); at the old 15.3 GB default that arithmetic is
+    # what wedged the Oct 7 run. File cache
+    # is reclaimed before anon pages, so the cap costs cache under pressure
+    # rather than an OOM kill.
+    mem_limit: 10g
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U dividend -d dividend"]
       interval: 5s
@@ -53,10 +87,18 @@ services:
     command: ["streamlit", "run", "app/streamlit_app.py", "--server.address=0.0.0.0", "--server.port=8501"]
     environment:
       DATABASE_URL: *db-url
+      # Operator controls (queue, schedule, cancel, call the API) are off unless this is
+      # set to at least 12 characters. Empty means a read-only app, never a default login.
+      OPS_ADMIN_TOKEN: ${OPS_ADMIN_TOKEN:-}
+      # Integrations page. Both are optional: without them the page reports the API as
+      # unreachable or the key as missing instead of failing.
+      API_BASE_URL: http://api:8000
+      API_KEY: ${API_KEY:-}
     ports:
       - "127.0.0.1:8501:8501"
-    # Streamlit serves /_stcore/health once the app is up. There is no auth in
-    # front of it, which is the other reason this stays on the loopback.
+    # Streamlit serves /_stcore/health once the app is up. The operator token gates the
+    # controls, not the data, so the app is still not meant to face a network: it stays
+    # on the loopback.
     healthcheck:
       test:
         - CMD
@@ -104,6 +146,27 @@ services:
         condition: service_healthy
       migrate:
         condition: service_completed_successfully
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+
+  # Runs the tasks queued from the web app's Operations page, and queues its schedules.
+  # It executes only the commands in src/crispdm/ops/catalog.py. The nightly ETL is NOT
+  # scheduled here: it still runs from the host's systemd timer (ops/systemd). Tasks that
+  # take the pipeline lock cannot overlap it.
+  worker:
+    build: .
+    command: ["python", "-m", "scripts.ops_worker"]
+    environment:
+      DATABASE_URL: *db-url
+      SEC_USER_AGENT: ${SEC_USER_AGENT:-Your Name your.email@example.com}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    # On stop the worker terminates a running task (up to 15s) and records it as failed.
+    stop_grace_period: 30s
     restart: unless-stopped
     security_opt:
       - no-new-privileges:true

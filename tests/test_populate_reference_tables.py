@@ -1,3 +1,5 @@
+import hashlib
+import json
 from types import SimpleNamespace
 
 import pytest
@@ -100,3 +102,162 @@ def test_full_reference_run_stops_on_duplicate_active_identity(monkeypatch):
         populate_reference_tables.validate_securities_reference_fk()
 
     assert len(conn.statements) == 1
+
+
+# --- a legacy row that already holds the new key's id -------------------------------
+
+
+def test_the_relabel_targets_only_the_row_holding_the_id_and_never_a_keyed_twin():
+    conn = _Connection([_Result()])
+
+    populate_reference_tables._relabel_legacy_holder(
+        conn, "the-id", "OCAC", "0001926314", "common_stock", True
+    )
+
+    ((sql, params),) = conn.statements
+    assert "WHERE s.security_id = :id" in sql
+    assert "IS DISTINCT FROM" in sql, "a row that already matches must not be rewritten"
+    assert "NOT EXISTS" in sql and "o.security_id <> :id" in sql, (
+        "a row already holding the target key is left to the upsert"
+    )
+    assert (
+        "SET ticker" in sql and "security_id =" not in sql.split("SET", 1)[1].split("WHERE")[0]
+    ), "the id itself never changes, so no child row moves"
+    assert params == {
+        "id": "the-id",
+        "ticker": "OCAC",
+        "cik": "0001926314",
+        "type": "common_stock",
+        "dividend": True,
+    }
+
+
+def test_upsert_classification_cache_refreshes_row_and_hashes_dividend_facts():
+    conn = _Connection([_Result()])
+    classification = {
+        "security_types": ["preferred_stock"],
+        "dividend": False,
+        "dividend_last_paid": None,
+        "security_titles": ["Ace 7.50% Cum Pref"],
+        "security_facts": [],
+        "dividend_facts": [{"tag": "DividendsPayableCurrentAndNoncurrent", "records": []}],
+        "status": "available",
+    }
+
+    populate_reference_tables._upsert_classification_cache(
+        conn, "0001891792", "AACU", "Ace Aero Unite", classification
+    )
+
+    (sql, params) = conn.statements[0]
+    assert "INSERT INTO raw.company_classification" in sql
+    assert "ON CONFLICT (cik) DO UPDATE" in sql
+    assert params["cik"] == "0001891792"
+    assert params["ticker"] == "AACU"
+    assert params["dividend"] is False
+    expected = hashlib.sha256(
+        json.dumps(classification["dividend_facts"], sort_keys=True).encode("utf-8")
+    ).hexdigest()
+    assert params["content_hash"] == expected
+
+
+def _live_engine():
+    try:
+        from src.crispdm.db import engine
+
+        with engine.connect() as conn:
+            conn.exec_driver_sql("SELECT 1 FROM reference.securities LIMIT 1")
+        return engine
+    except Exception:  # pragma: no cover - no database
+        return None
+
+
+@pytest.mark.skipif(_live_engine() is None, reason="no live database")
+def test_a_row_flipped_in_place_is_relabelled_to_match_its_own_id_and_keeps_its_id():
+    """The OCAC collision, reproduced on a real row inside a rolled-back transaction."""
+    import uuid
+
+    from sqlalchemy import text
+
+    with _live_engine().connect() as conn:
+        outer = conn.begin()
+        try:
+            row = conn.execute(
+                text("""
+                SELECT s.security_id, s.ticker, s.cik, s.security_type, s.dividend
+                FROM reference.securities s
+                WHERE s.active AND s.dividend AND s.cik IS NOT NULL
+                  AND NOT EXISTS (SELECT 1 FROM reference.securities o
+                                  WHERE o.cik = s.cik AND o.ticker = s.ticker
+                                    AND o.security_id <> s.security_id)
+                LIMIT 1""")
+            ).one()
+            sid, ticker, cik, stype, dividend = row
+            assert sid == uuid.uuid5(
+                uuid.NAMESPACE_URL, f"dividend-equity:{ticker.upper()}:{cik}:{stype}:{dividend}"
+            ), "the fixture row must follow the id convention"
+
+            # The legacy corruption: flag flipped in place, id left as the old key's hash.
+            conn.execute(
+                text(
+                    "UPDATE reference.securities SET dividend = NOT dividend, active = FALSE "
+                    "WHERE security_id = :id"
+                ),
+                {"id": sid},
+            )
+
+            populate_reference_tables._relabel_legacy_holder(
+                conn, sid, ticker, cik, stype, dividend
+            )
+
+            fixed = conn.execute(
+                text(
+                    "SELECT security_id, dividend FROM reference.securities "
+                    "WHERE ticker = :t AND cik = :c"
+                ),
+                {"t": ticker, "c": cik},
+            ).all()
+            assert [(r[0], r[1]) for r in fixed] == [(sid, dividend)]
+        finally:
+            outer.rollback()
+
+
+# --- the stage must not report success when it stopped early -------------------------
+
+
+def _run_main(monkeypatch, result):
+    import sys
+
+    monkeypatch.setattr(sys, "argv", ["populate_reference_tables", "--securities"])
+    monkeypatch.setattr(populate_reference_tables, "populate_securities", lambda *a, **k: result)
+    return populate_reference_tables.main()
+
+
+def test_a_securities_run_that_stopped_early_fails_even_though_it_wrote_rows(monkeypatch, capsys):
+    """6,960 rows were written before OCAC aborted the transaction; that is not a success."""
+    code = _run_main(monkeypatch, (6971, 6960, populate_reference_tables.MAX_SECURITY_ERRORS + 1))
+
+    assert code == 1
+    assert "partially rebuilt" in capsys.readouterr().err
+
+
+def test_a_few_isolated_errors_do_not_fail_the_stage(monkeypatch):
+    assert _run_main(monkeypatch, (6000, 5998, 2)) == 0
+
+
+def test_an_all_failed_run_still_fails_as_before(monkeypatch):
+    assert _run_main(monkeypatch, (5, 0, 5)) == 1
+
+
+# --- one security's failure is isolated ----------------------------------------------
+
+
+def test_each_security_runs_in_its_own_savepoint_so_a_failure_cannot_poison_the_next():
+    import inspect
+
+    source = inspect.getsource(populate_reference_tables.populate_securities)
+
+    loop = source.split("for sec in raw_tickers:")[1]
+    assert loop.index("savepoint = conn.begin_nested()") < loop.index("try:")
+    assert loop.index("savepoint.commit()") < loop.index("except Exception")
+    assert "savepoint.rollback()" in loop.split("except Exception")[1]
+    assert "MAX_SECURITY_ERRORS" in loop and "errors > 10" not in loop

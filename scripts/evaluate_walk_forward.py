@@ -70,11 +70,16 @@ MODEL_VERSION = "logistic_regression_walk_forward_v3"
 ACCEPTANCE_POLICY_VERSION = "balanced_acc_lift_and_negative_recall_v2"
 
 #: Bumped when the feature SQL changes what a column means, not merely when it
-#: is recomputed. v3 is the per-metric quarterly vintage chain: one slot per
-#: fiscal quarter, and a filing label that omits a metric no longer masks an
-#: already-published figure. v2 was period-end alignment, which fed the model a
+#: is recomputed. v5 nulls a negative debt balance and computes dividend_growth
+#: from the per-payment series only where its prior-year window is observed (a
+#: stub first payment read as growth of thousands of percent). v4 makes
+#: momentum_63d / momentum_252d total returns (price plus
+#: dividends; v3 was price only) and stops a fundamentals vintage being visible
+#: before its period has ended. v3 is the per-metric quarterly vintage chain: one
+#: slot per fiscal quarter, and a filing label that omits a metric no longer masks
+#: an already-published figure. v2 was period-end alignment, which fed the model a
 #: quarter's earnings before it was filed.
-FEATURE_VERSION = "features_v3"
+FEATURE_VERSION = "features_v5"
 
 #: Bumped when the stored inputs change meaning. v3 is filing-vintaged
 #: fundamentals (V0009: one row per period *and* filing state, ``filed`` NOT

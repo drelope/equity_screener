@@ -118,12 +118,57 @@ def test_assess_attention_on_reference_security_anomalies():
     assert "active_preferred_missing_liquidation_preference=4" in check["detail"]
 
 
+def test_preferred_reference_gaps_are_informational_not_blocking():
+    f = _findings()
+    f["security_consistency"]["active_preferred_missing_coupon"] = 806
+    f["security_consistency"]["active_preferred_missing_liquidation_preference"] = 435
+    r = _f(f)
+    check = next(c for c in r["checks"] if c["name"] == "security_consistency")
+    assert check["status"] == "info"
+    assert "active_preferred_missing_coupon=806" in check["detail"]
+    assert r["status"] == "ok"
+
+
+def test_identity_duplicates_still_need_attention_alongside_reference_gaps():
+    f = _findings()
+    f["security_consistency"]["active_preferred_missing_coupon"] = 806
+    f["security_consistency"]["active_identity_duplicates"] = 1
+    r = _f(f)
+    check = next(c for c in r["checks"] if c["name"] == "security_consistency")
+    assert check["status"] == "attention"
+    assert "active_identity_duplicates=1" in check["detail"]
+    assert "active_preferred_missing_coupon=806" in check["detail"]
+    assert r["status"] == "attention"
+
+
 def test_ticker_reuse_across_ciks_is_reported_without_assuming_duplicate():
     f = _findings()
     f["security_consistency"]["active_ticker_reuse_across_ciks"] = 3
     check = next(c for c in _f(f)["checks"] if c["name"] == "security_consistency")
     assert check["status"] == "ok"
     assert "active_ticker_reuse_across_ciks=3" in check["detail"]
+
+
+def test_an_open_ticker_conflict_needs_attention_and_names_the_tickers():
+    f = _findings(ticker_conflicts={"open": 2, "tickers": ["PORT-UN", "ABC"]})
+
+    result = _f(f)
+
+    check = next(c for c in result["checks"] if c["name"] == "ticker_conflicts")
+    assert check["status"] == "attention"
+    assert "2 open" in check["detail"] and "PORT-UN, ABC" in check["detail"]
+    assert "resolve_ticker_conflict review" in check["detail"]
+    assert result["status"] == "attention"
+
+
+def test_no_open_ticker_conflicts_is_ok():
+    result = _f(_findings(ticker_conflicts={"open": 0, "tickers": []}))
+    check = next(c for c in result["checks"] if c["name"] == "ticker_conflicts")
+    assert check["status"] == "ok" and result["status"] == "ok"
+
+
+def test_findings_from_an_older_build_add_no_conflict_check():
+    assert "ticker_conflicts" not in {c["name"] for c in _f(_findings())["checks"]}
 
 
 def test_security_consistency_query_uses_active_rows_and_named_threshold():
@@ -203,6 +248,44 @@ def test_assess_model_gate_attention_when_recall_below_min():
     r = _f(f)
     assert r["status"] == "attention"
     assert any(c["name"] == "walk_forward_gate" and c["status"] == "attention" for c in r["checks"])
+
+
+def test_a_no_go_walk_forward_is_informational_not_a_pass_or_a_failure():
+    """The accepted NO-GO: rule-based scoring is the product, so it neither alarms nor passes.
+
+    Its recall (1.0) is the always-"sustainable" model's. Reading it against MIN_RECALL
+    reported OK for a model that cannot tell a cut from a payment.
+    """
+    f = _findings(
+        model_gate={
+            "run_id": "r1",
+            "recall": 1.0,
+            "readiness": "no_go",
+            "created_at": "2026-10-06T20:19Z",
+        }
+    )
+
+    result = _f(f)
+
+    check = next(c for c in result["checks"] if c["name"] == "walk_forward_gate")
+    assert check["status"] == "info"
+    assert "not adopted" in check["detail"] and "rule-based" in check["detail"]
+    assert "recall" not in check["detail"]
+    assert result["status"] == "ok"
+
+
+def test_a_go_verdict_is_still_checked_against_the_recall_floor():
+    go = _f(
+        _findings(model_gate={"run_id": "r1", "recall": 0.5, "readiness": "go", "created_at": "t"})
+    )
+    assert next(c for c in go["checks"] if c["name"] == "walk_forward_gate")["status"] == "ok"
+
+    weak = _f(
+        _findings(model_gate={"run_id": "r1", "recall": 0.1, "readiness": "go", "created_at": "t"})
+    )
+    assert (
+        next(c for c in weak["checks"] if c["name"] == "walk_forward_gate")["status"] == "attention"
+    )
 
 
 def test_assess_tracks_missing_tables_as_attention():

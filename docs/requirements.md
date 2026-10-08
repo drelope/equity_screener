@@ -46,16 +46,23 @@ percentile rank of the factor across the current feature date
 | valuation_score | **5%** | currently neutral placeholder (0.5) |
 
 `model.predictions` thresholds the composite against `precision_threshold`
-(0.5 by default) for the rule-based sustainable-dividend probability.
+(0.5 by default). That is a relative rank, not a calibrated probability.
 
 ## 4. Learning goals (ML layer)
+
+**Decision, 2026-10-06: the ML model is not adopted; the rule-based composite is the
+product.** The walk-forward evaluation has returned NO-GO under every feature version
+(v3, v4, v5): the label is 99.6% positive, so the model predicts "sustainable" for
+everything (balanced accuracy 0.500, negative recall 0.000). The evaluation, labelling
+and checkpoint code are kept as diagnostics and for any future revisit; nothing in
+scoring or the nightly depends on them.
 
 - ML targets are **offline labels only** — `model.features.target_sustainable_dividend`
   is never fabricated; it must be populated from future dividend events and
   financial coverage (see `model-labeling-plan.md`).
-- The production model is a walk-forward logistic regression
-  (`src/crispdm/model.py:walk_forward`) trained on 70% of feature dates and
-  evaluated on the remaining 30%.
+- The walk-forward logistic regression (`src/crispdm/model.py:walk_forward`, trained on
+  70% of feature dates and evaluated on the remaining 30%) is the evaluated candidate,
+  not the production scorer.
 
 ## 5. Acceptance criteria
 
@@ -63,7 +70,7 @@ percentile rank of the factor across the current feature date
 |---|---|---|
 | Reproducible local MVP | installs from pinned `requirements.txt`; pipeline stages run from repo root | CI + `docker compose up -d postgres` + `python -m scripts.run_full_etl` |
 | Data lineage | every raw row keeps `raw_payload`, `content_hash`, `provider`; `audit.*` populated | `scripts.populate_audit`, schema comments |
-| Preference screening recall | walk-forward `recall >= MIN_RECALL` (default **0.30**) → Azure Go/No-Go | `python -m scripts.evaluate_walk_forward` (checkpoint in `audit.model_runs`) |
+| Preference screening recall | *Not applicable while the ML model is not adopted* (decision 2026-10-06). If it is revisited: walk-forward `recall >= MIN_RECALL` (default **0.30**) | `python -m scripts.evaluate_walk_forward` (checkpoint in `audit.model_runs`) |
 | API security | `/health` public; all other routes require `X-API-Key`; 503 when key unconfigured | `api/main.py` |
 | SEC compliance | `SEC_USER_AGENT` must be a real contact string before any SEC request | enforced in `src/crispdm/sec_client.py` |
 | Quality gate | `ruff check .`, `ruff format --check .`, `pytest` all green in CI | `.github/workflows/ci.yml` |
@@ -78,6 +85,6 @@ percentile rank of the factor across the current feature date
 ## 7. Priority order (when in doubt)
 
 1. Correctness and auditability of the ETL/ingestion.
-2. Walk-forward labeling + evaluation passing the recall gate.
+2. Rule-based score quality (coverage, point-in-time correctness of every input).
 3. Reproducibility (pinned deps, digests) before any Azure migration.
 4. Feature depth (more/richer factors) over cosmetic UI.

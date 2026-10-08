@@ -366,6 +366,37 @@ def _feature_sql(monkeypatch):
     return captured["sql"]
 
 
+def test_momentum_is_total_return_not_price_return(monkeypatch):
+    """momentum_63d / momentum_252d are meant to be total return.
+
+    close / LAG(close, n) - 1 ignores every dividend, which for a dividend
+    screener undercounts exactly the securities it ranks. The window is a sum of
+    daily log returns that credit the dividend on its ex-date, and it must still
+    require a full window, as volatility_252d does.
+    """
+    sql = _feature_sql(monkeypatch)
+
+    assert "p.close/p.p252-1" not in sql and "p.close/p.p63-1" not in sql
+    assert "p.tr_samples_252 >= 252 THEN EXP(p.tr_sum_252) - 1" in sql
+    assert "p.tr_samples_63 >= 63 THEN EXP(p.tr_sum_63) - 1" in sql
+    assert "daily_total_return" in sql
+
+
+def test_the_payment_sanity_bound_is_passed_to_the_query(monkeypatch):
+    captured = {}
+
+    def fake_read_df(sql, params=None):
+        captured["params"] = params
+        return pd.DataFrame(
+            columns=list(features.FEATURE_COLUMNS) + ["eps_ttm", "eps_ttm_prior", "fcf_ttm"]
+        )
+
+    monkeypatch.setattr(features, "read_df", fake_read_df)
+    features.build_features()
+
+    assert captured["params"]["max_payment_ratio"] == features.MAX_SINGLE_PAYMENT_RATIO
+
+
 def test_volatility_252d_requires_a_full_window_of_returns(monkeypatch):
     # STDDEV_SAMP returns a value from two samples, so an unguarded
     # ROWS BETWEEN 251 PRECEDING AND CURRENT ROW published a "252-day"
@@ -415,7 +446,7 @@ def test_quick_liquidity_reads_both_legs_from_the_same_fy_vintage(monkeypatch):
     """
     sql = _feature_sql(monkeypatch)
 
-    fy_cte = sql.split("fy_vintages AS (")[1].split("),")[0]
+    fy_cte = sql.split("fy_vintages AS (")[1].split("    fy AS (")[0]
     assert "pf.cash" in fy_cte
     assert "pf.current_liabilities" in fy_cte
     # Both legs ride the one FY join, not a separate lookup that could resolve
@@ -498,6 +529,44 @@ def _leverage_frame(**rows):
     base = {"oi_ttm": 100.0, "da_ttm": 20.0, "int_ttm": 10.0, "debt": 240.0}
     base.update(rows)
     return pd.DataFrame([base])
+
+
+def test_dividend_growth_needs_an_observed_prior_year_window(monkeypatch):
+    """A stub first payment against a full year is not growth.
+
+    PHXE-P's first payment was 0.11111 and its next 0.625, which the prior-window
+    comparison read as +2,150%. The per-payment series is only trusted for a prior
+    year that starts at or after the security's first stored payment; the XBRL
+    annual path, which spans its own history, is unaffected and still applies.
+    """
+    sql = _feature_sql(monkeypatch)
+
+    assert "LEFT JOIN d_first ON d_first.security_id=p.security_id" in sql
+    growth = sql.split("END dividend_growth")[0].split("CASE WHEN d_prior_paid")[1]
+    openbb_branch, annual_branch = growth.split("WHEN ann.current")
+    assert "d_first.first_ex <= p.observation_date - INTERVAL '730 days'" in openbb_branch
+    assert "d_first" not in annual_branch, "the guard belongs to the per-payment branch only"
+
+
+def test_a_negative_debt_balance_is_not_read_as_unlevered():
+    """214 stored fundamentals rows carry debt below zero (V0050).
+
+    A negative balance divided by positive EBITDA is a negative ratio, which the
+    percentile rank files as the *least* levered company in the universe.
+    """
+    out = features.leverage_ratios(_leverage_frame(debt=-240.0))
+    assert pd.isna(out.debt.iloc[0])
+    assert pd.isna(out.debt_to_ebitda.iloc[0])
+
+    # Zero is a real answer, a filer with no debt, and must survive.
+    debt_free = features.leverage_ratios(_leverage_frame(debt=0.0))
+    assert debt_free.debt.iloc[0] == 0.0
+    assert debt_free.debt_to_ebitda.iloc[0] == 0.0
+
+
+def test_the_debt_guard_does_not_touch_interest_coverage():
+    out = features.leverage_ratios(_leverage_frame(debt=-240.0))
+    assert out.interest_coverage.iloc[0] == pytest.approx(10.0)
 
 
 def test_debt_to_ebitda_is_debt_over_operating_income_plus_da():

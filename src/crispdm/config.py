@@ -15,11 +15,15 @@ class Settings(BaseSettings):
     label_horizon_days: int = 365
     dividend_lookback_start: date = date(2025, 1, 1)
     #: Enforce the dividend-recency window when classifying the dividend
-    #: universe. When False (the default) a security is flagged from any
-    #: positive dividend fact, which is the historical behaviour and keeps the
-    #: nightly ETL from silently changing the universe on an unattended run.
-    #: Set ``ENFORCE_DIVIDEND_RECENCY=true`` to activate the bounded window.
-    enforce_dividend_recency: bool = False
+    #: universe. On since 2026-10-06: a security is flagged only from a positive
+    #: per-share dividend fact inside ``dividend_recency_days``, or a payment
+    #: observed in that window (``dividend_universe``). The old any-fact-ever rule
+    #: left 1,602 securities with a last fact 1.5 years old or older in the
+    #: universe, and 1,413 more whose only recent tag was not a dividend they
+    #: paid; the per-share rule (2026-10-07) drops aggregate payables and
+    #: investor-side received-amount concepts entirely. Set
+    #: ``ENFORCE_DIVIDEND_RECENCY=false`` to restore the any-fact-ever rule.
+    enforce_dividend_recency: bool = True
     #: How recent a positive dividend fact must be to count when
     #: ``enforce_dividend_recency`` is enabled. Matches the horizon the
     #: preferred dividend snapshot already uses.
@@ -40,6 +44,13 @@ class Settings(BaseSettings):
     #: so expect this to widen the read window without moving any score. Set to 0
     #: for the strict common-date behaviour.
     feature_carry_forward_days: int = 7
+    #: Token that unlocks operator actions in the web app (queueing, scheduling and
+    #: cancelling tasks). Unset or shorter than 12 characters disables them: the app
+    #: then shows data and monitoring read-only, never an unauthenticated control panel.
+    ops_admin_token: str | None = None
+    #: Where the web app reaches the data API, and the key it sends. The key is the API's
+    #: own ``API_KEY``; the app never shows it.
+    api_base_url: str = "http://localhost:8000"
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
     def require_sec_user_agent(self) -> None:

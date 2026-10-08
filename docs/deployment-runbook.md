@@ -10,9 +10,14 @@ until the local MVP is reproducible and walk-forward evaluation is passing.
 |---|---|---|
 | PostgreSQL 17.11 | Docker Compose service `postgres` (image pinned by digest) | `docker-compose.yml` |
 | Migrations | Compose service `migrate` / `python -m scripts.migrate` | `sql/migrations/` + `scripts/init_db.py` |
-| ETL | `python -m scripts.run_full_etl` (stages 0-6) | `.env` |
-| API | Compose service `api` / `uvicorn api.main:app --port 8000` | `API_KEY`, `DATABASE_URL` |
-| UI | Compose service `streamlit` (port 8501) | `DATABASE_URL` |
+| ETL | `python -m scripts.run_full_etl` (stages 0-9; stage 10 labels opt-in) | `.env` |
+| API | Compose service `api` / `uvicorn api.main:app --port 8000` | `API_KEY` (required by every Compose command), `DATABASE_URL` |
+| UI | Compose service `streamlit` (`127.0.0.1:8501`) | `DATABASE_URL`, `OPS_ADMIN_TOKEN` |
+| Task worker | Compose service `worker` (`scripts.ops_worker`) | `DATABASE_URL`, `SEC_USER_AGENT` |
+
+All published ports (5432, 8000, 8501) are bound to `127.0.0.1`. Compose reads
+`POSTGRES_PASSWORD` (default `dividend`), `API_KEY`, `OPS_ADMIN_TOKEN` and
+`SEC_USER_AGENT` from the environment or `.env`; see `.env.example`.
 
 Volumes: `pgdata` persists all data; schema is mounted from `sql/schema.sql`
 for first initialization only.
@@ -34,8 +39,14 @@ for first initialization only.
    docker compose pull        # immutable, digest-pinned images
    docker compose up -d postgres
    docker compose up migrate  # apply pending sql/migrations/*
-   docker compose up -d api streamlit
+   docker compose up -d api streamlit worker
    ```
+
+   `API_KEY` must be exported in the shell for every `docker compose`
+   command, including these, because the `api` service declares it required.
+   Load it from `.env` first (`export API_KEY="$(grep '^API_KEY=' .env | cut -d= -f2-)"`);
+   the full steps, including PowerShell, are in the README's
+   "Start PostgreSQL with Docker Compose" section.
 
 4. Sanity check:
 
@@ -44,7 +55,7 @@ for first initialization only.
    curl -s -H "X-API-Key: $API_KEY" localhost:8000/metrics/enriched/AAPL
    ```
 
-5. Run the nightly ETL (see §5 for automation). Stage 2 keeps the 12-month
+5. Run the nightly ETL (see §5 for automation). Stage 3 keeps the 12-month
    dividend lookback (`DIVIDEND_LOOKBACK_START`, default 2025-01-01) and
    accrues forward; **after the PoC gate passes**, switch the ETL/scheduler to
    total history once with `--dividend-full-history`
@@ -67,7 +78,7 @@ Rollback = revert to the previous release tag, in the reverse order of deploy:
 git checkout v0.2.0            # previous known-good tag
 docker compose up -d postgres  # data volume is unchanged
 docker compose up migrate      # migrations are forward-only: see note below
-docker compose up -d api streamlit
+docker compose up -d api streamlit worker
 ```
 
 **Nightly health check:** after any deploy (and every morning), confirm the
@@ -93,8 +104,9 @@ pinned — a tag (`postgres:17.11`) can be repointed upstream; a digest cannot.
 
 ## 5. Nightly schedule
 
-Problem: `scripts.run_full_etl` is currently invoked manually
-(`docker-compose.yml` has no scheduler). Two supported paths:
+Problem: `scripts.run_full_etl` is not scheduled by `docker-compose.yml`. The
+Compose `worker` only runs tasks and schedules queued from the web app's
+Operations page; the nightly ETL stays on the host. Two supported paths:
 
 ### Option A — Airflow (recommended if Airflow already in the stack)
 
@@ -135,10 +147,14 @@ nightly rather than failing loudly:
 
 **WSL2 caveat (this host).** The timer only fires while the WSL2 VM is running.
 A laptop that is asleep or shut down at 03:00 does not run the ETL then;
-`Persistent=true` catches it up on the next WSL start instead. The 26h freshness
-SLA is therefore bounded by when this machine is awake, not by the clock — do not
-read a green freshness check on a host that sleeps. For a schedule that must hold
-regardless, use a real host (Option C) rather than relying on `Persistent`.
+`Persistent=true` catches it up on the next WSL start instead. The freshness
+SLA is therefore bounded by when this machine is awake, not by the clock — do
+not read a green freshness check on a host that sleeps. For a schedule that must
+hold regardless, use a real host (Option C) rather than relying on `Persistent`.
+
+The VM's own memory comes from `C:\Users\<you>\.wslconfig` (currently
+`memory=24GB`, `swap=8GB`). Changing it requires `wsl --shutdown`, which stops
+Docker and any ETL mid-run — do it deliberately, never at 03:00.
 
 At Azure time this same job becomes an Azure Functions / Container Apps Job
 (`azure/README.md`), so the entrypoint stays `python -m scripts.run_full_etl`
@@ -150,8 +166,11 @@ in all three options.
   the `API_KEY` export/shell or Compose `environment`, and any consumer
   (`X-API-Key`). Unset/blank keys make the API return 503 rather than open up.
 - **`DATABASE_URL`**: local dev user `dividend:dividend` is intentionally
-  weak for the localhost container; do **not** reuse it for any networked
+  weak for the loopback-only container (Compose publishes 5432 on `127.0.0.1`);
+  set `POSTGRES_PASSWORD` and do **not** reuse the default for any networked
   deployment.
+- **`OPS_ADMIN_TOKEN`**: gates the web app's operator controls (12+ characters;
+  empty = read-only). There is no default token.
 - **`SEC_USER_AGENT`**: must be a real contact string. Enforced before any SEC
   request (`src/crispdm/sec_client.py`); the placeholder
   `Your Name your.email@example.com` fails fast.
@@ -163,7 +182,8 @@ in all three options.
 ## 7. Monitoring (as-is and target)
 
 - As-is: no `pg_stat_statements` dashboards wired; Compose enables the
-  extension, and `/health` plus container `healthcheck` give the API/DB liveness.
+  extension and `log_lock_waits`, and `/health` plus container `healthcheck`
+  give the API/DB liveness. `postgres` is capped at `mem_limit: 10g`.
 - Target at Azure: Application Insights for the API and Function/Job runs;
   log-instrument `run_full_etl` per-stage exit codes (already printed) into
   Insights; alert on non-zero stage exits.

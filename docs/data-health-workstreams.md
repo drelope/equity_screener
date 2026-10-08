@@ -810,6 +810,32 @@ coverage ratio is simply undefined for a non-payer, and the fix is to make
 `dividend = TRUE` mean what it says -- a recent canonical payment fact, per
 security -- rather than to fetch harder.
 
+#### Decision (2026-10-07): the universe is per-share facts or observed payments
+
+Implemented in `src/crispdm/sec_client.py::classify_companyfacts`. With recency
+enforced, `dividend = TRUE` now requires a positive **per-share** declared/paid
+fact (`CommonStockDividendsPerShareDeclared` /` ...CashPaid`,
+`PreferredStockDividendsPerShare*`, IFRS `CashDividendsPerShare*`) within
+`DIVIDEND_RECENCY_DAYS`, **or** a positive payment observed in `raw.dividend_data`
+inside the same window (`observed_payer_keys`). Aggregate paid/payable balances
+and investor-side received-amount concepts (`InterestAndDividendIncomeOperating`,
+`EquityMethodInvestmentDividendsOrDistributions`) are retained in
+`classification_evidence` but can no longer flag an issuer. This is the change
+WS4's coverage write-up identified as required.
+
+Measured against the 2026-10-07 state of the cache, the tightened universe is
+**2,917** securities (down from 4,955): every one of them has a recent observed
+payment, and coverage for the gate is computed as the observed set over
+essentially the same set, i.e. **~100%** aiming at the 95% floor. The reference
+stage was rebuilt with `populate_reference_tables --reclassify` so the universe
+and the `raw.company_classification` cache agree on the new rule; dropped
+securities are deactivated with `active = FALSE`, not deleted, and return if a
+per-share fact or payment reappears.
+
+The 707 security "genuine ingestion gap" from the earlier bucket is unaffected
+by the definition change and remains the actionable remainder: live, tradeable,
+XBRL-confirmed payers with no stored dividend row.
+
 Two secondary accounting problems, recorded for completeness:
 
 - Coverage counts distinct `security_id`, but the fetch is scoped per **ticker**
@@ -1595,3 +1621,137 @@ captures fundamentals rather than prices.
 The NO-GO is recorded in `data/walk_forward_checkpoint.json` with
 `readiness: no_go` and `gate_passed: false`. The previous GO checkpoint is
 preserved as `walk_forward_checkpoint.superseded-*.json`.
+
+## WS11 -- features_v4: total-return momentum and the filing-date clamp (this change)
+
+Two changes to the feature SQL, shipped together because they share one rebuild
+and one walk-forward re-run. `FEATURE_VERSION` is `features_v4`.
+
+### Momentum was price change, and is now total return
+
+`momentum_63d` and `momentum_252d` were `close / close_n - 1`. They are meant to
+be total return: for a dividend screener, price change undercounts exactly the
+securities it ranks. Each is now the compounded daily total return, crediting
+each per-payment OPENBB dividend on its ex-date (`ln((close + dividend) / prior
+close)`, summed over the window and exponentiated, i.e. reinvested at the
+ex-date close). Both still require a full 63 / 252-observation window.
+
+- A dividend is booked to the first price row on or after its ex-date, so an
+  ex-date on a weekend or in a price gap is not dropped.
+- XBRL amounts are not used: they are annual totals with a fiscal period end,
+  not ex-dates.
+- A single payment larger than the prior close is ignored
+  (`MAX_SINGLE_PAYMENT_RATIO`). 19 of 65,351 stored in-window events qualify, one
+  of them 2.1 million per share. Special dividends of 30-50% of price are kept.
+- A security with no stored per-payment dividends reads as price return, which
+  is its total return only if it pays nothing.
+
+Measured on a one-month window against the stored v3 values: coverage lost on 0
+rows; total return was below price return on 0 rows; the mean shift was +0.5
+points for 63d and +2.4 points for 252d. One row hand-checked from raw prices and
+dividends: price return 0.170401 matched the old stored value exactly, and the
+build's 0.177017 differs from the simple price-plus-dividend 0.176937 only by the
+reinvestment compounding.
+
+### A fundamentals vintage is not visible before its period has ended
+
+The vintage chain used `filed` as the availability date. 966 stored rows are
+filed *before* the period they report ends (612 by more than a year) and 315 have
+a `period_end` in the future, so those figures were shown to observation dates
+before the period existed. A vintage is now available from
+`GREATEST(filed, period_end)`. This is conservative rather than exact: the true
+filing date is unknown, but it cannot precede its period. V0050 records the
+anomalous rows; this change closes the look-ahead they created.
+
+### The coverage gap, measured
+
+The "5,715 payers with prices vs 3,244 with OPENBB dividends" gap was mostly
+over-flagged non-payers (the broad dividend matcher, backlog item 1), for which
+total return equals price return. The real gap was 398 active payers whose
+OPENBB series had been pulled with only the 12-month lookback. A full-history
+pull for those securities loaded 13,625 records with no errors and reduced the
+lookback-only set from 398 to 73. The backfill also deepens `annual_dividend` and
+`dividend_growth` for those securities.
+
+### Rebuild and verdict
+
+`scripts.build_features` rebuilt all history: 9,274,404 rows, one per price
+observation. The table previously held 8,537,438, so about 737k observations had
+no feature row. The nightly only rebuilds a recent tail, so the full rebuild is
+part of the change rather than optional.
+
+The walk-forward re-run retired the `features_v3` checkpoint and wrote a v4 one:
+**still NO-GO, with the same shape as before** -- balanced accuracy 0.500,
+negative recall 0.000, on 4,779 negatives in 1.15M test rows. The label is 99.6%
+positive, so the model predicts "sustainable" for everything. Momentum was never
+the binding constraint on the gate; the label is.
+
+Not changed: negative `debt` values still reach `debt_to_ebitda` (V0050); 73
+securities remain lookback-only; and `model.scores` for the five earlier as-of
+dates still reflect v3 features, as only the latest date was re-scored.
+
+## WS12 -- features_v5, the ticker-conflict record, and the ML decision
+
+Closes the three "not changed" items above, and records a decision.
+
+### Decision: the ML model is not adopted
+
+The walk-forward evaluation was NO-GO under v3, v4 and v5 with the same shape
+(balanced accuracy 0.500, negative recall 0.000, 4,779 negatives in the test
+window). Feature work cannot move it: the label is 99.6% positive, so the model
+predicts "sustainable" for everything and its recall of 1.000 is meaningless.
+**Accepted 2026-10-06: the rule-based composite is the product.** The labelling and
+evaluation code stays as a diagnostic. Consequences made explicit:
+
+- `verify_nightly_run` reports the walk-forward row as *info* while the verdict is
+  `no_go`. It previously read `OK (recall=1.000)`, which was a pass awarded to a model
+  that cannot tell a cut from a payment.
+- `model.predictions.probability` is the composite, a relative rank and not a calibrated
+  probability. The Screener says so.
+- The Azure gate in `azure/README.md` ("walk-forward evaluation is passing") cannot be
+  met as written. It needs the owner to restate the criterion; it is not changed here.
+
+### Negative debt
+
+214 stored `fundamentals.periodic_financials` rows carry `debt < 0` (V0050). They
+reached `model.features` on 4 securities and 1,572 rows, none at the latest date. A
+negative balance over positive EBITDA is a negative ratio, which the percentile rank
+files as the *least* levered company. `leverage_ratios` now nulls a negative balance
+(zero is kept: a debt-free filer is a real zero). After the rebuild no feature row has
+`debt < 0` or `debt_to_ebitda < 0`.
+
+### Dividend growth on an unobserved prior window
+
+PHXE-P read +2,150%: its first payment was a 0.11111 stub and the next 0.625. The prior
+365-day window was compared with a full year it did not cover. Measured on the latest
+date, 290 of 2,993 growth values (10%) rested on a prior window that began before the
+security's first stored payment, and they held 49 of the 127 values above +100%. The
+per-payment branch now requires `first stored OPENBB payment <= observation date - 730
+days`; otherwise growth falls through to the XBRL annual branch, or NULL. PHXE-P is now
+NULL. Growth coverage on the latest date went from 2,993 to 2,606 values.
+
+Not fixed: extremes remain from the XBRL annual path (AVAI +2,400%, SVRN +9,900%) and
+from complete-window cases (NVDA, CNX), which look like split or special-payment
+effects. Those are a different mechanism and need their own measurement.
+
+### The 73 "lookback-only" securities
+
+The strict count (active payers whose first stored OPENBB payment is on or after
+2025-01-01) is 227, of which 61 are long-listed. A full-history pull for those 61
+fetched 160 records and none earlier than 2025. They are new payers, not truncated
+pulls, so there is nothing to backfill; the growth rule above is what handles them.
+
+### Ticker/CIK conflicts are now visible to the morning check
+
+The stage exits 0 on a conflict, so `verify_nightly_run` could not see one. A skipped
+conflict is now written to `audit.quarantined_values` (`table_schema = 'raw'`,
+`rule = TICKER_CIK_CONFLICT`). A full online run resolves rows SEC no longer reports;
+`--limit` and the offline re-read never do. An operator-released row is reopened if
+the conflict returns. The check reports any open row as *attention*.
+
+### Rebuild
+
+`FEATURE_VERSION` is `features_v5`. All 9,286,646 feature rows were rebuilt, the
+walk-forward checkpoint was rewritten under v5 (the v4 one is kept as
+`walk_forward_checkpoint.superseded-*.json`), and the latest as-of date was re-scored.
+`model.scores` for the five earlier dates still reflect v3 features.

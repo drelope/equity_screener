@@ -25,10 +25,16 @@ Options:
     --repopulate       Full reseed: reconcile every instrument and delete
                        childless rows whose (ticker, cik) pair is no longer in
                        the SEC company_tickers snapshot
+    --reclassify       Ignore the raw.company_classification cache and recompute
+                       every classification from the stored companyfacts payloads,
+                       refreshing the cache. Use after a change to the
+                       classify_companyfacts rules (e.g. the per-share dividend
+                       universe rule) so the reference universe and the cache agree.
     (If no options specified, populates all three tables)
 """
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -43,6 +49,7 @@ if __package__ in (None, ""):
 from sqlalchemy import text
 
 from src.crispdm.db import engine
+from src.crispdm.dividend_universe import observed_payer_keys
 from src.crispdm.openbb_client import profile as openbb_profile
 from src.crispdm.sec_client import (
     classify_companyfacts,
@@ -483,7 +490,92 @@ def _sweep_orphan_securities(conn, log, repopulate=False):
     return len(orphans)
 
 
-def populate_securities(limit=None, repopulate=False):
+#: A securities run that fails on more than this many securities stops, and the stage fails.
+MAX_SECURITY_ERRORS = 10
+
+
+def _relabel_legacy_holder(conn, row_id, ticker, cik, security_type, dividend):
+    """Correct a legacy row that already holds the id this key hashes to.
+
+    security_id is a hash of (ticker, cik, security_type, dividend). A row whose flag was
+    flipped in place keeps the id of its *old* key, so when the instrument resolves back to
+    that key the insert collides on securities_security_id_key. The id says what the row
+    is, so relabel it to match rather than collide. security_id is untouched, so no child
+    row moves. A row already holding the target key is left to the upsert.
+    """
+    conn.execute(
+        text("""
+        UPDATE reference.securities s
+        SET ticker = :ticker, cik = :cik, security_type = :type, dividend = :dividend,
+            updated_at = now()
+        WHERE s.security_id = :id
+          AND (s.ticker, s.cik, s.security_type, s.dividend)
+              IS DISTINCT FROM (:ticker, :cik, :type, :dividend)
+          AND NOT EXISTS (
+              SELECT 1 FROM reference.securities o
+              WHERE (o.ticker, o.cik, o.security_type, o.dividend)
+                    = (:ticker, :cik, :type, :dividend)
+                AND o.security_id <> :id)
+    """),
+        {
+            "id": row_id,
+            "ticker": ticker,
+            "cik": cik,
+            "type": security_type,
+            "dividend": dividend,
+        },
+    )
+
+
+def _upsert_classification_cache(conn, cik, ticker, company_name, classification):
+    """Refresh one raw.company_classification row from a reclassified payload.
+
+    Keeps the same content_hash contract as the other cache writers: hashed on
+    ``dividend_facts`` only, so a reclassification that changes the boolean but
+    not the evidence leaves the hash untouched and the row repopulated.
+    """
+    conn.execute(
+        text("""
+        INSERT INTO raw.company_classification
+            (cik, ticker, company_name, security_types, security_titles,
+             security_facts, dividend_facts, dividend, dividend_last_paid,
+             status, content_hash, retrieved_at)
+        VALUES (:cik, :ticker, :company_name, CAST(:security_types AS jsonb),
+                CAST(:security_titles AS jsonb), CAST(:security_facts AS jsonb),
+                CAST(:dividend_facts AS jsonb),
+                :dividend, :dividend_last_paid, :status, :content_hash, now())
+        ON CONFLICT (cik) DO UPDATE SET
+            ticker = EXCLUDED.ticker,
+            company_name = EXCLUDED.company_name,
+            security_types = EXCLUDED.security_types,
+            security_titles = EXCLUDED.security_titles,
+            security_facts = EXCLUDED.security_facts,
+            dividend_facts = EXCLUDED.dividend_facts,
+            dividend = EXCLUDED.dividend,
+            dividend_last_paid = EXCLUDED.dividend_last_paid,
+            status = EXCLUDED.status,
+            content_hash = EXCLUDED.content_hash,
+            retrieved_at = now()
+    """),
+        {
+            "cik": cik,
+            "ticker": ticker,
+            "company_name": company_name,
+            "security_types": json.dumps(classification["security_types"]),
+            "security_titles": json.dumps(classification.get("security_titles", [])),
+            "security_facts": json.dumps(classification["security_facts"]),
+            "dividend_facts": json.dumps(classification["dividend_facts"]),
+            "dividend": classification["dividend"],
+            "dividend_last_paid": classification.get("dividend_last_paid"),
+            "status": classification["status"],
+            "content_hash": hashlib.sha256(
+                json.dumps(classification["dividend_facts"], sort_keys=True).encode("utf-8")
+            ).hexdigest(),
+        },
+    )
+
+
+def populate_securities(limit=None, repopulate=False, reclassify=False):
     """Build audited security rows from raw tickers and SEC Company Facts.
 
     One row per SEC-listed instrument: ``raw.company_ticker`` already enumerates
@@ -516,6 +608,9 @@ def populate_securities(limit=None, repopulate=False):
             ).mappings()
         )
         batch_ciks = {row["cik"] for row in raw_tickers if row["cik"] is not None}
+        observed_payers = observed_payer_keys(conn)
+        cik_tickers = {sec["cik"]: sec["ticker"] for sec in raw_tickers if sec["cik"]}
+        cik_titles = {sec["cik"]: sec["title"] for sec in raw_tickers if sec["cik"]}
 
         issuer_id_by_cik = {}
         existing_names_by_key = {}
@@ -568,7 +663,11 @@ def populate_securities(limit=None, repopulate=False):
         # SEC. Only CIKs without a stored payload fall through to the API. When
         # a batch limit is given, restrict the warm scan to CIKs in the batch so
         # a limited run never touches the full 1.4 GB payload set.
-        cached_ciks = set(facts_by_cik)
+        #
+        # --reclassify empties the cache set so every batch CIK with a stored
+        # payload is classified again under the current rules and written back
+        # to raw.company_classification.
+        cached_ciks = set() if reclassify else set(facts_by_cik)
         stored_sql = text("""
             SELECT cik, raw_payload
             FROM raw.companyfacts
@@ -590,6 +689,14 @@ def populate_securities(limit=None, repopulate=False):
                         row["raw_payload"], lookback_days=configured_dividend_lookback()
                     )
                     facts_by_cik[row["cik"]] = classification
+                    if reclassify and cik_tickers.get(row["cik"]):
+                        _upsert_classification_cache(
+                            conn,
+                            row["cik"],
+                            cik_tickers[row["cik"]],
+                            cik_titles.get(row["cik"]),
+                            classification,
+                        )
                 except Exception:
                     continue
 
@@ -653,6 +760,10 @@ def populate_securities(limit=None, repopulate=False):
         reconcile_log = {"deleted": 0, "cascaded": 0, "deactivated_with_children": []}
 
         for sec in raw_tickers:
+            # One security's failure must not poison the rest: a failed statement aborts the
+            # whole transaction, so without a savepoint every later security fails with
+            # "current transaction is aborted" and the stage stops after 11 errors.
+            savepoint = conn.begin_nested()
             try:
                 cik = sec["cik"]
                 classification = facts_by_cik[cik]
@@ -676,7 +787,7 @@ def populate_securities(limit=None, repopulate=False):
                     issuer_name=sec["title"],
                 )
                 security_type = instrument.security_type
-                dividend = classification["dividend"]
+                dividend = classification["dividend"] or (cik, sec["ticker"]) in observed_payers
                 row_id = uuid.uuid5(
                     uuid.NAMESPACE_URL,
                     f"dividend-equity:{sec['ticker'].upper()}:{cik}:{security_type}:{dividend}",
@@ -710,6 +821,7 @@ def populate_securities(limit=None, repopulate=False):
                     submissions_by_cik.get(cik),
                     sec["ticker"],
                 )
+                _relabel_legacy_holder(conn, row_id, sec["ticker"], cik, security_type, dividend)
                 conn.execute(
                     text("""
                     INSERT INTO reference.securities
@@ -776,15 +888,18 @@ def populate_securities(limit=None, repopulate=False):
                     reconcile_log,
                     repopulate=repopulate,
                 )
+                savepoint.commit()
                 count += 1
                 if count % 100 == 0:
                     conn.commit()
                     print(f"  Inserted {count} securities...")
 
             except Exception as e:
+                if savepoint.is_active:
+                    savepoint.rollback()
                 errors += 1
                 print(f"  Error processing {sec.get('ticker')}: {e}")
-                if errors > 10:
+                if errors > MAX_SECURITY_ERRORS:
                     print("  Too many errors, stopping securities population.")
                     break
 
@@ -864,6 +979,12 @@ def main():
         help="Full reseed: reconcile every instrument and delete "
         "childless rows no longer in the SEC snapshot",
     )
+    parser.add_argument(
+        "--reclassify",
+        action="store_true",
+        help="Recompute raw.company_classification from the stored companyfacts "
+        "payloads instead of trusting the cache, and refresh the cache",
+    )
 
     args = parser.parse_args()
 
@@ -881,10 +1002,19 @@ def main():
             populate_missing_issuers_from_legacy_sec(args.limit)
 
         if args.securities or populate_all:
-            attempted, written, errors = populate_securities(args.limit, repopulate=args.repopulate)
-            # populate_securities bails out after 10 errors, so a run that stops
-            # early can still leave a partially rebuilt universe behind. That is
-            # worth a loud failure; the reconcile log below records how far it got.
+            attempted, written, errors = populate_securities(
+                args.limit, repopulate=args.repopulate, reclassify=args.reclassify
+            )
+            # A run that stops early leaves a partially rebuilt universe, and later stages
+            # would read it as complete. The 2026-10-07 nightly stopped at "O" and still
+            # reported success because it had written 6,960 rows.
+            if errors > MAX_SECURITY_ERRORS:
+                print(
+                    f"✗ populate_reference_tables (securities) stopped after {errors} errors "
+                    f"with {written} of {attempted} processed; the universe is partially rebuilt.",
+                    file=sys.stderr,
+                )
+                return 1
             code = stage_exit_code(
                 "populate_reference_tables (securities)", attempted, written, errors=errors
             )

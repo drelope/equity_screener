@@ -406,9 +406,9 @@ def test_future_dividend_facts_cannot_set_dividend_last_paid():
     "Paid" and still carried period end 2026-12-31, which is what published
     five impossible dates (MTEX 2108-11-14 among them).
 
-    The date is clamped to the run date rather than the concept being dropped:
-    narrowing DIVIDEND_FACT_TERMS would clear the dividend flag for 3,611 of
-    8,105 cached CIKs, which is a universe change. The flag must not move here.
+    The date is clamped to the run date, and because the concept is an
+    aggregate issuer-side amount rather than a per-share declaration, it cannot
+    set the payer flag at all.
     """
     facts = {
         "full_facts": {
@@ -429,9 +429,9 @@ def test_future_dividend_facts_cannot_set_dividend_last_paid():
 
     # Clamped to the run date, not left at 2026-12-31.
     assert result["dividend_last_paid"] == "2026-10-04"
-    # The flag is untouched by the clamp: dropping the tag instead would have
-    # flipped it, and that is the change this deliberately avoids.
-    assert result["dividend"] is True
+    # An aggregate issuer-side amount is evidence, not proof of payment; the
+    # per-share rule keeps the flag off.
+    assert result["dividend"] is False
     # The future-dated evidence is retained so a later matcher fix can be
     # compared against what was corrected.
     assert result["dividend_facts"][0]["records"][-1]["end"] == "2026-12-31"
@@ -550,8 +550,8 @@ def test_companyfacts_lookback_none_disables_recency_bound():
     assert result["dividend_lookback_start"] is None
 
 
-def test_configured_dividend_lookback_is_opt_in(monkeypatch):
-    """Enforcement defaults off so the nightly cannot silently flip the universe."""
+def test_configured_dividend_lookback_follows_the_setting(monkeypatch):
+    """Enforcement is a setting: off means any positive fact, on means the recency window."""
     from src.crispdm import sec_client
 
     monkeypatch.setattr(sec_client.settings, "enforce_dividend_recency", False)
@@ -590,14 +590,79 @@ def test_companyfacts_evidence_keeps_the_latest_five_periods_by_date():
     assert result["dividend_last_paid"] == "2026-01-01"
 
 
+def _aggregate_dividend_only_facts(concept, records):
+    return {"full_facts": {"us-gaap": {concept: {"units": {"USD": records}}}}}
+
+
+@pytest.mark.parametrize(
+    "concept",
+    [
+        "DividendsCommonStockCash",
+        "PaymentsOfDividendsCommonStock",
+        "DividendsPayableCurrentAndNoncurrent",
+        "InterestAndDividendIncomeOperating",
+        "EquityMethodInvestmentDividendsOrDistributions",
+    ],
+)
+def test_companyfacts_aggregate_or_investor_side_fact_is_not_payer_evidence(concept):
+    """Only a per-share declared/paid amount can set the payer flag.
+
+    Aggregate tags describe a stock or its holders, and investor-side concepts
+    describe dividends *received*, so a company whose only evidence is one of
+    these must sit outside the payer universe even when the fact is recent.
+    The evidence is still retained so an auditor (and the coverage report) can
+    see what the tag said.
+    """
+    result = classify_companyfacts(
+        _aggregate_dividend_only_facts(concept, [{"val": 1000, "end": "2026-01-01"}]),
+        as_of=date(2026, 3, 1),
+    )
+
+    assert result["dividend"] is False
+    assert result["dividend_last_paid"] == "2026-01-01"
+    assert result["dividend_facts"][0]["tag"] == concept
+
+
+def test_companyfacts_singular_per_share_concept_counts():
+    """DIVIDEND_FACT_TERMS tests on a word: accept the rare singular tag too."""
+    as_of = date(2026, 3, 1)
+    result = classify_companyfacts(
+        _aggregate_dividend_only_facts("DividendPerShare", [{"val": 1.25, "end": "2026-01-01"}]),
+        as_of=as_of,
+    )
+
+    assert result["dividend"] is True
+    assert result["dividend_last_paid"] == "2026-01-01"
+
+
 def test_companyfacts_ifrs_dividend_evidence_counts():
-    """Foreign private issuers file IFRS; their DividendsPaid* facts must count.
+    """Foreign private issuers file IFRS; their per-share facts must count.
 
     Agnico Eagle, Vale, PBR and similar 40-F filers have stale or absent us-gaap
     dividend facts but current ifrs-full ones. Reading only us-gaap silently
     dropped them from the universe once the recency bound removed the stale
     us-gaap fact that used to (accidentally) keep them flagged.
     """
+    facts = {
+        "full_facts": {
+            "us-gaap": {},
+            "ifrs-full": {
+                "CashDividendsPerShareOrdinaryShares": {
+                    "units": {"USD/shares": [{"val": 1.25, "end": "2025-12-31"}]}
+                }
+            },
+        }
+    }
+
+    result = classify_companyfacts(facts, as_of=date(2026, 3, 1))
+
+    assert result["dividend"] is True
+    assert result["dividend_last_paid"] == "2025-12-31"
+    assert result["dividend_facts"][0]["tag"] == "CashDividendsPerShareOrdinaryShares"
+
+
+def test_companyfacts_ifrs_aggregate_dividend_evidence_does_not_set_flag():
+    """Per-share evidence is required under IFRS just as under us-gaap."""
     facts = {
         "full_facts": {
             "us-gaap": {},
@@ -611,9 +676,8 @@ def test_companyfacts_ifrs_dividend_evidence_counts():
 
     result = classify_companyfacts(facts, as_of=date(2026, 3, 1))
 
-    assert result["dividend"] is True
+    assert result["dividend"] is False
     assert result["dividend_last_paid"] == "2025-12-31"
-    assert result["dividend_facts"][0]["tag"] == "DividendsPaidOrdinaryShares"
 
 
 def test_companyfacts_stale_ifrs_dividend_evidence_is_also_bounded():

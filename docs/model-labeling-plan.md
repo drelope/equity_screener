@@ -1,7 +1,7 @@
 # Offline Labeling Plan — `target_sustainable_dividend`
 
 The starter code deliberately does **not** fabricate labels
-(`README.md:666`): `model.features.target_sustainable_dividend` is created as
+(`README.md:478`): `model.features.target_sustainable_dividend` is created as
 `NaN` and the model cannot be evaluated until labels are populated. This plan
 defines who labels, when, from what, and how the labels are accepted.
 
@@ -45,7 +45,7 @@ partial at the tail and prevent look-ahead bias.
 ## 4. Labeling SQL sketch (implemented as `scripts.label_targets`, 2026-09-23)
 
 The implemented command is `python -m scripts.label_targets [--cutoff YYYY-MM-DD]
-[--rebuild]`. It is also available as ETL stage 7 via `--run-labels` on
+[--rebuild]`. It is also available as ETL stage 10 via `--run-labels` on
 `scripts.run_full_etl` (refused on `--limit`/`--tickers` partial runs, since
 labels are immutable once written).
 
@@ -96,6 +96,11 @@ labeled.
 - Gate: `python -m scripts.evaluate_walk_forward` must exit 0
   (recall >= MIN_RECALL) for the Azure Go/No-Go decision; the checkpoint
   (metrics + window boundaries) is persisted to `audit.model_runs`.
+  **Status, 2026-10-06: NO-GO, accepted.** The imbalance above is not mild: 99.6% of
+  labelled rows are positive, so balanced class weights and a recall-tuned threshold
+  still leave a model that predicts "sustainable" for everything. The rule-based
+  composite is used instead; this gate is kept as a diagnostic and no longer blocks
+  anything.
 
 ## 6. Data / feature / model versioning
 

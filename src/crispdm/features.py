@@ -178,6 +178,11 @@ MIN_DENOMINATOR_PRICE = 0.10
 #: multi-decade appreciation.
 SPLIT_ARTIFACT_RATIO = 50.0
 
+#: A single dividend larger than the prior close is a unit or currency error and
+#: is left out of the total-return calculation. Special dividends of 30-50% of
+#: price are real and are kept; only an impossible payment is dropped.
+MAX_SINGLE_PAYMENT_RATIO = 1.0
+
 PRICE_QUALITY_OK = "ok"
 PRICE_QUALITY_SPLIT_ARTIFACT = "split_artifact"
 PRICE_QUALITY_SUB_PENNY = "sub_penny"
@@ -322,6 +327,9 @@ def leverage_ratios(df):
     missing = [c for c in ("oi_ttm", "da_ttm", "int_ttm", "debt", "rev_ttm") if c not in x.columns]
     for column in missing:
         x[column] = np.nan
+    # A balance below zero is an extractor sign error, not a debt (V0050 records 214 such
+    # rows). Read as a leverage input it would file the company as unlevered.
+    x["debt"] = x["debt"].where(x["debt"] >= 0)
     operating_income = x["oi_ttm"]
     ebitda = operating_income + x["da_ttm"]
     x["debt_to_ebitda"] = x["debt"] / ebitda.where(ebitda > 0)
@@ -454,27 +462,7 @@ def build_features(date_from=None, date_to=None):
     the LAG and volatility calculations that need prior prices.
     """
     sql = """
-    WITH r AS (
-      SELECT security_id, observation_date, close,
-        LAG(close,63) OVER w p63,
-        LAG(close,252) OVER w p252,
-        LN(close/NULLIF(LAG(close) OVER w,0)) daily_return
-      FROM raw.market_data WHERE close IS NOT NULL
-      WINDOW w AS (PARTITION BY security_id ORDER BY observation_date)
-    ),
-    p AS (
-      -- daily_vol must be earned, not assumed. STDDEV_SAMP returns a number
-      -- from two samples, so without the sample-count guard volatility_252d
-      -- was populated from 3 observations and annualised by sqrt(252) -- a
-      -- value that is not a 252-day volatility at all. Require a full window.
-      SELECT security_id, observation_date, close, p63, p252,
-        COUNT(daily_return) OVER v AS vol_samples,
-        STDDEV_SAMP(daily_return) OVER v AS daily_vol
-      FROM r
-      WINDOW v AS (PARTITION BY security_id ORDER BY observation_date
-             ROWS BETWEEN 251 PRECEDING AND CURRENT ROW)
-    ),
-    d AS (
+    WITH d AS (
       SELECT security_id, ex_dividend_date, amount, provider, frequency
       FROM raw.dividend_data
       WHERE amount > 0
@@ -482,6 +470,79 @@ def build_features(date_from=None, date_to=None):
               'CommonStockDividendsPerShareDeclared',
               'CommonStockDividendsPerShareCashPaid',
               'PreferredStockDividendsPerShareDeclared'))
+    ),
+    -- Each payment is booked to the first price observation on or after its
+    -- ex-date, because an ex-date can fall on a day the price series has no row
+    -- (a weekend, or a gap in the stored history) and a join on equality would
+    -- silently drop it. The lookup is an index probe per payment, not a scan of
+    -- the 9M-row price table.
+    --
+    -- Only the per-payment OPENBB series is used. XBRL reports an annual
+    -- per-share total with a fiscal period end, not an ex-date, so booking it to
+    -- a day would invent a payment date and double count a payer both sources
+    -- cover -- the same reason annual_dividend never sums across providers.
+    --
+    -- A payment booked to a security's first price row, or before it, has no
+    -- prior close to be a return against, and drops out of the return below.
+    div_on_row AS (
+      SELECT e.security_id, m.observation_date, SUM(e.amount) AS amount
+      FROM (SELECT security_id, ex_dividend_date, SUM(amount) AS amount
+            FROM d WHERE provider = 'OPENBB'
+            GROUP BY 1, 2) e
+      CROSS JOIN LATERAL (
+        SELECT observation_date FROM raw.market_data m
+        WHERE m.security_id = e.security_id
+          AND m.observation_date >= e.ex_dividend_date
+          AND m.close IS NOT NULL
+        ORDER BY m.observation_date
+        LIMIT 1) m
+      GROUP BY 1, 2
+    ),
+    r AS (
+      -- daily_total_return is ln((close + dividend) / prior close): the
+      -- dividend is credited on its ex-date, which is when the price drops by
+      -- it, so the two cancel and the window below measures what a holder
+      -- earned rather than the price alone. Summing logs over a window and
+      -- exponentiating compounds the daily returns, i.e. the dividend is
+      -- treated as reinvested at the close of its ex-date.
+      --
+      -- A single payment larger than the prior close is a unit or currency
+      -- error, not a dividend (19 of 65,351 stored events, one of them 2.1
+      -- million per share), and one such row would turn a 63-day return into
+      -- a number no holder ever earned. It is left out of the return rather
+      -- than the whole security.
+      SELECT m.security_id, m.observation_date, m.close,
+        LN(m.close/NULLIF(LAG(m.close) OVER w,0)) daily_return,
+        LN((m.close + CASE WHEN dv.amount <= :max_payment_ratio * LAG(m.close) OVER w
+                           THEN dv.amount ELSE 0 END)
+           /NULLIF(LAG(m.close) OVER w,0)) daily_total_return
+      FROM raw.market_data m
+      LEFT JOIN div_on_row dv ON dv.security_id = m.security_id
+                             AND dv.observation_date = m.observation_date
+      WHERE m.close IS NOT NULL
+      WINDOW w AS (PARTITION BY m.security_id ORDER BY m.observation_date)
+    ),
+    p AS (
+      -- daily_vol must be earned, not assumed. STDDEV_SAMP returns a number
+      -- from two samples, so without the sample-count guard volatility_252d
+      -- was populated from 3 observations and annualised by sqrt(252) -- a
+      -- value that is not a 252-day volatility at all. Require a full window.
+      --
+      -- The same holds for the return windows: a trailing return needs every
+      -- one of its 63 or 252 daily returns, which is the same condition the
+      -- old close / LAG(close, n) form had (a row n observations back exists).
+      SELECT security_id, observation_date, close,
+        COUNT(daily_return) OVER v AS vol_samples,
+        STDDEV_SAMP(daily_return) OVER v AS daily_vol,
+        COUNT(daily_total_return) OVER v63 AS tr_samples_63,
+        SUM(daily_total_return) OVER v63 AS tr_sum_63,
+        COUNT(daily_total_return) OVER v AS tr_samples_252,
+        SUM(daily_total_return) OVER v AS tr_sum_252
+      FROM r
+      WINDOW v AS (PARTITION BY security_id ORDER BY observation_date
+             ROWS BETWEEN 251 PRECEDING AND CURRENT ROW),
+             v63 AS (PARTITION BY security_id ORDER BY observation_date
+             ROWS BETWEEN 62 PRECEDING AND CURRENT ROW)
     ),
     -- One annual dividend per (security, as_of_date), never a sum across
     -- providers: XBRL reports an annual per-share total while OpenBB reports
@@ -508,18 +569,28 @@ def build_features(date_from=None, date_to=None):
     ),
     -- Prior-year dividend, for growth.
     --
-    -- Two sources, because neither alone spans the history. The per-payment
-    -- OPENBB series only starts 2025-01-02, so a trailing-365-day comparison
-    -- against it is undefined for every labelled row (all of which end
-    -- 2025-09-25) and would leave dividend_growth at zero coverage exactly
-    -- where the model needs it. The SEC XBRL annual series reaches back to
-    -- 2007, so it supplies the prior year.
+    -- Two sources, because neither alone spans every security. The per-payment
+    -- OPENBB series was first pulled with only the 2025-01-02 lookback, so a
+    -- trailing-365-day comparison against it was undefined for every labelled row
+    -- (all of which end 2025-09-25); securities since pulled with full history
+    -- have it, the rest still do not. The SEC XBRL annual series reaches back to
+    -- 2007, so it supplies the prior year where OPENBB cannot.
     --
     -- The two are compared on the same basis within each source: two trailing
     -- 365-day payment windows for OPENBB, and the two most recent annual
     -- declarations for XBRL. They are never mixed, so a growth figure is
     -- always like-for-like. The OPENBB path is preferred because a payment
     -- series is fresher than an annual declaration.
+    -- The first per-payment record held for each security. The prior-year window
+    -- below is only *observed* from this date on: before it, a missing payment means
+    -- the pull started late (the 2025-01-02 lookback) or the issuer had not begun
+    -- paying, and a stub first payment compared with a full year reads as growth
+    -- of thousands of percent.
+    d_first AS (
+      SELECT security_id, MIN(ex_dividend_date) AS first_ex
+      FROM d WHERE provider = 'OPENBB'
+      GROUP BY 1
+    ),
     d_prior_paid AS (
       SELECT p.security_id, p.observation_date, SUM(d.amount) AS prior_dividend
       FROM (SELECT DISTINCT security_id, observation_date FROM raw.market_data
@@ -621,14 +692,24 @@ def build_features(date_from=None, date_to=None):
     -- distinct quarters and the ranking deterministic. Preferring a non-null
     -- figure first is what keeps a label that reports the period without a value
     -- from masking one that does.
+    -- A vintage is available from the later of its filing date and its period
+    -- end. A period cannot be reported before it has finished, so a filed date
+    -- earlier than period_end is a bad date (966 stored rows, 612 of them more
+    -- than a year early; the worst period_end is 2039), and taking it at face
+    -- value shows the figures to observation dates before the period existed.
+    -- The clamp is conservative rather than exact: the true filing date is
+    -- unknown, but it cannot precede the period it reports.
     q_quarterly AS (
-      SELECT DISTINCT ON (pf.security_id, pf.period_end, pf.filed)
-             pf.security_id, pf.period_end, pf.filed, pf.eps, pf.free_cash_flow,
+      SELECT DISTINCT ON (pf.security_id, pf.period_end,
+                          GREATEST(pf.filed, pf.period_end))
+             pf.security_id, pf.period_end,
+             GREATEST(pf.filed, pf.period_end) AS filed,
+             pf.eps, pf.free_cash_flow,
              pf.operating_income, pf.depreciation_amortization, pf.interest_expense,
              pf.revenue
       FROM fundamentals.periodic_financials pf
       WHERE pf.fiscal_period IN ('Q1', 'Q2', 'Q3', 'Q4')
-      ORDER BY pf.security_id, pf.period_end, pf.filed,
+      ORDER BY pf.security_id, pf.period_end, GREATEST(pf.filed, pf.period_end),
                (pf.eps IS NULL), pf.fiscal_period
     ),
     -- Each metric gets its own chain, because "public" is a property of the
@@ -704,10 +785,11 @@ def build_features(date_from=None, date_to=None):
       GROUP BY 1, 2
     ),
     fy_vintages AS (
-      SELECT pf.security_id, pf.period_end, pf.filed,
-             LEAD(pf.filed) OVER (
+      SELECT pf.security_id, pf.period_end,
+             GREATEST(pf.filed, pf.period_end) AS filed,
+             LEAD(GREATEST(pf.filed, pf.period_end)) OVER (
                PARTITION BY pf.security_id, pf.period_end
-               ORDER BY pf.filed) AS filed_next,
+               ORDER BY GREATEST(pf.filed, pf.period_end), pf.filed) AS filed_next,
              pf.eps, pf.free_cash_flow,
              pf.operating_income, pf.depreciation_amortization,
              pf.interest_expense, pf.revenue, pf.debt,
@@ -748,6 +830,7 @@ def build_features(date_from=None, date_to=None):
       -- fall to zero is not a growth rate. Both sides of a comparison come
       -- from the same source so the basis matches.
       CASE WHEN d_prior_paid.prior_dividend > 0
+                AND d_first.first_ex <= p.observation_date - INTERVAL '730 days'
            THEN d_paid_prior_window.current_dividend
                 / d_prior_paid.prior_dividend - 1
            WHEN ann.current > 0 AND ann.prior > 0
@@ -830,8 +913,14 @@ def build_features(date_from=None, date_to=None):
            THEN (fy.debt_maturing_12m_fy + 0.5 * fy.debt_maturing_year_2_fy)
                 / (fy.cash_fy + COALESCE(fy.committed_undrawn_fy, 0))
       END refinancing_wall,
-      CASE WHEN p.p252>0 THEN p.close/p.p252-1 END momentum_252d,
-      CASE WHEN p.p63>0 THEN p.close/p.p63-1 END momentum_63d,
+      -- Total return over the trailing 252 / 63 observations: price change plus
+      -- dividends, so a payer is not scored as if its income did not exist.
+      -- A security with no stored per-payment dividends reads as a price
+      -- return, which is its total return only when it pays nothing; that is
+      -- the gap momentum cannot see, and it is measured in the audit, not
+      -- patched here.
+      CASE WHEN p.tr_samples_252 >= 252 THEN EXP(p.tr_sum_252) - 1 END momentum_252d,
+      CASE WHEN p.tr_samples_63 >= 63 THEN EXP(p.tr_sum_63) - 1 END momentum_63d,
       -- 252 trailing returns are required before this is a 252-day
       -- volatility; before that the sample count cannot support the claim.
       CASE WHEN p.vol_samples >= 252 THEN p.daily_vol*sqrt(252) END
@@ -843,6 +932,7 @@ def build_features(date_from=None, date_to=None):
                     AND d_paid.observation_date=p.observation_date
     LEFT JOIN d_declared ON d_declared.security_id=p.security_id
                          AND d_declared.observation_date=p.observation_date
+    LEFT JOIN d_first ON d_first.security_id=p.security_id
     LEFT JOIN d_prior_paid ON d_prior_paid.security_id=p.security_id
                            AND d_prior_paid.observation_date=p.observation_date
     LEFT JOIN d_paid_prior_window ON d_paid_prior_window.security_id=p.security_id
@@ -862,6 +952,7 @@ def build_features(date_from=None, date_to=None):
     params = {
         "date_from": date_from or date.min,
         "date_to": date_to or date.max,
+        "max_payment_ratio": MAX_SINGLE_PAYMENT_RATIO,
     }
     df = read_df(sql, params)
     annual = df["annual_dividend"]

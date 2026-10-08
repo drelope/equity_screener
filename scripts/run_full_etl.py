@@ -373,6 +373,13 @@ def main():
 
     started_at = datetime.now(timezone.utc)
     stages = {}
+    # Per-stage wall time, attached to the stages record under a reserved key
+    # just before it is written: the journal does not survive a reboot (the
+    # Oct 6 power cycle erased three healthy runs' stage timings),
+    # audit.nightly_runs does. Consumers compare status values with ==, which a
+    # dict never equals, and the key is attached last so insertion order still
+    # reads as the order the stages ran.
+    stage_seconds = {}
     all_ok = True
 
     try:
@@ -394,9 +401,11 @@ def main():
             audit row can still distinguish the populations while the subprocess
             always names a module that actually exists.
             """
+            stage_started = time.monotonic()
             ok = run_module(module, extra, skip=skip)
             key = label or module
             stages[key] = "skipped" if skip else ("ok" if ok else "failed")
+            stage_seconds[key] = round(time.monotonic() - stage_started, 1)
             return ok
 
         # Preflight, before any long stage. A stage that reads a column the
@@ -514,7 +523,11 @@ def main():
         ):
             all_ok = False
 
-        if all_ok and not stage("scripts.score_rank", [], args.skip_derived):
+        # --prune-superseded drops predictions of superseded runs at the scored
+        # date; without it a features mid-rebuild leaves a mixed-date view that
+        # no later nightly touches again (its prune only ever sees the newest
+        # date). Retention of older dates is unaffected.
+        if all_ok and not stage("scripts.score_rank", ["--prune-superseded"], args.skip_derived):
             all_ok = False
 
         # The audit snapshot runs last so it records the scores just written.
@@ -527,6 +540,7 @@ def main():
                 all_ok = False
 
         exit_code = 0 if all_ok else 1
+        stages["_seconds"] = stage_seconds
         record_nightly_run(args.trigger, started_at, stages, exit_code)
 
         if all_ok:

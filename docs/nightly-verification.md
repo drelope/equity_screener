@@ -31,10 +31,11 @@ covered.
 |---|---|---|
 | **Nightly run record** | `audit.nightly_runs` | a `success` run (exit 0) exists for the run date |
 | **Stages** | `nightly_runs.stages` | no stage recorded `failed` |
-| **Freshness (data-module audit)** | `MAX(retrieved_at)` in `raw.ticker_profile`, `raw.dividend_data`, `raw.market_data`; `MAX(updated_at)` in `reference.securities`; **`MIN(retrieved_at)`** in `raw.companyfacts` | each source within its own bound in `FRESHNESS_SOURCES` (26 h; 8 d for `raw.companyfacts`, which is a weekly-refresh snapshot). `--max-age-hours` is the fallback for a source with no bound of its own |
+| **Freshness (data-module audit)** | `MAX(retrieved_at)` in `raw.ticker_profile`, `raw.dividend_data`, `raw.market_data`; `MAX(updated_at)` in `reference.securities`; **`MIN(retrieved_at)`** in `raw.companyfacts` | each source within its own bound in `FRESHNESS_SOURCES` (currently the PoC bounds: **240 h** for the four daily sources, **504 h** for `raw.companyfacts` — see the PoC note below, these are not the deployable values). `--max-age-hours` is the fallback for a source with no bound of its own |
 | **Data quality** | `audit.data_quality` (run date) | mean `quality_score` ≥ 0.50 and ≥ 80% rated good/fair |
 | **Dividend accrual coverage** | `raw.dividend_data` × `reference.securities` dividend universe in the lookback window (2025-01-01) | ≥ 95% of the universe covered |
-| **Walk-forward gate** | latest `audit.model_runs` | `recall >= MIN_RECALL`; *info* until real labels accrue |
+| **Walk-forward verdict** | latest `audit.model_runs` | *info*: while the verdict is `no_go` (accepted 2026-10-06; rule-based scoring is in use) it never alarms and never reads as a pass. A `go` row is checked against `recall >= MIN_RECALL` |
+| **Ticker conflicts** | open `TICKER_CIK_CONFLICT` rows in `audit.quarantined_values` | none open (see below) |
 
 Thresholds are overridable (e.g. `--min-coverage 0.90`). Every run inserts a
 verification row into `audit.nightly_checks` (disable with `--no-check-log`,
@@ -45,9 +46,9 @@ label ownership with `--verified-by`, annotate with `--notes`).
 ```
 Nightly verification for 2026-09-23 -> ATTENTION
 [ !! ] nightly_run_record: no audit.nightly_runs row
-[ OK ] freshness: raw.ticker_profile 4.0h (SLA 26.0h); raw.dividend_data 21.6h (SLA 26.0h);
-     raw.market_data 22.4h (SLA 26.0h); reference.securities 4.0h (SLA 26.0h);
-     raw.companyfacts 71.6h (SLA 192.0h)
+[ OK ] freshness: raw.ticker_profile 4.0h (SLA 240.0h); raw.dividend_data 21.6h (SLA 240.0h);
+     raw.market_data 22.4h (SLA 240.0h); reference.securities 4.0h (SLA 240.0h);
+     raw.companyfacts 71.6h (SLA 504.0h)
 [ !! ] data_quality: mean quality 0.00 (min 0.5), good/fair share 0% (min 80%), n=0
 [ !! ] dividend_coverage: 0/4789 dividend securities covered in lookback (0%, min 95%)
 [info] walk_forward_gate: no model_runs yet; gate pending real-data accrual
@@ -60,8 +61,9 @@ rows is not aged — an unmeasured source must not read as a stale one.
 `raw.companyfacts` holds one immutable snapshot of each issuer's entire SEC
 history and is refreshed on a weekly cycle
 (`run_full_etl --companyfacts-refresh-after-days`, default 5; `--refresh` forces a
-re-fetch now). Its 8-day bound is matched to that cadence, not chosen to make the
-current data pass: a nightly that stops running still ages it past 8 days.
+re-fetch now). Its bound is matched to that cadence rather than chosen to make the
+current data pass — 8 days once the bounds are reverted (below), 21 days as the
+current PoC value: a nightly that stops running still ages it out either way.
 
 It is also the one source aged by `MIN` rather than `MAX`, because a refresh run
 rewrites every due row: its age is the age of the **stalest payload still
@@ -79,11 +81,12 @@ not refreshed*, not that the table is stale — the detail line reports the age,
 the per-CIK accounting (`refreshed` / `skipped` / `deferred`) is in the stage log.
 
 Note the margin. The age at check time is `cadence + days missed`, so the
-tolerance is `bound - cadence`, not the cadence itself. At 5 days against an
-8-day bound that is **3 consecutive missed nightlies**; stage 4a at 3 days
-tolerates 5. The earlier 7-day default tolerated only 1 — one laptop lid closed
-at 03:00 was a breach — which is why it is 5. A test pins the relationship so the
-two constants cannot drift apart silently.
+tolerance is `bound - cadence`, not the cadence itself. At 5 days against the
+reverted 8-day bound that is **3 consecutive missed nightlies** (against the
+current 21-day PoC bound it is 16); stage 4a at 3 days tolerates 5 of the
+reverted bound. The earlier 7-day default tolerated only 1 — one laptop lid
+closed at 03:00 was a breach — which is why it is 5. A test pins the
+relationship so the two constants cannot drift apart silently.
 
 **These bounds are currently PoC bounds and must be reverted before deployment.**
 `FRESHNESS_SOURCES` holds `POC_DAILY_BOUND_HOURS` (240h) and
@@ -95,7 +98,13 @@ cadence is 2 hours of tolerance — less than one missed nightly. See
 restore and the reasoning. A test asserts every bound is looser than the cadence it
 covers, so a healthy nightly cannot breach its own check.
 
-Before the first historical data has accrued, `[!!]` on run record / data
+`n=0` on data quality does **not** mean the pipeline has never run.
+`populate_audit` is stage 9: `run_full_etl` skips every stage after the first
+failure, so the newest `audit.data_quality` date stays wherever the last run
+that reached stage 9 left it (currently 2026-10-04). Read
+`nightly_runs.stages` first — `[!!]` on run record or stages names the real
+cause, and the data-quality/coverage lines are then downstream symptoms.
+Before any historical data has accrued at all, `[!!]` on run record / data
 quality / coverage is **expected** — it means "the pipeline has not run yet".
 The objective is to reach a green morning verification once accrual starts.
 
@@ -112,10 +121,87 @@ The objective is to reach a green morning verification once accrual starts.
    ingestion or schema drift. Check `audit.data_quality` for the worst
    securities, then re-run `populate_audit` after the ETL.
 4. **Coverage far below 95%** — check the lookback config
-   (`DIVIDEND_LOOKBACK_START`) and that stage 2 ran against the full universe
+   (`DIVIDEND_LOOKBACK_START`) and that stage 3 ran against the full universe
    (not `--limit`/`--tickers`).
 5. **After any fix:** re-run `python -m scripts.verify_nightly_run --notes "fixed X"`
    and keep the attention record with a dated note.
+
+### A ticker/CIK conflict is a warning, not a failure
+
+`populate_raw_tables` skips a ticker that the SEC snapshot now assigns to a
+different CIK than the one a `reference.securities` row still references, and
+finishes with exit 0. It never overwrites or re-keys the existing mapping, and the
+stage is still recorded as `ok`. The stage writes each skipped conflict to
+`audit.quarantined_values` (`table_schema = 'raw'`, `rule = TICKER_CIK_CONFLICT`, the
+ticker as `row_key`, the incoming CIK as `observed_value`), and `verify_nightly_run`
+reports any open row as **attention** (`ticker_conflicts`). A conflict SEC stops
+reporting is resolved automatically on the next full run; one an operator released
+is reopened if it returns. A `--limit` run or the offline re-read never resolves
+anything, because it sees only part of the file. The journal still has the detail:
+
+```
+journalctl -u dividend-etl | grep -E "ticker_cik_conflict|completed with warnings"
+```
+
+Each conflict is one JSON line (`conflict_type: TICKER_CIK_CONFLICT`, both CIKs and
+issuer names, `resolution: MANUAL_REVIEW_REQUIRED`). The skipped ticker stays out of
+`raw.company_ticker` and so out of `reference.securities` until someone decides who
+owns it. A run in which *every* ticker conflicts writes nothing and still fails.
+
+#### Resolving a conflict
+
+The decision and the remedy are two commands in `scripts.resolve_ticker_conflict`.
+
+```
+python -m scripts.resolve_ticker_conflict review --ticker PORT-UN
+```
+
+`review` is read-only. It re-derives the conflict exactly as the stage does and asks
+SEC's own per-issuer submissions (live, falling back to the stored copy) which issuer
+lists the ticker:
+
+| Result | Meaning | Action |
+|---|---|---|
+| `STALE` | SEC lists the ticker under the incoming CIK and no longer under the existing one | release it |
+| `INCOMING_WRONG` | SEC still lists it under the existing CIK and not the incoming one | leave it; `release` refuses |
+| `AMBIGUOUS` | both list it, neither does, or an issuer's submissions are unavailable or list no tickers (SEC leaves the list empty for a brand-new registrant, so empty means unknown, not absent) | leave it, or verify externally and release with `--basis` |
+
+Newer is not the test. Only SEC moving the ticker counts, and every doubt resolves to
+`AMBIGUOUS`, which changes nothing and keeps reporting a warning nightly.
+
+**Why "release" removes the row instead of deactivating it.** Deactivating or
+re-keying cannot free a ticker. `populate_securities` sets `active = TRUE` for every
+`raw.company_ticker` row on every run, and `fk_securities_company_ticker` keeps
+referencing a row whether it is active or not, so an inactive row still blocks
+`raw.company_ticker` from changing the CIK. The key is `(ticker, cik)` and
+`company_ticker` holds one CIK per ticker, so there is no re-key. Removal is the only
+thing that releases the ticker, which is why it is gated.
+
+```
+python -m scripts.resolve_ticker_conflict release --ticker PORT-UN --reviewed-by <you>
+python -m scripts.resolve_ticker_conflict release --ticker PORT-UN --reviewed-by <you> \
+    --execute --confirm PORT-UN [--basis "<evidence>"]
+```
+
+The first form is a dry run and prints what would be deleted per table. `--execute`
+needs `--confirm` to repeat the ticker, takes the pipeline lock (so it cannot overlap a
+nightly), and in one transaction:
+
+1. writes every row it will delete to `data/ticker_conflict_archive/<ticker>_<cik>_<utc>.json`
+   and flushes it to disk, before any delete (`data/` is git-ignored, so this archive is
+   local; copy it somewhere durable if the history matters);
+2. deletes children before parents, using the foreign-key graph read from the live
+   catalog rather than a hand-kept table list, and aborts if any delete count differs
+   from the plan;
+3. aborts if the stale mapping is still referenced afterwards;
+4. records the release in `audit.quarantined_values` (`rule = TICKER_CIK_CONFLICT`,
+   `resolved_at` set, reviewer, classification, basis and archive name in
+   `resolution_note`).
+
+It does not touch `raw.company_ticker`. The next ordinary `populate_raw_tables` run
+finds the ticker unreferenced and ingests the incoming CIK with no override. Only the
+ticker in question is removed: other tickers of the same issuer (for `PORT-UN`, `ANGX`)
+are untouched. Restoring from the archive is manual; the file holds each row as JSON.
 
 ## Audit trail
 

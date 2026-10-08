@@ -21,13 +21,13 @@ Stack:
 
 System Architecture:
 - Data Collection: SEC EDGAR API (filings, facts) + OpenBB (ratios, fundamentals, valuations)
-- Orchestration: scripts.run_full_etl (stages 0-4); Apache Airflow optional
+- Orchestration: scripts.run_full_etl (stages 0-9, plus optional labels as stage 10); the nightly run is started by a host systemd timer, Apache Airflow optional
 - Data Lake (raw): PostgreSQL (Dockerized, localhost)
 - Data Warehouse (Silver/Gold): PostgreSQL
 - Transformation: dbt (Data Build Tool)
 - API Layer: FastAPI, SQLAlchemy, Pydantic
 - ML: scikit-learn, xgboost, lightgbm, catboost, prophet
-- Streamlit: web app
+- Streamlit: web app (data views, operations console)
 
 Pipeline:
 SEC + OpenBB/API -> raw PostgreSQL -> normalized features -> rules score + ML -> walk-forward evaluation -> rankings -> Streamlit.
@@ -42,14 +42,18 @@ header:
 # Generate one; do not invent a value by hand. Anything you paste into a README,
 # a commit or a chat window is a published secret.
 export API_KEY="$(openssl rand -hex 32)"
-uvicorn api.main:app --host 0.0.0.0 --port 8000
+uvicorn api.main:app --host 127.0.0.1 --port 8000
 ```
+
+Bind to `127.0.0.1` unless you deliberately want the API reachable from other
+machines; `0.0.0.0` listens on every interface.
 
 Available routes include `/companies/`, `/companies/{ticker}`,
 `/filings/{ticker}`, `/facts/{ticker}`, `/financials/{ticker}`, the
 `/openbb/` supplementary routes, and `/metrics/enriched/{ticker}`. The API
-service is also available through Docker Compose on port `8000`; set `API_KEY`
-before running `docker compose up -d api`.
+service is also available through Docker Compose, published on
+`127.0.0.1:8000`; Compose refuses to start it unless `API_KEY` is set (see
+[Compose services](#compose-services)).
 
 If SEC has no Company Facts dataset for an issuer, `/facts/{ticker}` returns
 HTTP `404` with error code `SEC_COMPANYFACTS_UNAVAILABLE` and the normalized
@@ -75,11 +79,42 @@ CIK. This is an expected unavailable-data response, not an API outage.
 
 ## Install
 
+Python and the scripts run where the virtual environment was created. On this
+checkout `.venv` is a **Linux venv created in WSL** (it has `bin/`, not
+`Scripts/`), and Windows has no Python installed, so `python -m scripts...` in a
+Windows PowerShell fails with "Python was not found" before it ever reaches the
+database. Use one of these:
+
+- **WSL (recommended here).** Open the Ubuntu terminal and run everything from
+  the repository root:
+
+  ```bash
+  cd /mnt/d/dividend_equity_crispdm_implementation/dividend_equity_crispdm
+  source .venv/bin/activate
+  python -m pip install -r requirements-dev.txt
+  python -m scripts.init_db
+  ```
+
+  Docker publishes PostgreSQL on `127.0.0.1:5432`, which WSL reaches as
+  `localhost`, so the default `DATABASE_URL` works unchanged.
+
+- **Native Windows.** Install Python 3.10-3.14 from python.org (not the Microsoft
+  Store shortcut), then create a separate environment; do not reuse the WSL
+  `.venv`:
+
+  ```powershell
+  py -3 -m venv .venv-win
+  .venv-win\Scripts\activate
+  python -m pip install -r requirements-dev.txt
+  python -m scripts.init_db
+  ```
+
+On macOS/Linux:
+
 ```bash
 cd /path/to/dividend_equity_crispdm
 python -m venv .venv
-# macOS/Linux: source .venv/bin/activate
-# Windows:      .venv\Scripts\activate
+source .venv/bin/activate
 python -m pip install -r requirements-dev.txt
 ```
 
@@ -98,7 +133,58 @@ path instead:
 
 Run this from the repository root. With Docker Desktop and WSL, start Docker
 Desktop first and enable WSL integration for the distribution. Docker Compose v2
-uses `docker compose`; older installations use `docker-compose`:
+uses `docker compose`; older installations use `docker-compose`.
+
+**`API_KEY` must be set in the shell for every Compose command**, even
+`up -d postgres`: Compose interpolates the whole file, and the `api` service
+declares it required (`${API_KEY:?...}`), so without it every command fails with
+`required variable API_KEY is missing a value`. An exported variable lasts only
+for that terminal session, so repeat step 2 in each new terminal. A variable
+exported in the shell takes precedence over `API_KEY` in `.env`.
+
+1. Generate a key once and keep it (this is the value clients send as
+   `X-API-Key`; never commit it). Skip this if `.env` already has an `API_KEY=`
+   line.
+
+   ```bash
+   # bash / WSL
+   echo "API_KEY=$(openssl rand -hex 32)" >> .env
+   ```
+
+   ```powershell
+   # PowerShell
+   $b = New-Object byte[] 32
+   [System.Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($b)
+   Add-Content .env ("API_KEY=" + (-join ($b | ForEach-Object { $_.ToString('x2') })))
+   ```
+
+2. Export it in the current shell, from the repository root, before any
+   `docker compose` command:
+
+   ```bash
+   # bash / WSL
+   export API_KEY="$(grep '^API_KEY=' .env | cut -d= -f2-)"
+   ```
+
+   ```powershell
+   # PowerShell
+   $env:API_KEY = (Select-String -Path .env -Pattern '^API_KEY=').Line -replace '^API_KEY=', ''
+   ```
+
+3. Check that Compose accepts it (prints nothing on success):
+
+   ```bash
+   docker compose config --quiet
+   ```
+
+   If this reports the missing-variable error, `API_KEY` is not set in this
+   terminal; repeat step 2.
+
+To call the API, send the same value in the header:
+`curl -H "X-API-Key: $API_KEY" http://127.0.0.1:8000/companies/`.
+
+If you change the key, recreate the service so it picks it up:
+`docker compose up -d --force-recreate api`.
 
 ```bash
 # Compose v2
@@ -109,6 +195,46 @@ docker compose ps postgres
 docker-compose up -d postgres
 docker-compose ps postgres
 ```
+
+### Compose services
+
+`docker-compose.yml` defines five services. All published ports are bound to
+`127.0.0.1` only, so nothing is reachable from other machines by default; put a
+tunnel or authenticating proxy in front if you need that.
+
+| Service | Purpose | Port | Notes |
+| --- | --- | --- | --- |
+| `postgres` | Warehouse (PostgreSQL 17.11, image pinned by digest) | `127.0.0.1:5432` | Data in the `pgdata` volume; `sql/schema.sql` runs on first initialization only. |
+| `migrate` | One-shot `python -m scripts.migrate` | — | `streamlit`, `api` and `worker` wait for it to complete successfully. |
+| `streamlit` | Web app (see [Web app](#web-app-streamlit)) | `127.0.0.1:8501` | Read-only unless `OPS_ADMIN_TOKEN` is set. |
+| `api` | FastAPI service | `127.0.0.1:8000` | **`API_KEY` is required**; Compose fails fast on any command if it is unset. |
+| `worker` | Runs tasks queued from the Operations page and queues schedules (`python -m scripts.ops_worker`) | — | Executes only the commands in `src/crispdm/ops/catalog.py`. Does not schedule the nightly ETL. |
+
+```bash
+docker compose up -d          # postgres -> migrate -> streamlit, api, worker
+docker compose ps
+```
+
+Environment read by Compose (put it in `.env` or export it):
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `POSTGRES_PASSWORD` | `dividend` | Database password. The default is for a loopback-only laptop; change it before the container is reachable by anyone else. If you change it, update `DATABASE_URL` for host-side scripts to match. |
+| `API_KEY` | none (required) | Shared key for the API's `X-API-Key` header. Export it in the shell for every Compose command, not just `api` (steps above). |
+| `OPS_ADMIN_TOKEN` | empty | Operator sign-in for the web app (12+ characters). Empty = read-only. |
+| `SEC_USER_AGENT` | placeholder | Real contact string for SEC requests; the worker's SEC tasks fail while it is the placeholder. |
+
+The `postgres` service is tuned for this warehouse (about 11 GB) on SSD/NVMe
+rather than PostgreSQL's defaults: `shared_buffers=2GB`, `work_mem=32MB`,
+`maintenance_work_mem=1GB`, `random_page_cost=1.1`,
+`effective_io_concurrency=200`, `checkpoint_timeout=15min`, `max_wal_size=4GB`,
+and a 512 MB `/dev/shm`. `pg_stat_statements` is loaded, and `log_lock_waits=on`
+makes a statement queued behind a lock name its blocker in the log. The
+container is capped at `mem_limit: 10g` so PostgreSQL and a peak-memory ETL stage
+cannot together exhaust the 24 GB WSL2 VM (`.wslconfig`, memory=24GB); under
+pressure the cap costs file cache
+rather than triggering an OOM kill. Adjust these in `docker-compose.yml` if your
+host or data size differs.
 
 ## Initialize the database
 
@@ -137,18 +263,31 @@ initialized. The recommended entrypoint is the orchestrated pipeline:
 cd /path/to/dividend_equity_crispdm
 
 # Reference tables → dividend data (SEC + OpenBB) → companyfacts/submissions
-# → sec_documents concept groups. Stage 0 loads standardized SEC ticker and
-# profile summaries for dividend payers; stages 2-4 only touch dividend-flagged
-# tickers, so non-payers are never requested from SEC or OpenBB.
+# → sec_documents concept groups → fundamentals → features → scores/rankings
+# → audit. Stage 0 loads standardized SEC ticker and profile summaries for
+# dividend payers; stages 2-5 only touch dividend-flagged tickers, so
+# non-payers are never requested from SEC or OpenBB. A `migrate --check`
+# preflight refuses to start if any migration on disk is unapplied. Every run is
+# recorded in audit.nightly_runs for scripts.verify_nightly_run.
 python -m scripts.run_full_etl
 
 # Testing/partial runs (stage skips pass through --limit/--tickers/--sources):
 python -m scripts.run_full_etl --limit 50
 python -m scripts.run_full_etl --tickers ACR-PC,ACR-PD,LFMDP --sources openbb
 python -m scripts.run_full_etl --skip-companyfacts --skip-sec-documents
+
+# Skip the offline derived stages (fundamentals, features, scoring, audit)
+python -m scripts.run_full_etl --skip-derived
 ```
 
-The individual stages behind `run_full_etl`:
+Stored SEC companyfacts payloads are re-fetched once they are older than
+`--companyfacts-refresh-after-days` (default 5); otherwise a stored CIK would be
+skipped forever and its filings frozen at first sighting. Stage 10 (labels) is
+opt-in (`--run-labels`) and refused on `--limit`/`--tickers` runs. Run
+`python -m scripts.run_full_etl --help` for every flag.
+
+The individual stages behind `run_full_etl`, numbered as `run_full_etl` numbers
+them:
 
 ```bash
 # Stage 0 — Populate raw schema tables with standard attributes based on
@@ -160,14 +299,17 @@ python -m scripts.populate_raw_tables --limit 100
 
 # Stage 1 — Populate exchanges, issuers, and audited securities from the raw
 # ticker universe. Marks dividend = TRUE from SEC company facts, defining the
-# dividend universe every later stage is gated on. Dividend recency enforcement
-# is opt-in: set ENFORCE_DIVIDEND_RECENCY=true to require a positive dividend
-# fact whose period ends within DIVIDEND_RECENCY_DAYS (548) of the
-# classification date. Off (the default) uses the historical any-positive-fact
-# rule, so an unattended nightly cannot silently flip the universe.
+# dividend universe every later stage is gated on. Recency is enforced (since
+# 2026-10-06): a security needs a positive per-share dividend fact whose period
+# ends within DIVIDEND_RECENCY_DAYS (548) of the classification date, or a
+# payment already observed in raw.dividend_data inside that window. Set
+# ENFORCE_DIVIDEND_RECENCY=false to restore the any-positive-fact-ever rule.
 python -m scripts.populate_reference_tables --limit 100
 
-# Stage 2 — Load dividend records from SEC XBRL and/or OpenBB, then populate
+# Stage 2 — Daily OHLCV prices into raw.market_data (dividend universe only)
+python -m scripts.populate_market_data
+
+# Stage 3 — Load dividend records from SEC XBRL and/or OpenBB, then populate
 # preferred.security_terms and raw.ticker_profile summaries. OpenBB starts at
 # DIVIDEND_LOOKBACK_START (default 2025-01-01 = the 12-month lookback) and
 # accrues forward; add --full-history after the PoC gate for total history.
@@ -181,7 +323,7 @@ python -m scripts.populate_clean_ticker_profile
 # Epoch fields become UTC dates/timestamps; omitted compensation remains NULL.
 python -m scripts.populate_clean_company_profile
 
-# Stage 3 — Load SEC submissions and complete companyfacts (dividend payers
+# Stage 4 — Load SEC submissions and complete companyfacts (dividend payers
 # only by default; add --preferred-facts to target preferred stocks recorded
 # in raw.ticker_profile, or --preferred-taxonomy to download taxonomy-scoped
 # XBRL concept facts via the SEC XBRL Data API for preferred stocks in
@@ -196,17 +338,22 @@ python -m scripts.populate_companyfacts --preferred-taxonomy --tickers ACR-PC,AC
 python -m scripts.populate_companyfacts --preferred
 python -m scripts.populate_companyfacts --preferred-taxonomy
 
-# Stage 4 — Refresh raw.sec_documents concept-group metadata without new SEC
+# Stage 5 — Refresh raw.sec_documents concept-group metadata without new SEC
 # requests (dividend payers only by default)
 python -m scripts.populate_sec_documents --tickers AAPL,MSFT,JNJ
 
-# Stage 5 — Offline derived financials over stored XBRL (no network)
+# Stage 6 — Offline derived financials over stored XBRL (no network)
 python -m scripts.populate_fundamentals
 
-# Stage 6 — Offline audit lineage/quality over stored data (no network)
+# Stages 7-8 — Offline features (model.features) and rule-based scores,
+# predictions and rankings (model.scores/predictions/rankings)
+python -m scripts.build_features
+python -m scripts.score_rank
+
+# Stage 9 — Offline audit lineage/quality over stored data (no network)
 python -m scripts.populate_audit
 
-# Stage 7 (optional) — Populate the offline ML target from future dividend
+# Stage 10 (optional) — Populate the offline ML target from future dividend
 # events once ~12 months of history exists; refused on --limit/--tickers runs
 python -m scripts.label_targets
 ```
@@ -320,7 +467,8 @@ when a positive dividend or owner-distribution fact is reported. The columns
 `sec_data_status` retains the `available`/`unavailable` classification status
 for auditability.
 
-Build features and score the latest feature date after source data is loaded:
+`run_full_etl` already runs these as stages 7-8; to build features and score the
+latest feature date by hand after source data is loaded:
 
 ```bash
 python -m scripts.build_features
@@ -331,7 +479,7 @@ The ML target (`model.features.target_sustainable_dividend`) is deliberately
 never fabricated — populate it from future dividend events
 (see [docs/model-labeling-plan.md](docs/model-labeling-plan.md)). When at
 least ~12 months of `raw.dividend_data` history exists, populate the offline
-label (also available as ETL stage 7 via `run_full_etl --run-labels`, which is
+label (also available as ETL stage 10 via `run_full_etl --run-labels`, which is
 refused on partial `--limit`/`--tickers` runs to keep labels immutable):
 
 ```bash
@@ -340,8 +488,10 @@ python -m scripts.label_targets --cutoff 2026-12-31   # fixed horizon
 python -m scripts.label_targets --rebuild              # careful: overwrites labels
 ```
 
-Once labeled rows exist, record the walk-forward evaluation checkpoint (the
-Azure Go/No-Go, recall gate = `MIN_RECALL`, default 0.30) with:
+Once labeled rows exist, the walk-forward evaluation can be re-run as a diagnostic
+(recall gate = `MIN_RECALL`, default 0.30). It has returned NO-GO on every feature
+version because the label is 99.6% positive, so the ML model is not adopted and the
+rule-based scores are what the app and rankings show:
 
 ```bash
 python -m scripts.evaluate_walk_forward
@@ -368,6 +518,48 @@ python -m scripts.run_etl --symbols GNL,HMLPF,CMSC --start 2020-01-01
 
 The command requires `--symbols` and `--start`; `--end` is optional. It loads
 prices and dividends through the configured OpenBB provider.
+
+## Web app (Streamlit)
+
+```bash
+streamlit run app/streamlit_app.py --server.address 127.0.0.1   # http://localhost:8501
+python -m scripts.ops_worker                # runs queued tasks; needed for the Operations page
+```
+
+Pass `--server.address 127.0.0.1` when running Streamlit directly: by default it listens on
+every interface. With Docker Compose, `docker compose up -d streamlit worker` starts both. The app
+and the worker use the same database as everything else.
+
+| Page | What it does |
+| --- | --- |
+| Screener | The scored universe as a sortable table with filters (yield, type, score, ticker), charts, CSV download. Selecting a row carries the ticker to Security detail. |
+| Security detail | Price history, dividend events by provider, score history, latest features and reported fundamentals for one ticker. |
+| Data explorer | Browse an allowlisted set of tables with column choice, up to 8 filters, sorting, a row limit, CSV download and a quick chart. |
+| Health | The same checks as `scripts.verify_nightly_run` (freshness against each source's SLA, data quality, dividend coverage, security consistency, walk-forward gate) plus recent nightly runs and their stages. |
+| Operations | Queue a task, follow its live log, cancel it, run it again, and create, pause or delete schedules (once, every N minutes, daily in a chosen time zone). |
+| Integrations | Database status, API health, an endpoint caller for the FastAPI service, and which providers and secrets are configured (never their values). |
+
+**Operator controls.** Reading is open. Queueing, scheduling, cancelling a task and
+calling the API (it uses the server's `API_KEY`) need an operator sign-in. Set
+`OPS_ADMIN_TOKEN` to at least 12 characters (see `.env.example`) and restart the app. With
+it unset, or shorter, the controls stay off and the app says why; there is no default
+token. Five wrong attempts lock sign-in for a minute. The token gates the controls, not
+the data, so keep the app on the loopback (Compose publishes it on 127.0.0.1 only) or
+behind your own authenticating proxy.
+
+**What the Operations page can run.** Only the tasks in `src/crispdm/ops/catalog.py`
+(migration and schema-drift checks, the morning verification, ticker-conflict review,
+feature rebuild, scoring, audit refresh, market-data fetch, and a manual full ETL). The
+worker rebuilds each command from that list and re-validates the parameters; nothing
+typed in the browser is executed as typed, and nothing runs through a shell. Tasks
+marked exclusive hold the pipeline lock and so cannot overlap the nightly run or each
+other (if it is busy they wait and retry). A schedule never stacks: if its previous task
+is still queued or running, that slot is skipped, and a schedule that was missed while
+the worker was down fires once and then continues.
+
+The **nightly ETL is still started by the host's systemd timer** (03:00 America/New_York,
+see `ops/systemd` and `docs/nightly-verification.md`). The app shows its results on the
+Health page; it does not start or stop it.
 
 Start the Streamlit view with:
 
@@ -409,7 +601,33 @@ Use the following connection details for the local PostgreSQL instance:
 - Port: 5432
 - Database Name: dividend
 - Username: dividend
-- Password: dividend
+- Password: `dividend` unless you set `POSTGRES_PASSWORD` for Compose
+  (the password is applied when the `pgdata` volume is first created; changing
+  it later does not alter an existing database)
+
+The container publishes the port on `127.0.0.1` only.
+
+**GUI client on Windows (VS Code PostgreSQL extension, pgAdmin, DBeaver) times out
+with "Couldn't reach 'localhost'".** Docker runs inside WSL2, and Windows reaches
+it through WSL's localhost forwarding. Two things make `localhost` unreliable
+there:
+
+- Windows resolves `localhost` to `::1` first, but the port is published on IPv4
+  only, so the first attempt fails and eats part of the client's timeout.
+- The first connection after the WSL VM has been idle can take several seconds
+  while the forwarder wakes up.
+
+Set the host to `127.0.0.1` (not `localhost`), port `5432`, and raise the
+connection timeout to 30 seconds. Check the server side with:
+
+```powershell
+Test-NetConnection 127.0.0.1 -Port 5432   # TcpTestSucceeded : True
+```
+
+If that fails, confirm the container is healthy
+(`docker compose ps postgres` in WSL, with `API_KEY` exported) and that the WSL
+VM is running (`wsl -l -v`). The firewall/VPN hints in the client's error message
+rarely apply to a loopback port.
 
 ## Test the Database Connection
 
@@ -537,7 +755,7 @@ re-downloaded by the reference and companyfacts stages.
 universe used by every downstream ETL stage, so SEC and OpenBB are queried
 only for dividend-flagged securities.
 
-When `ENFORCE_DIVIDEND_RECENCY=true`, `dividend = TRUE` requires a positive
+When `ENFORCE_DIVIDEND_RECENCY` is on (the default), `dividend = TRUE` requires a positive
 dividend fact whose period ends within `DIVIDEND_RECENCY_DAYS` (548 days,
 `src/crispdm/xbrl_tags.py`) of the classification date. SEC XBRL Company Facts
 retain every fact an issuer has ever filed, including comparative columns from
@@ -549,12 +767,23 @@ qualifying period end is stored in `reference.securities.dividend_last_paid`,
 and `classification_evidence` records `dividend_lookback_start`, so a flag can
 always be traced to the fact that set it.
 
-Enforcement is **off by default** (`enforce_dividend_recency` in
-`src/crispdm/config.py`). The classifier change ships dark so the nightly ETL
-keeps the historical universe until an operator opts in; flipping the setting
-on the next `populate_reference_tables --stage reference` rerun is what applies
-the bound (expect ~1,700 flag changes). Existing rows keep their current value
-until that rerun.
+Enforcement is **on by default** (`enforce_dividend_recency` in
+`src/crispdm/config.py`, decision 2026-10-06). The tag test alone is weak: any
+concept whose name contains "dividend" counts, including dividends *received*,
+payables and balance-sheet items, so a recent tag is not proof the issuer pays.
+Since 2026-10-07 the classification therefore only sets `dividend = TRUE` from a
+positive **per-share** declared/paid fact (`CommonStockDividendsPerShare*`,
+`PreferredStockDividendsPerShare`, IFRS `CashDividendsPerShare*`); aggregate
+paid/payable balances and investor-side received-amount concepts
+(`InterestAndDividendIncomeOperating`, `EquityMethodInvestmentDividendsOrDistributions`)
+are kept in the audit evidence but cannot flag an issuer. A security with a
+positive payment in `raw.dividend_data` inside the same 548-day window also stays
+flagged (`src/crispdm/dividend_universe.py`, applied in both
+`populate_raw_tables` and `populate_reference_tables`). The payment
+arm only keeps an existing payer: dividends are fetched only for flagged securities,
+so a new one must be found by its tags. A security that drops out is deactivated, not
+deleted, and returns with its history if it pays again. Turning enforcement off
+restores the any-fact-ever rule on the next stage 0 and 1 run.
 
 `raw.ticker_profile` columns populated by SEC Company Facts XBRL
 (`coupon_rate` as the fallback source, `liquidation_preference`, prioritized
@@ -673,6 +902,7 @@ fundamentals.periodic_financials ◄── SEC financial statements
 model.features ◄── scripts.build_features
 model.scores / model.rankings ◄── scripts.score_rank
 Streamlit app ◄── model.rankings + raw data (app/streamlit_app.py)
+ops.tasks / ops.schedules ◄── Operations page ──► scripts.ops_worker runs them
 ```
 
 End to end, the pipeline is: **SEC + OpenBB → raw PostgreSQL → normalized
@@ -733,11 +963,11 @@ once per security. `raw.companyfacts` also stores the grouped concept names used
 by downstream processing. Taxonomy-scoped preferred-stock concept facts are
 stored the same way in `raw.company_taxonomy`, loaded by
 `python -m scripts.populate_companyfacts --preferred-taxonomy`
-(see the Stage 3 example above).
+(see the Stage 4 example above).
 
 `scripts.populate_raw_tables` additionally persists the result of
 `classify_companyfacts()` for each CIK into `raw.company_classification`; stage
-1 (`populate_reference_tables`) and stage 3 (`populate_companyfacts`) read that
+1 (`populate_reference_tables`) and stage 4 (`populate_companyfacts`) read that
 cache instead of downloading the full companyfacts JSON again, so the same
 issuer payload is requested from SEC at most once per pipeline run.
 

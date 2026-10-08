@@ -225,19 +225,22 @@ def predictions(
     # "period-end alignment", so the shared string named two different things.
     # tests/test_scoring.py now pins all three sources together.
     #
-    # features_v3 still describes the build correctly. The per-metric quarterly
-    # vintage chain is what resolves these columns, and the leverage inputs added
-    # in V0011 join that same chain without changing what any declared column
-    # means -- two populated columns were added, and neither is in the declared
-    # ML FEATURES list, so the labels and the GO verdict are untouched.
-    feature_version="features_v3",
+    # features_v5 nulls a negative debt balance and computes dividend growth from the
+    # per-payment series only where its prior-year window is observed. features_v4 is
+    # total-return momentum plus a fundamentals availability date
+    # that cannot precede the period it reports. The per-metric quarterly vintage
+    # chain from v3 is unchanged, and the leverage inputs added in V0011 join
+    # that same chain without changing what any declared column means.
+    feature_version="features_v5",
     data_version="sec_xbrl_v3",
 ):
     """Derive model.predictions rows from model.scores.
 
     The rule-based scorer produces a percentile composite score, so the
     sustainable-dividend probability is the composite itself and the predicted
-    class is the composite against ``threshold``. ``run_id`` is generated once
+    class is the composite against ``threshold``. It is a relative rank, not a
+    calibrated probability: the ML model was evaluated and rejected (NO-GO,
+    2026-10-06), and this scorer is the product. ``run_id`` is generated once
     per campaign so all rows share one immutable model run.
     """
     x = scores.copy()

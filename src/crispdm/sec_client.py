@@ -1147,6 +1147,18 @@ def match_security_title(titles, security_type, fallback=None):
     return fallback
 
 
+def _is_per_share_dividend_concept(normalized_name: str) -> bool:
+    """Whether a normalized concept name is a per-share dividend amount.
+
+    ``payment_grade`` evidence: only a per-share declared/paid amount proves
+    the *issuer* pays a dividend. us-gaap concepts carry the word twice
+    (``CommonStockDividendsPerShareDeclared``), custom taggers occasionally
+    use the singular ``DividendPerShare``, and IFRS has
+    ``CashDividendsPerShareOrdinaryShares``, so both spellings count.
+    """
+    return "dividendspershare" in normalized_name or "dividendpershare" in normalized_name
+
+
 def classify_companyfacts(companyfacts, *, as_of=None, lookback_days=DIVIDEND_RECENCY_DAYS):
     """Classify an issuer from SEC XBRL tags and positive reported values.
 
@@ -1160,10 +1172,24 @@ def classify_companyfacts(companyfacts, *, as_of=None, lookback_days=DIVIDEND_RE
     enforcement is switched off.
 
     Dividend evidence is read from both the ``us-gaap`` and ``ifrs-full``
-    taxonomies: foreign private issuers file IFRS, and their ``DividendsPaid*``
+    taxonomies: foreign private issuers file IFRS, and their dividends-per-share
     concepts would otherwise be missed. Security-type classification stays on
     ``us-gaap`` only, because the IFRS concept vocabulary is not mapped into
     ``SECURITY_FACT_RULES``.
+
+    ``dividend`` is only set when the recent positive evidence is a *per-share*
+    declared/paid amount (``CommonStockDividendsPerShareDeclared``,
+    ``PreferredStockDividendsPerShareDeclared``, IFRS
+    ``CashDividendsPerShareOrdinaryShares``). Any other recent positive tag that
+    merely mentions "dividend" -- aggregate paid/payable balances and
+    investor-side received-amount concepts such as
+    ``InterestAndDividendIncomeOperating`` or
+    ``EquityMethodInvestmentDividendsOrDistributions`` -- is retained in
+    ``dividend_facts`` for an auditor but cannot set the flag on its own. This
+    is what keeps ``reference.securities`` ("securities that pay a dividend")
+    aligned with ``raw.dividend_data`` (observed payments): a company that only
+    ever reports an aggregate or a received-amount concept does not belong in
+    the payer universe.
 
     Returns normalized security types, dividend status, the most recent
     qualifying dividend period end, de-registered security titles, and compact
@@ -1192,6 +1218,7 @@ def classify_companyfacts(companyfacts, *, as_of=None, lookback_days=DIVIDEND_RE
     security_facts = []
     dividend_facts = []
     dividend_last_paid = None
+    payment_grade = False
 
     for concept_name, concept in us_gaap.items():
         normalized_name = "".join(
@@ -1238,6 +1265,15 @@ def classify_companyfacts(companyfacts, *, as_of=None, lookback_days=DIVIDEND_RE
                 # and the audit trail agrees with dividend_last_paid.
                 recent = sorted(positive_records, key=lambda record: str(record["end"]))
                 dividend_facts.append({"tag": concept_name, "records": recent[-5:]})
+                # Only a per-share declared/paid amount proves the *issuer* pays
+                # a dividend. Aggregate balances (DividendsPayable*,
+                # PaymentsOfDividendsCommonStock) describe a stock or its
+                # holders, and investor-side concepts
+                # (InterestAndDividendIncomeOperating,
+                # EquityMethodInvestmentDividendsOrDistributions) describe
+                # dividends *received*, so neither may set the payer flag.
+                if _is_per_share_dividend_concept(normalized_name):
+                    payment_grade = True
                 # A dividend cannot have been *paid* after today. The concept
                 # list is deliberately broad (any us-gaap tag mentioning
                 # "dividend"), so it picks up balance-sheet and forward-looking
@@ -1247,11 +1283,7 @@ def classify_companyfacts(companyfacts, *, as_of=None, lookback_days=DIVIDEND_RE
                 # filed against a future fiscal year end. Taking the raw maximum
                 # published a paid date of 2108-11-14 (MTEX) and 2026-12-31.
                 #
-                # Excluding those tags instead is not a safe local fix: dropping
-                # the payable/receivable/declared families flips the dividend
-                # flag off for 3,611 of 8,105 cached CIKs, which is a universe
-                # change requiring a reference-stage rebuild. Clamping the date
-                # to today fixes the anomaly without moving the flag, and the
+                # Clamping the date to today fixes the anomaly while the
                 # future-dated evidence stays in dividend_facts for an auditor.
                 latest = str(recent[-1]["end"])
                 if latest > today_iso:
@@ -1268,7 +1300,7 @@ def classify_companyfacts(companyfacts, *, as_of=None, lookback_days=DIVIDEND_RE
 
     return {
         "security_types": sorted(normalize_security_type(t) for t in security_types),
-        "dividend": bool(dividend_facts),
+        "dividend": payment_grade,
         "dividend_last_paid": dividend_last_paid,
         "dividend_lookback_start": cutoff_iso,
         "security_titles": extract_security_titles(companyfacts),
@@ -1281,10 +1313,10 @@ def classify_companyfacts(companyfacts, *, as_of=None, lookback_days=DIVIDEND_RE
 def configured_dividend_lookback():
     """Dividend recency window from settings, or ``None`` when not enforced.
 
-    Enforcement is opt-in via ``ENFORCE_DIVIDEND_RECENCY`` so an unattended
-    nightly ETL cannot silently change the dividend universe. Production
-    classification callers pass this to ``classify_companyfacts``; direct
-    callers keep the bounded ``DIVIDEND_RECENCY_DAYS`` default.
+    Controlled by ``ENFORCE_DIVIDEND_RECENCY`` (on by default since 2026-10-06; see
+    ``config.Settings``). Production classification callers pass this to
+    ``classify_companyfacts``; direct callers keep the bounded
+    ``DIVIDEND_RECENCY_DAYS`` default.
     """
     if not settings.enforce_dividend_recency:
         return None

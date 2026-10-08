@@ -111,6 +111,8 @@ class TestRegistryTracksReality:
                 """
                 SELECT count(*) FROM audit.quarantined_values q
                 WHERE q.resolved_at IS NULL
+                  AND q.table_schema = 'reference'
+                  AND q.column_name = 'dividend_last_paid'
                   AND NOT EXISTS (
                         SELECT 1 FROM reference.securities s
                         WHERE s.security_id::text = q.row_key
@@ -118,6 +120,33 @@ class TestRegistryTracksReality:
                 """
             ).scalar()
         assert erased == 0, "a quarantined value was deleted or overwritten"
+
+    def test_quarantined_fundamentals_values_are_left_in_place(self):
+        """V0050 parks impossible fundamentals values; it must not erase them.
+
+        The row key is security_id|period_end|fiscal_period|filed, so the check
+        rebuilds it and compares the stored value for the quarantined column.
+        """
+        with self._conn() as conn:
+            erased = conn.exec_driver_sql(
+                """
+                SELECT count(*) FROM audit.quarantined_values q
+                WHERE q.resolved_at IS NULL
+                  AND q.table_schema = 'fundamentals'
+                  AND NOT EXISTS (
+                        SELECT 1 FROM fundamentals.periodic_financials f
+                        WHERE concat_ws('|', f.security_id, f.period_end,
+                                        f.fiscal_period, f.filed) = q.row_key
+                          AND CASE q.column_name
+                                WHEN 'period_end' THEN f.period_end::text
+                                WHEN 'filed' THEN f.filed::text
+                                WHEN 'shares_outstanding' THEN f.shares_outstanding::text
+                                WHEN 'debt' THEN f.debt::text
+                                WHEN 'liabilities' THEN f.liabilities::text
+                              END = q.observed_value)
+                """
+            ).scalar()
+        assert erased == 0, "a quarantined fundamentals value was deleted or overwritten"
 
     def test_quarantined_securities_still_hold_their_own_rows(self):
         """Quarantine excludes a value from use, not a security from the universe.
@@ -144,11 +173,18 @@ class TestRegistryTracksReality:
         assert active > 0, "quarantine deactivated the securities instead"
 
     def test_resolved_quarantine_rows_still_have_their_security_published(self):
-        """Resolving a quarantined value must not have deactivated its security.
+        """Resolving a quarantined value must not remove its instrument.
 
         V0040 clamped the five future dividend_last_paid values to today and
         stamped resolved_at. The correction was supposed to touch the value
         only; the securities stay in the scored universe.
+
+        The guarantee is about the instrument (cik, ticker), not about the
+        exact row the registry keyed. reference rows are superseded by design:
+        a re-typing mints a new (cik, ticker, security_type, dividend) key and
+        deactivates the old row (V0047 plus the raw-stage twin sweep), so
+        joining the registry straight to row active would fail on exactly the
+        churn that keeps the instrument published.
         """
         with self._conn() as conn:
             row = (
@@ -157,7 +193,13 @@ class TestRegistryTracksReality:
                 SELECT
                     count(*) FILTER (WHERE q.resolved_at IS NOT NULL) AS resolved,
                     count(*) FILTER (
-                        WHERE q.resolved_at IS NOT NULL AND s.active
+                        WHERE q.resolved_at IS NOT NULL
+                          AND EXISTS (
+                              SELECT 1 FROM reference.securities s2
+                              WHERE s2.cik = s.cik
+                                AND s2.ticker = s.ticker
+                                AND s2.active
+                          )
                     ) AS resolved_still_active,
                     count(*) FILTER (
                         WHERE q.resolved_at IS NOT NULL
@@ -173,7 +215,7 @@ class TestRegistryTracksReality:
             )
         assert row["resolved"] > 0, "expected at least one resolved quarantine row"
         assert row["resolved_still_active"] == row["resolved"], (
-            "resolving a quarantined value must not deactivate its security"
+            "resolving a quarantined value must not deactivate its instrument"
         )
         assert row["resolved_value_now_valid"] == row["resolved"], (
             "a resolved row still holds a future dividend_last_paid"

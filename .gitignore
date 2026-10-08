@@ -8,6 +8,7 @@ dist/
 
 # Virtual environments
 .venv/
+.venv-win/
 venv/
 env/
 
@@ -32,3 +33,8 @@ data/*
 
 # Accidental command-output junk (PowerShell redirect artifact)
 t -ErrorAction SilentlyContinue | Select-Object Name,Source
+
+# Session scratch files (throwaway probes, runners, captured output)
+/_*.py
+/_*.sh
+/_*.out

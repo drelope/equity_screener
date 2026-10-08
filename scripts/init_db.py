@@ -336,13 +336,22 @@ migrations = [
     "ALTER TABLE raw.company_ticker DROP CONSTRAINT IF EXISTS company_ticker_cik_key",
     "CREATE UNIQUE INDEX IF NOT EXISTS ux_company_ticker_ticker_cik ON raw.company_ticker(ticker, cik)",
     "ALTER TABLE reference.securities DROP CONSTRAINT IF EXISTS securities_cik_fkey",
-    "ALTER TABLE reference.securities DROP CONSTRAINT IF EXISTS fk_securities_company_ticker",
+    # Add only when absent: drop-and-re-add resets a validated FK to NOT VALID (see V0046).
     """
-    ALTER TABLE reference.securities
-    ADD CONSTRAINT fk_securities_company_ticker
-    FOREIGN KEY (ticker, cik)
-    REFERENCES raw.company_ticker(ticker, cik)
-    NOT VALID
+    DO $$
+    BEGIN
+        IF NOT EXISTS (
+            SELECT 1 FROM pg_constraint
+             WHERE conrelid = 'reference.securities'::regclass
+               AND conname = 'fk_securities_company_ticker'
+        ) THEN
+            ALTER TABLE reference.securities
+            ADD CONSTRAINT fk_securities_company_ticker
+            FOREIGN KEY (ticker, cik)
+            REFERENCES raw.company_ticker(ticker, cik)
+            NOT VALID;
+        END IF;
+    END $$;
     """,
     """
     UPDATE reference.securities s

@@ -10,6 +10,11 @@ Because the stored payloads are large, only the canonical periodic-financial
 us-gaap concepts are shipped across the wire; ``extract_periodic_financials``
 reads exactly those tags, so the resulting rows are unchanged.
 
+The universe is processed in keyset-paginated batches (see ``BATCH_SIZE``),
+so at most one batch of payloads is in memory at a time. Materializing all
+~6,000 issuer slices at once takes gigabytes, which pinned the stage against
+the unit's MemoryMax and left it thrashing in reclaim for hours.
+
 Usage:
     python -m scripts.populate_fundamentals
     python -m scripts.populate_fundamentals --tickers ACR-PD,ACR-PC
@@ -30,6 +35,11 @@ from src.crispdm.db import engine
 from src.crispdm.fundamentals import extract_periodic_financials
 from src.crispdm.xbrl_tags import PERIODIC_FINANCIAL_CONCEPTS
 
+# Issuer payloads per batch. The full universe at once is gigabytes of jsonb
+# slices; a batch keeps the stage well under the unit's MemoryHigh while still
+# committing progress every couple hundred issuers instead of once at the end.
+BATCH_SIZE = 250
+
 
 @dataclass(frozen=True)
 class FundamentalsResult:
@@ -41,19 +51,48 @@ class FundamentalsResult:
     errors: int
 
 
-def load_candidates(conn, tickers=None, limit=None):
-    """Securities with a stored companyfacts payload, slimmed to the facts used.
+def _candidate_filters(tickers=None):
+    """Shared WHERE clauses so count and load agree on the universe."""
+    clauses = ["cf.cik IS NOT NULL", "s.active = TRUE", "s.dividend = TRUE"]
+    params = {}
+    if tickers:
+        clauses.append("UPPER(s.ticker) = ANY(:tickers)")
+        params["tickers"] = [ticker.upper() for ticker in tickers]
+    return " AND ".join(clauses), params
+
+
+def count_candidates(conn, tickers=None, limit=None):
+    """How many securities the stage will process; caps ``limit`` if given."""
+    where, params = _candidate_filters(tickers)
+    count = conn.execute(
+        text(f"""
+        SELECT count(*)
+        FROM raw.companyfacts cf
+        JOIN reference.securities s ON s.cik = cf.cik
+        WHERE {where}
+    """),
+        params,
+    ).scalar_one()
+    return min(count, limit) if limit is not None else count
+
+
+def load_candidates(conn, tickers=None, limit=None, after_security_id=None):
+    """One batch of securities with a stored companyfacts payload.
 
     The companyfacts payload is per-issuer CIK but periodic financials are
     stored per security_id, so each CIK's fact slice is extracted once and
     fanned out to every active, dividend-flagged security sharing that CIK.
+
+    ``after_security_id`` advances the keyset cursor: pass the last row's
+    ``security_id`` from the previous batch to get the next page in the same
+    ``ORDER BY s.security_id`` order.
     """
-    clauses = ["cf.cik IS NOT NULL", "s.active = TRUE", "s.dividend = TRUE"]
-    params = {"concepts": list(PERIODIC_FINANCIAL_CONCEPTS)}
-    if tickers:
-        clauses.append("UPPER(s.ticker) = ANY(:tickers)")
-        params["tickers"] = [ticker.upper() for ticker in tickers]
-    where = " AND ".join(clauses)
+    where, params = _candidate_filters(tickers)
+    params["concepts"] = list(PERIODIC_FINANCIAL_CONCEPTS)
+
+    if after_security_id is not None:
+        where += " AND s.security_id > :after_security_id"
+        params["after_security_id"] = after_security_id
 
     limit_sql = " LIMIT :limit" if limit is not None else ""
     if limit is not None:
@@ -174,32 +213,51 @@ def upsert_periodic_financials(conn, security_id, rows):
     return inserted
 
 
-def populate_fundamentals(tickers=None, limit=None):
+def populate_fundamentals(tickers=None, limit=None, batch_size=BATCH_SIZE):
     """Build fundamentals.periodic_financials from stored XBRL payloads."""
     periods = securities = errors = 0
+    processed = 0
 
-    with engine.begin() as conn:
-        candidates = load_candidates(conn, tickers=tickers, limit=limit)
-        for candidate in candidates:
-            # A savepoint per issuer. One outer transaction wraps the stage for
-            # throughput, which means a single bad statement aborts it and every
-            # later statement then fails with InFailedSqlTransaction. That turns
-            # one root cause into one error per remaining candidate, and the
-            # resulting error text points at the wrong issuer entirely.
-            try:
-                with conn.begin_nested():
-                    payload = {"full_facts": {"facts": {"us-gaap": candidate["us_gaap"]}}}
-                    rows = extract_periodic_financials(payload)
-                    if rows:
-                        periods += upsert_periodic_financials(conn, candidate["security_id"], rows)
-                        securities += 1
-            except Exception as exc:
-                errors += 1
-                if errors <= 5:
-                    print(f"  Error extracting {candidate['ticker']}: {exc}")
+    with engine.connect() as conn:
+        total = count_candidates(conn, tickers=tickers, limit=limit)
+
+    last_id = None
+    remaining = total
+    while remaining > 0:
+        take = min(batch_size, remaining)
+        # One transaction per batch: short enough that the AccessShareLocks the
+        # load takes on reference.securities / raw.companyfacts are released
+        # between batches instead of being held for the whole stage, and a
+        # crash loses at most one batch of upserts instead of everything.
+        with engine.begin() as conn:
+            batch = load_candidates(conn, tickers=tickers, limit=take, after_security_id=last_id)
+            if not batch:
+                break
+            for candidate in batch:
+                # A savepoint per issuer. One bad statement aborts it and every
+                # later statement then fails with InFailedSqlTransaction. That
+                # turns one root cause into one error per remaining candidate,
+                # and the resulting error text points at the wrong issuer.
+                try:
+                    with conn.begin_nested():
+                        payload = {"full_facts": {"facts": {"us-gaap": candidate["us_gaap"]}}}
+                        rows = extract_periodic_financials(payload)
+                        if rows:
+                            periods += upsert_periodic_financials(
+                                conn, candidate["security_id"], rows
+                            )
+                            securities += 1
+                except Exception as exc:
+                    errors += 1
+                    if errors <= 5:
+                        print(f"  Error extracting {candidate['ticker']}: {exc}")
+            last_id = batch[-1]["security_id"]
+        remaining -= len(batch)
+        processed += len(batch)
+        print(f"  {processed}/{total} candidates processed ({periods} period rows)", flush=True)
 
     result = FundamentalsResult(
-        candidates=len(candidates), securities=securities, periods=periods, errors=errors
+        candidates=total, securities=securities, periods=periods, errors=errors
     )
     # The checkmark is conditional because it used to print over a stage that had
     # written nothing at all: 8,350 errors, 0 rows, and a success tick in the

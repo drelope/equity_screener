@@ -17,8 +17,9 @@ checks, for the target run date:
      completeness meet thresholds.
   5. **Reference security consistency** — preferred terms and titles are
       complete, preferences are plausible, and active SEC identities are unique.
-  6. **Walk-forward gate** — the latest ``audit.model_runs`` recall clears
-     ``MIN_RECALL``. Informational until real data accrues (no rows yet).
+  6. **Walk-forward verdict** — informational. The ML model was not adopted (the latest
+     ``audit.model_runs`` readiness is ``no_go``) and rule-based scoring is in use. A run
+     that reads ``go`` is checked against ``MIN_RECALL`` as before.
 
 Every verification is recorded in ``audit.nightly_checks`` (the auditable trail;
 the SDLC review's PM Go/No-Go record). Table creation: ``scripts.migrate``
@@ -235,8 +236,13 @@ def assess(
             _check("security_consistency", "info", "reference security checks not measured")
         )
     else:
-        issue_fields = (
-            "active_identity_duplicates",
+        # Identity duplication is a hard integrity failure. The preferred-term
+        # fields are known reference data debt (the preferred snapshot is
+        # incomplete for SPAC units/rights/warrants classified as 'preferred
+        # stock', so coupon/liquidation/issuer fields are NULL for them), so
+        # they are reported as informational and never block the pipeline.
+        hard_fields = ("active_identity_duplicates",)
+        soft_fields = (
             "active_preferred_missing_issuer_id",
             "active_repeated_preferred_titles",
             "active_preferred_missing_coupon",
@@ -244,13 +250,22 @@ def assess(
             "active_preferred_preference_over_threshold",
             "active_preferred_issuer_only_titles",
         )
-        issues = [
+        hard_issues = [
             f"{field}={security_consistency.get(field, 0)}"
-            for field in issue_fields
+            for field in hard_fields
+            if security_consistency.get(field, 0)
+        ]
+        soft_issues = [
+            f"{field}={security_consistency.get(field, 0)}"
+            for field in soft_fields
             if security_consistency.get(field, 0)
         ]
         ticker_reuse = security_consistency.get("active_ticker_reuse_across_ciks", 0)
-        detail = ", ".join(issues) if issues else "no reference security anomalies"
+        detail = (
+            ", ".join(hard_issues + soft_issues)
+            if (hard_issues or soft_issues)
+            else "no reference security anomalies"
+        )
         if security_consistency.get("active_preferred_preference_over_threshold", 0):
             threshold = security_consistency.get(
                 "preference_review_threshold", PREFERRED_PREFERENCE_REVIEW_THRESHOLD
@@ -260,13 +275,29 @@ def assess(
             detail += (
                 f"; active_ticker_reuse_across_ciks={ticker_reuse} (review, not assumed duplicate)"
             )
-        checks.append(
-            _check(
-                "security_consistency",
-                "attention" if issues else "ok",
-                detail,
+        if hard_issues:
+            status = "attention"
+        elif soft_issues:
+            status = "info"
+        else:
+            status = "ok"
+        checks.append(_check("security_consistency", status, detail))
+
+    ticker_conflicts = findings.get("ticker_conflicts")
+    if ticker_conflicts is not None:
+        open_count = ticker_conflicts.get("open", 0)
+        if open_count:
+            listed = ", ".join(ticker_conflicts.get("tickers") or [])
+            checks.append(
+                _check(
+                    "ticker_conflicts",
+                    "attention",
+                    f"{open_count} open ticker/CIK conflict(s) the nightly skipped: {listed}. "
+                    "Review with `python -m scripts.resolve_ticker_conflict review`",
+                )
             )
-        )
+        else:
+            checks.append(_check("ticker_conflicts", "ok", "no open ticker/CIK conflicts"))
 
     model = findings.get("model_gate")
     if model is None:
@@ -277,6 +308,17 @@ def assess(
                 "walk_forward_gate",
                 "info",
                 "no model_runs yet; gate pending real-data accrual",
+            )
+        )
+    elif model.get("readiness") == "no_go":
+        # Accepted 2026-10-06: the rule-based composite is the product. The recall on this
+        # row belongs to an always-"sustainable" model, so it must not read as a pass.
+        checks.append(
+            _check(
+                "walk_forward_gate",
+                "info",
+                f"ML model not adopted: latest walk-forward is NO-GO ({model.get('created_at')}); "
+                "rule-based scoring is in use",
             )
         )
     else:
@@ -362,11 +404,25 @@ def fetch_findings(conn, run_date, lookback_start):
             "preference_review_threshold": PREFERRED_PREFERENCE_REVIEW_THRESHOLD,
         }
 
+        # The nightly stage exits 0 on a ticker/CIK conflict, so the quarantine registry is
+        # the only place one is visible after the run.
+        open_conflicts = conn.execute(
+            text(
+                """
+                SELECT row_key FROM audit.quarantined_values
+                WHERE rule = 'TICKER_CIK_CONFLICT' AND resolved_at IS NULL
+                ORDER BY row_key
+                """
+            )
+        ).scalars()
+        tickers = list(open_conflicts)
+        findings["ticker_conflicts"] = {"open": len(tickers), "tickers": tickers[:10]}
+
         model = (
             conn.execute(
                 text(
                     """
-                SELECT run_id, recall, created_at
+                SELECT run_id, recall, readiness, created_at
                 FROM audit.model_runs
                 ORDER BY created_at DESC
                 LIMIT 1
@@ -379,6 +435,7 @@ def fetch_findings(conn, run_date, lookback_start):
         findings["model_gate"] = {
             "run_id": str(model["run_id"]) if model else None,
             "recall": float(model["recall"]) if model and model["recall"] is not None else None,
+            "readiness": model["readiness"] if model else None,
             "created_at": (
                 model["created_at"].isoformat()
                 if model and model["created_at"] is not None

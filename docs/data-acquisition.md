@@ -10,7 +10,7 @@ to accrue.
 
 | Provision | When | Command |
 |---|---|---|
-| **12-month lookback backfill** | Now — first run, acquires dividend history from `2025-01-01` to today | `python -m scripts.run_full_etl` (stage 2 defaults to `DIVIDEND_LOOKBACK_START`) |
+| **12-month lookback backfill** | Now — first run, acquires dividend history from `2025-01-01` to today | `python -m scripts.run_full_etl` (stage 3 defaults to `DIVIDEND_LOOKBACK_START`) |
 | **Nightly accrual** | Ongoing — re-runs the ETL daily at 03:00 ET so the same window stays current and grows forward | Airflow `airflow/dags/dividend_etl_dag.py` or systemd `ops/systemd/dividend-etl.{service,timer}` |
 | **Total-history backfill** | One-time, *after* the PoC gate passes — fetches the full available dividend history per security | `python -m scripts.run_full_etl --dividend-full-history` |
 
@@ -20,7 +20,7 @@ re-running any of them is idempotent and safe.
 
 ## 1. The 12-month lookback (initial backfill)
 
-`populate_dividend_data` (ETL stage 2) acquires dividend events from:
+`populate_dividend_data` (ETL stage 3) acquires dividend events from:
 
 - **OpenBB** — bounded by its start date, which defaults to
   `settings.dividend_lookback_start` (`DIVIDEND_LOOKBACK_START`, default
@@ -36,7 +36,7 @@ written to `raw.dividend_data`.
 ## 2. Nightly accrual (continues into the future)
 
 The scheduler runs the full ETL once daily at 03:00 ET (Airflow DAG or the
-systemd timer). Because stage 2 keeps its lookback start fixed at
+systemd timer). Because stage 3 keeps its lookback start fixed at
 `2025-01-01` while its end defaults to *now*, each nightly run:
 
 - does not lose the backfill window, and
@@ -45,7 +45,7 @@ systemd timer). Because stage 2 keeps its lookback start fixed at
 `build_features` (`scripts.build_features`) then snapshots features at every
 market-data observation date, and — once a feature row's 365-day outcome window
 has fully elapsed before the label cutoff — `scripts.label_targets` (ETL stage
-7, `run_full_etl --run-labels`) emits its label. Labels start appearing once
+10, `run_full_etl --run-labels`) emits its label. Labels start appearing once
 `as_of_date <= today - 365 days`, i.e. for as-of dates on/after the lookback
 start (`2025-01-01`) roughly one year after the first acquisition.
 
@@ -59,7 +59,7 @@ total history exactly once:
 python -m scripts.run_full_etl --dividend-full-history
 ```
 
-This passes `--full-history` to stage 2, which asks OpenBB for the full
+This passes `--full-history` to stage 3, which asks OpenBB for the full
 available history (from `1970-01-01`) instead of the 12-month lookback; the SEC
 XBRL source already returns full history, so together this is the complete
 dividend record per security. Keep the flag on the scheduler (Airflow DAG /
@@ -99,5 +99,5 @@ Go/No-Go path end-to-end today; the real-data path above replaces the sample.
 - Change the lookback from 12 months: set `DIVIDEND_LOOKBACK_START=YYYY-MM-DD`
   in `.env` (or the default in `src/crispdm/config.py`).
 - Scope acquisition during testing: `--tickers KO,VZ,PG` or `--limit N` on
-  stage 2 (never combined with `--run-labels`, which is refused on partial runs
+  stage 3 (never combined with `--run-labels`, which is refused on partial runs
   to keep labels immutable).
