@@ -402,17 +402,20 @@ def symbol_suffix_evidence(ticker):
     """
     symbol = str(ticker or "").strip().upper()
     match = re.match(r"^.+?-([A-Z][A-Z0-9]{0,3})$", symbol)
-    if not match:
-        return None
-    suffix = match.group(1)
-    if suffix.startswith("P"):
-        letter = suffix[1:]
-        return SymbolSuffix("preferred stock", suffix, letter or None)
-    if suffix == "U":
-        return SymbolSuffix("other_debt_and_equity", suffix)
-    if suffix in ("W", "WS", "WT", "R"):
-        return SymbolSuffix("derivative", suffix)
-    return SymbolSuffix("common_stock", suffix, suffix)
+    if match:
+        suffix = match.group(1)
+        if suffix.startswith("P"):
+            letter = suffix[1:]
+            return SymbolSuffix("preferred stock", suffix, letter or None)
+        if suffix == "U":
+            return SymbolSuffix("other_debt_and_equity", suffix)
+        if suffix in ("W", "WS", "WT", "R"):
+            return SymbolSuffix("derivative", suffix)
+        return SymbolSuffix("common_stock", suffix, suffix)
+    # Hyphenless unit class (e.g., AACOU, GRCLFU, AIFU) — treat as units, not preferred
+    if re.match(r"^[A-Z0-9]{1,5}U$", symbol):
+        return SymbolSuffix("other_debt_and_equity", "U")
+    return None
 
 
 def classify_security_symbol(ticker):

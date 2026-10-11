@@ -62,16 +62,16 @@ def test_upsert_preferred_profile_builds_preferred_row():
     assert '"coupon_rate": 8.5' in params["raw_payload"]
     assert '"liquidation_preference": 25' in params["raw_payload"]
     assert '"sec_xbrl_scope": "issuer_level_unallocated"' in params["raw_payload"]
-    assert "sector = COALESCE(EXCLUDED.sector, current_profile.sector)" in capturer.statement
-    assert "industry = COALESCE(EXCLUDED.industry, current_profile.industry)" in capturer.statement
+    # Load history first, then the latest-table upsert; nothing else.
+    assert len(capturer.statements) == 2
+    load_sql, load_params = capturer.statements[0]
+    assert "INSERT INTO raw.ticker_profile_load" in load_sql
+    assert load_params["loader"] == "populate_preferred_profiles"
+    assert load_params["owned_columns"] == "{}"
+    # Owns no typed column, so it can never clear or overwrite name-parse values.
+    for column in ("sector", "industry", "security_type", "coupon_rate", "liquidation_preference"):
+        assert f"{column} = EXCLUDED.{column}" not in capturer.statement
     assert "SEC_XBRL+OPENBB_YFINANCE" in capturer.statement
-    assert (
-        "coupon_rate = COALESCE(EXCLUDED.coupon_rate, current_profile.coupon_rate)"
-        in capturer.statement
-    )
-    assert "current_profile.liquidation_preference" in capturer.statement
-    assert "COALESCE(current_profile.raw_payload, '{}'::jsonb)" in capturer.statement
-    assert len(capturer.statements) == 1
     assert "UPDATE reference.securities" not in capturer.statement
 
 

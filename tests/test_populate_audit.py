@@ -68,6 +68,65 @@ def test_data_quality_scopes_to_active_securities():
     assert "WHERE s.active = TRUE" in conn.statements[0]
 
 
+def test_data_quality_reliability_is_provider_based():
+    """WS4 item 9: the profile's reliability must come from the provider, and
+    companyfacts (SEC XBRL) is a source on its own, not gated on a profile."""
+    sql = _normalized_data_quality_sql()
+    assert "COALESCE(:openbb_reliability, 0.9)" in sql
+    assert "COALESCE(:yfinance_reliability, 0.8)" in sql
+    assert "COALESCE(:sec_reliability, 1.0)" in sql
+
+
+def test_data_quality_companyfacts_is_a_source_not_a_zero():
+    """A non-dividend payer with companyfacts must score instead of reading
+    'no data': source_reliability is GREATEST(profile provider, SEC XBRL when a
+    companyfacts row exists)."""
+    sql = _normalized_data_quality_sql()
+    assert "CASE WHEN cf.cik IS NOT NULL THEN COALESCE(:sec_reliability, 1.0) ELSE 0.0 END" in sql
+    assert "WHEN COALESCE(q.source_reliability, 0) = 0 THEN 'no data'" in sql
+
+
+def test_data_quality_consistency_normalises_security_type():
+    """WS4 item 8: compare the normalised reference class, not the raw OpenBB
+    wording, so 'Common Stock, par value $0.01 per share' agrees with
+    common_stock instead of being penalised for the spelling."""
+    sql = _normalized_data_quality_sql()
+    assert "LOWER(tp.security_type) LIKE '%common%'" in sql
+    assert "LOWER(s.security_type) LIKE '%common%'" in sql
+    assert "LOWER(tp.security_type) = LOWER(s.security_type)" not in sql
+
+
+def test_data_quality_no_data_means_no_source_at_all():
+    """Re-score the newest snapshot with the whole-universe formula, then pin
+    the invariant that 'no data' means a truly sourceless security: neither
+    raw.companyfacts nor raw.ticker_profile."""
+    pytest.importorskip("sqlalchemy")
+    engine = _live_connection()
+    if engine is None:
+        pytest.skip("no database available")
+    from sqlalchemy import text
+
+    with engine.begin() as conn:
+        latest = conn.execute(text("SELECT max(as_of_date) FROM audit.data_quality")).scalar()
+        if latest is None:
+            pytest.skip("audit.data_quality is empty")
+
+        populate_audit.data_quality(conn, latest)
+
+        bad = conn.execute(
+            text("""
+                SELECT count(*) FROM audit.data_quality dq
+                LEFT JOIN reference.securities s ON s.security_id = dq.security_id
+                LEFT JOIN raw.companyfacts cf ON cf.cik = s.cik
+                LEFT JOIN raw.ticker_profile tp ON tp.security_id = dq.security_id
+                WHERE dq.as_of_date = :as_of AND dq.status = 'no data'
+                  AND (cf.cik IS NOT NULL OR tp.security_id IS NOT NULL OR s.security_id IS NULL)
+                """),
+            {"as_of": latest},
+        ).scalar()
+    assert bad == 0
+
+
 def test_data_quality_clamps_recency_to_one():
     """as_of is midnight but a row retrieved later that same day is newer than
     the as-of instant, so the unbounded formula scored recency above 1.0."""

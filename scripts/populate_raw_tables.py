@@ -9,11 +9,14 @@ Dividend payers are identified from SEC Company Facts (the same XBRL
 classification used by scripts.populate_reference_tables). The same SEC
 Company Facts payload is then mined for preferred-stock coupon_rate and
 liquidation_preference XBRL tags (see
-src.crispdm.sec_client.extract_preferred_terms_from_companyfacts); those SEC
-values take priority over the Yahoo Finance / OpenBB profile fetched by
-scripts.populate_dividend_data.fetch_ticker_profile, which only fills in
-sector/industry/tax_status/call_date and other fields SEC XBRL does not
-reliably expose. A minimal reference.securities row is created for each payer
+src.crispdm.sec_client.extract_preferred_terms_from_companyfacts). Those facts
+are issuer-level (no series dimension, and par value is used as a fallback),
+so they are stored only as evidence under raw_payload->sec_xbrl with
+sec_xbrl_scope = 'issuer_level_unallocated'. The per-series columns come from
+the security-title parse in scripts.populate_dividend_data.fetch_ticker_profile,
+which also supplies the OpenBB/yfinance profile. Every write goes through
+src.crispdm.ticker_profile_store (append-only history + owned-column merge).
+A minimal reference.securities row is created for each payer
 so the raw.ticker_profile foreign key has a target; scripts.populate_reference_tables
 reconciles those rows with full issuer and classification data on its next run.
 
@@ -61,6 +64,13 @@ from src.crispdm.sec_client import (
     security_type_for_instrument,
 )
 from src.crispdm.stage import stage_exit_code
+from src.crispdm.ticker_profile_store import (
+    NAME_PARSE_COLUMNS,
+    OPENBB_COLUMNS,
+    SEC_XBRL_SCOPE,
+    envelope_payload,
+    upsert_ticker_profile,
+)
 
 
 def _offline_enabled():
@@ -751,12 +761,19 @@ def populate_ticker_profiles(limit=None, reuse_max_age_days=DEFAULT_REUSE_MAX_AG
                         "raw_payload": "{}",
                     }
                 else:
+                    primary_type = payer["security_types"][0] if payer["security_types"] else None
+                    # Parse per-series terms from the security's own title (the
+                    # value written to reference.securities.security_name), not
+                    # the issuer name, so this writer and populate_dividend_data
+                    # derive the same terms for the columns they both own.
                     summary = fetch_ticker_profile(
                         payer["ticker"],
-                        security_name=payer["title"],
-                        security_type=payer["security_types"][0]
-                        if payer["security_types"]
-                        else None,
+                        security_name=match_security_title(
+                            payer.get("security_titles", []),
+                            primary_type,
+                            fallback=payer["title"],
+                        ),
+                        security_type=primary_type,
                     )
                 sec_terms = {"coupon_rate": None, "liquidation_preference": None}
                 # Read this one issuer's payload from the raw cache instead of
@@ -769,79 +786,40 @@ def populate_ticker_profiles(limit=None, reuse_max_age_days=DEFAULT_REUSE_MAX_AG
                     except Exception as exc:
                         print(f"  Error extracting SEC XBRL terms for {payer['ticker']}: {exc}")
 
-                # Coupon precedence is deliberate, not a side effect of stage
-                # order: the per-security name parse (dei:SecurityTitle /
-                # short_name) is the primary source because it is instrument
-                # specific, and SEC XBRL terms are the fallback for issuers
-                # whose title carries no parsable rate. SEC terms are read from
-                # the issuer's companyfacts, so they are only correct for a
-                # single-series issuer; overwriting a good per-security parse
-                # with them mislabels multi-series issuers.
-                if sec_terms.get("coupon_rate") is not None and summary.get("coupon_rate") is None:
-                    summary["coupon_rate"] = sec_terms["coupon_rate"]
-                if sec_terms.get("liquidation_preference") is not None:
-                    summary["liquidation_preference"] = sec_terms["liquidation_preference"]
-
-                if not OFFLINE_ON:
-                    summary["provider"] = "SEC_XBRL+OPENBB_YFINANCE"
-                summary["raw_payload"] = json.dumps(
-                    {
-                        "sec_xbrl": sec_terms,
-                        "openbb": json.loads(summary["raw_payload"])
-                        if summary.get("raw_payload")
-                        else None,
-                    },
-                    default=str,
+                # SEC Company Facts carry no series/member dimension, and
+                # extract_preferred_terms_from_companyfacts falls back to par
+                # value when no liquidation-preference concept is filed. The
+                # terms therefore describe the issuer (often its common-stock
+                # par value) and are kept only as issuer-level evidence in the
+                # payload (exposed by preferred.issuer_terms); the per-series
+                # columns come solely from the per-security name parse.
+                openbb = json.loads(summary.get("raw_payload") or "{}")
+                summary["raw_payload"] = envelope_payload(
+                    openbb=openbb,
+                    sec_xbrl=sec_terms,
+                    sec_xbrl_scope=SEC_XBRL_SCOPE,
                 )
+                if OFFLINE_ON:
+                    # Offline rows only fill a brand-new profile; they own no
+                    # column, so they never overwrite an online observation.
+                    owned_columns = ()
+                else:
+                    summary["provider"] = (
+                        "SEC_XBRL+OPENBB_YFINANCE" if openbb else "SEC_XBRL"
+                    )
+                    # Name-parse terms are deterministic for the title, so
+                    # they own their columns (NULL clears a stale value).
+                    # OpenBB columns are owned only when OpenBB answered, so a
+                    # failed fetch does not erase sector/industry.
+                    owned_columns = NAME_PARSE_COLUMNS + (OPENBB_COLUMNS if openbb else ())
 
                 if _upsert_minimal_securities(conn, payer) is False:
                     skipped_legacy += 1
                     conn.rollback()
                     continue
                 row = {"security_id": payer["security_ids"][payer["security_types"][0]], **summary}
-                conn.execute(
-                    text("""
-                    INSERT INTO raw.ticker_profile AS current_profile
-                        (security_id, ticker, provider, sector, industry, security_type,
-                         coupon_type, coupon_rate, fixed_period_end, floating_spread,
-                         tax_status, call_date, liquidation_preference, raw_payload, retrieved_at)
-                    VALUES (:security_id, :ticker, :provider, :sector, :industry,
-                            :security_type, :coupon_type, :coupon_rate, :fixed_period_end,
-                            :floating_spread, :tax_status, :call_date,
-                            :liquidation_preference, CAST(:raw_payload AS jsonb), now())
-                    ON CONFLICT (security_id) DO UPDATE SET
-                        ticker = EXCLUDED.ticker,
-                        provider = CASE
-                            WHEN current_profile.provider = EXCLUDED.provider THEN EXCLUDED.provider
-                            WHEN current_profile.provider IN (
-                                'SEC_XBRL', 'OPENBB_YFINANCE', 'SEC_XBRL+OPENBB_YFINANCE'
-                            ) AND EXCLUDED.provider IN (
-                                'SEC_XBRL', 'OPENBB_YFINANCE', 'SEC_XBRL+OPENBB_YFINANCE'
-                            ) THEN 'SEC_XBRL+OPENBB_YFINANCE'
-                            ELSE EXCLUDED.provider
-                        END,
-                        sector = COALESCE(EXCLUDED.sector, current_profile.sector),
-                        industry = COALESCE(EXCLUDED.industry, current_profile.industry),
-                        security_type = COALESCE(EXCLUDED.security_type, current_profile.security_type),
-                        coupon_type = COALESCE(EXCLUDED.coupon_type, current_profile.coupon_type),
-                        coupon_rate = COALESCE(EXCLUDED.coupon_rate, current_profile.coupon_rate),
-                        fixed_period_end = COALESCE(
-                            EXCLUDED.fixed_period_end, current_profile.fixed_period_end
-                        ),
-                        floating_spread = COALESCE(
-                            EXCLUDED.floating_spread, current_profile.floating_spread
-                        ),
-                        tax_status = COALESCE(EXCLUDED.tax_status, current_profile.tax_status),
-                        call_date = COALESCE(EXCLUDED.call_date, current_profile.call_date),
-                        liquidation_preference = COALESCE(
-                            EXCLUDED.liquidation_preference,
-                            current_profile.liquidation_preference
-                        ),
-                        raw_payload = COALESCE(current_profile.raw_payload, '{}'::jsonb)
-                                     || EXCLUDED.raw_payload,
-                        retrieved_at = now()
-                """),
-                    row,
+                upsert_ticker_profile(
+                    conn, row, loader="populate_raw_tables", owned_columns=owned_columns
                 )
                 conn.execute(
                     text("""

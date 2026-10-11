@@ -27,3 +27,10 @@ def test_rebuild_still_ranks_active_rows_first():
 def test_rebuild_keeps_all_contributing_payloads_for_audit():
     assert "source_profiles" in _normalized()
     assert "JSONB_AGG(" in REBUILD_SQL
+
+
+def test_source_profiles_carry_lineage_not_full_payloads():
+    sql = _normalized()
+    assert "'payload_hash'" in sql
+    assert "'field_sources'" in sql
+    assert "'raw_payload'" not in sql

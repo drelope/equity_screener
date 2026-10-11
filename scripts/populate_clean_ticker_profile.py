@@ -3,9 +3,12 @@
 The raw profile table remains unchanged. This rebuild consolidates to one row
 per normalized (CIK, ticker), selects a representative reference security using
 active status and classifier evidence, keeps only consensus profile values,
-and preserves every contributing raw payload for audit. Only groups with an
-active representative are emitted, so deactivated tickers do not appear in the
-curated snapshot while their payloads stay in ``source_profiles``.
+and records every contributing raw profile for audit. ``source_profiles`` holds
+lineage only (security, provider, retrieval time, payload hash and the loader
+that set each column); the payload itself stays in raw.ticker_profile /
+raw.ticker_profile_load and is joined on demand. Only groups with an active
+representative are emitted, so deactivated tickers do not appear in the
+curated snapshot while their lineage stays in ``source_profiles``.
 
 Usage:
     python -m scripts.populate_clean_ticker_profile
@@ -47,7 +50,8 @@ WITH candidates AS (
            p.call_date,
            p.liquidation_preference,
            p.retrieved_at,
-           p.raw_payload,
+           MD5(p.raw_payload::text) AS payload_hash,
+           p.field_sources,
            s.classification_evidence,
            (CASE WHEN s.active THEN 1000 ELSE 0 END)
            + (CASE LOWER(s.classify_confidence)
@@ -181,7 +185,8 @@ WITH candidates AS (
                    'security_id', security_id,
                    'provider', provider,
                    'retrieved_at', retrieved_at,
-                   'raw_payload', raw_payload,
+                   'payload_hash', payload_hash,
+                   'field_sources', field_sources,
                    'security_type', security_type,
                    'classify_source', classify_source,
                    'classify_confidence', classify_confidence,

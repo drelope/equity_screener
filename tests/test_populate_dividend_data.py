@@ -1,3 +1,4 @@
+import json
 from datetime import date
 from unittest.mock import patch
 
@@ -247,8 +248,8 @@ class _QueueConn:
         return self._results.pop(0)
 
 
-def test_ticker_profile_upsert_preserves_existing_preferred_terms(monkeypatch, capsys):
-    conn = _QueueConn([_Result(rowcount=1), _Result(rowcount=1)])
+def _run_dividend_profile(monkeypatch, openbb_payload):
+    conn = _QueueConn([_Result(rowcount=1), _Result(rowcount=1), _Result(rowcount=1)])
     monkeypatch.setattr(
         dividend_data,
         "get_dividend_paying_securities",
@@ -268,23 +269,42 @@ def test_ticker_profile_upsert_preserves_existing_preferred_terms(monkeypatch, c
             "provider": "OPENBB_YFINANCE",
             "coupon_rate": None,
             "liquidation_preference": None,
-            "raw_payload": "{}",
+            "raw_payload": openbb_payload,
         },
     )
-
     populate_ticker_profiles(conn)
+    return conn
 
-    profile_sql, profile_params = conn.executed[0]
-    assert "sector = COALESCE(EXCLUDED.sector, current_profile.sector)" in profile_sql
-    assert "industry = COALESCE(EXCLUDED.industry, current_profile.industry)" in profile_sql
+
+def test_ticker_profile_write_appends_history_then_upserts_owned_columns(monkeypatch, capsys):
+    conn = _run_dividend_profile(monkeypatch, "{}")
+
+    load_sql, load_params = conn.executed[0]
+    assert "INSERT INTO raw.ticker_profile_load" in load_sql
+    assert load_params["loader"] == "populate_dividend_data"
+
+    profile_sql, profile_params = conn.executed[1]
+    assert "INSERT INTO raw.ticker_profile AS current_profile" in profile_sql
+    # Name-parse columns are owned: a NULL parse clears a stale value.
+    assert "coupon_rate = EXCLUDED.coupon_rate" in profile_sql
+    assert "liquidation_preference = EXCLUDED.liquidation_preference" in profile_sql
+    # OpenBB returned nothing, so sector/industry are preserved.
+    assert "sector = EXCLUDED.sector" not in profile_sql
     assert "SEC_XBRL+OPENBB_YFINANCE" in profile_sql
-    assert "coupon_rate = COALESCE(" in profile_sql
-    assert "current_profile.coupon_rate" in profile_sql
-    assert "current_profile.liquidation_preference" in profile_sql
-    assert "COALESCE(current_profile.raw_payload, '{}'::jsonb)" in profile_sql
     assert profile_params["coupon_rate"] is None
-    assert profile_params["liquidation_preference"] is None
-    assert "UPDATE reference.securities" in conn.executed[1][0]
+    assert json.loads(profile_params["raw_payload"]) == {}
+    assert "UPDATE reference.securities" in conn.executed[2][0]
+    capsys.readouterr()
+
+
+def test_ticker_profile_write_owns_openbb_columns_when_openbb_answered(monkeypatch, capsys):
+    conn = _run_dividend_profile(monkeypatch, '{"symbol": "ACR-PD", "sector": "Real Estate"}')
+
+    profile_sql, profile_params = conn.executed[1]
+    assert "sector = EXCLUDED.sector" in profile_sql
+    assert json.loads(profile_params["raw_payload"]) == {
+        "openbb": {"symbol": "ACR-PD", "sector": "Real Estate"}
+    }
     capsys.readouterr()
 
 
@@ -423,3 +443,18 @@ def test_normalize_sec_dividend_rows_drops_aggregate_amounts_in_per_share_concep
     )
 
     assert [r["amount"] for r in rows] == [12.5]
+
+
+def test_liquidation_preference_ignores_nominal_par_value():
+    from scripts.populate_dividend_data import parse_liquidation_preference
+
+    assert parse_liquidation_preference("Class A common stock, par value $0.0001") is None
+    assert parse_liquidation_preference("Preferred Stock, par value $25 per share") == 25.0
+    assert parse_liquidation_preference("Series B, liquidation preference $1,000") == 1000.0
+    assert (
+        parse_liquidation_preference(
+            "5.50% Series A Cumulative Preferred Shares, par value$0.001 per share "
+            "($25.00 liquidation preference per share)"
+        )
+        == 25.0
+    )

@@ -1,3 +1,4 @@
+import json
 from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 
@@ -170,18 +171,23 @@ class _ProfileConn:
 
     def __init__(self):
         self.profile_rows = []
+        self.profile_sql = []
+        self.load_rows = []
 
     def execute(self, stmt, params=None):
         sql = str(stmt)
-        if "INSERT INTO raw.ticker_profile" in sql:
+        if "INSERT INTO raw.ticker_profile AS current_profile" in sql:
             self.profile_rows.append(params)
+            self.profile_sql.append(sql)
+        elif "INSERT INTO raw.ticker_profile_load" in sql:
+            self.load_rows.append(params)
         return _Rows([])
 
     def commit(self):
         pass
 
 
-def _run_profile_stage(conn, parsed_coupon, sec_coupon):
+def _run_profile_stage(conn, parsed_coupon, sec_coupon, sec_liquidation=None, openbb="{}"):
     payer = {
         "ticker": "AAA",
         "cik": "0000000001",
@@ -205,7 +211,10 @@ def _run_profile_stage(conn, parsed_coupon, sec_coupon):
         patch.object(
             prt,
             "extract_preferred_terms_from_companyfacts",
-            return_value={"coupon_rate": sec_coupon, "liquidation_preference": None},
+            return_value={
+                "coupon_rate": sec_coupon,
+                "liquidation_preference": sec_liquidation,
+            },
         ),
         patch.object(
             prt,
@@ -223,7 +232,7 @@ def _run_profile_stage(conn, parsed_coupon, sec_coupon):
                 "tax_status": None,
                 "call_date": None,
                 "liquidation_preference": None,
-                "raw_payload": "{}",
+                "raw_payload": openbb,
             },
         ),
     ):
@@ -245,12 +254,62 @@ def test_name_parsed_coupon_wins_over_sec_xbrl_terms():
     assert conn.profile_rows[0]["coupon_rate"] == 7.25
 
 
-def test_sec_xbrl_terms_are_the_fallback_when_the_title_does_not_parse():
+def test_sec_xbrl_terms_never_fill_the_per_series_columns():
+    """Issuer-level SEC facts are evidence, not a per-series fallback.
+
+    They carry no series dimension and fall back to par value, so stamping
+    them into coupon_rate/liquidation_preference put common-stock par values
+    (0.01, 0.0001) onto thousands of securities.
+    """
     conn = _ProfileConn()
 
-    _run_profile_stage(conn, parsed_coupon=None, sec_coupon=6.50)
+    _run_profile_stage(conn, parsed_coupon=None, sec_coupon=6.50, sec_liquidation=0.01)
 
-    assert conn.profile_rows[0]["coupon_rate"] == 6.50
+    row = conn.profile_rows[0]
+    assert row["coupon_rate"] is None
+    assert row["liquidation_preference"] is None
+    payload = json.loads(row["raw_payload"])
+    assert payload["sec_xbrl"] == {"coupon_rate": 6.50, "liquidation_preference": 0.01}
+    assert payload["sec_xbrl_scope"] == "issuer_level_unallocated"
+
+
+def test_every_profile_write_is_appended_to_the_load_history_first():
+    conn = _ProfileConn()
+
+    _run_profile_stage(conn, parsed_coupon=7.25, sec_coupon=None)
+
+    assert len(conn.load_rows) == 1
+    assert conn.load_rows[0]["loader"] == "populate_raw_tables"
+    assert conn.load_rows[0]["payload_hash"]
+
+
+def test_name_parse_columns_are_owned_and_overwritten_not_coalesced():
+    conn = _ProfileConn()
+
+    _run_profile_stage(conn, parsed_coupon=None, sec_coupon=None)
+
+    sql = conn.profile_sql[0]
+    assert "coupon_rate = EXCLUDED.coupon_rate" in sql
+    assert "liquidation_preference = EXCLUDED.liquidation_preference" in sql
+    assert "COALESCE(EXCLUDED.coupon_rate" not in sql
+    # OpenBB returned nothing, so sector/industry are not owned and are kept.
+    assert "sector = EXCLUDED.sector" not in sql
+    assert "openbb" not in json.loads(conn.profile_rows[0]["raw_payload"])
+    assert conn.profile_rows[0]["provider"] == "SEC_XBRL"
+
+
+def test_openbb_columns_are_owned_when_openbb_answered():
+    conn = _ProfileConn()
+
+    _run_profile_stage(
+        conn, parsed_coupon=None, sec_coupon=None, openbb='{"symbol": "AAA", "sector": "Energy"}'
+    )
+
+    assert "sector = EXCLUDED.sector" in conn.profile_sql[0]
+    payload = json.loads(conn.profile_rows[0]["raw_payload"])
+    assert payload["openbb"] == {"symbol": "AAA", "sector": "Energy"}
+    assert set(payload) <= {"openbb", "sec_xbrl", "sec_xbrl_scope"}
+    assert conn.profile_rows[0]["provider"] == "SEC_XBRL+OPENBB_YFINANCE"
 
 
 def test_no_coupon_is_stored_when_neither_source_has_a_rate():

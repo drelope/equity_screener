@@ -1,3 +1,4 @@
+import json
 from datetime import date, datetime, timezone
 from decimal import Decimal
 
@@ -109,3 +110,133 @@ def test_combined_source_payload_uses_nested_openbb_fields():
     assert values["dividend_yield_source_unit"] == "percent_points"
     assert '"sec_xbrl": {"available": true}' in values["source_payload"]
     assert len(officers) == 1
+
+
+def _envelope_source(openbb, **extra):
+    return {
+        "security_id": "security-x",
+        "ticker": "x",
+        "provider": "SEC_XBRL+OPENBB_YFINANCE",
+        "retrieved_at": datetime(2026, 10, 2, tzinfo=timezone.utc),
+        "cik": "0000000001",
+        "issuer_id": 7,
+        "raw_payload": {"openbb": openbb, **extra},
+    }
+
+
+def test_openbb_identity_wins_over_legacy_top_level_keys_and_blanks_are_skipped():
+    source = _envelope_source(
+        {"symbol": " abr ", "name": "  ", "long_name": "Arbor Realty Trust, Inc."},
+        symbol="STALE",
+        name="Stale Name",
+    )
+    source["raw_payload"]["symbol"] = "STALE"
+
+    values, _ = clean_profiles._clean_profile_row(source, {"symbol": "text"})
+
+    assert values["symbol"] == "ABR"
+    assert values["parent_name"] == "Arbor Realty Trust, Inc."
+    assert values["cik"] == "0000000001"
+    assert values["issuer_id"] == 7
+
+
+def test_non_finite_numerics_load_as_null_and_are_flagged():
+    source = _envelope_source(
+        {
+            "symbol": "ABR",
+            "name": "Arbor",
+            "trailing_p_e": "Infinity",
+            "forward_p_e": "NaN",
+            "price_to_sales": 1.5,
+        }
+    )
+    column_types = {
+        "trailing_p_e": "numeric",
+        "forward_p_e": "numeric",
+        "price_to_sales": "numeric",
+    }
+
+    values, _ = clean_profiles._clean_profile_row(source, column_types)
+
+    assert values["trailing_p_e"] is None
+    assert values["forward_p_e"] is None
+    assert values["price_to_sales"] == Decimal("1.5")
+    assert values["non_finite_fields"] == ["forward_p_e", "trailing_p_e"]
+    assert '"trailing_p_e": "Infinity"' in values["source_payload"]
+
+
+def test_unmapped_scalars_are_preserved_and_listed_and_nested_arrays_are_routed():
+    source = _envelope_source(
+        {
+            "symbol": "ABR",
+            "name": "Arbor",
+            "ebitda": 123,
+            "company_officers": [{"name": "A"}],
+            "executive_team": [{"name": "A"}],
+            "corporate_actions": [],
+        },
+        sec_xbrl={"coupon_rate": 8.5},
+    )
+
+    values, officers = clean_profiles._clean_profile_row(source, {"symbol": "text", "name": "text"})
+
+    assert values["unmapped_source_keys"] == ["ebitda"]
+    payload = json.loads(values["source_payload"])
+    assert payload["unmapped"] == {"ebitda": 123}
+    assert payload["sec_xbrl"] == {"coupon_rate": 8.5}
+    assert "company_officers" not in payload["openbb"]
+    assert "executive_team" not in payload["unmapped"]
+    assert officers == [{"name": "A"}]
+
+
+def test_earnings_timestamp_is_an_instant_not_a_date():
+    value = clean_profiles._coerce_profile_value(
+        "earnings_timestamp", "timestamp with time zone", 1790884803
+    )
+
+    assert value == datetime(2026, 10, 1, 20, 0, 3, tzinfo=timezone.utc)
+
+
+def test_corporate_actions_flatten_to_typed_rows():
+    source = _envelope_source(
+        {
+            "symbol": "RAY",
+            "name": "Raytech",
+            "corporate_actions": [
+                {
+                    "header": "Ticker Change",
+                    "message": "RAY is trading under new symbol ATTT effective Sep. 10, 2026",
+                    "meta": {
+                        "eventType": "TICKER_CHANGE",
+                        "newTicker": "ATTT",
+                        "dateEpochMs": 1789012800000,
+                    },
+                },
+                {
+                    "header": "Dividend",
+                    "message": "cash dividend",
+                    "meta": {
+                        "eventType": "DIVIDEND",
+                        "amount": "0.007",
+                        "dateEpochMs": 1791518400000,
+                    },
+                },
+            ],
+        }
+    )
+
+    rows = clean_profiles._clean_corporate_action_rows(source, "RAY")
+
+    assert [row["action_no"] for row in rows] == [1, 2]
+    assert rows[0]["event_type"] == "TICKER_CHANGE"
+    assert rows[0]["new_ticker"] == "ATTT"
+    assert rows[0]["effective_date"] == date(2026, 9, 10)
+    assert rows[0]["security_id"] == "security-x"
+    assert rows[1]["amount"] == Decimal("0.007")
+    assert set(rows[0]) == set(clean_profiles.CORPORATE_ACTION_COLUMNS)
+
+
+def test_officer_rows_carry_every_insert_column():
+    rows = clean_profiles._clean_officer_rows("ABR", "Arbor", [{"name": "A"}])
+
+    assert set(rows[0]) == set(clean_profiles.OFFICER_COLUMNS)

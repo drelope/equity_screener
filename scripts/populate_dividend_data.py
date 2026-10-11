@@ -73,6 +73,12 @@ from src.crispdm.sec_client import (
     get_companyfacts,
 )
 from src.crispdm.stage import stage_exit_code
+from src.crispdm.ticker_profile_store import (
+    NAME_PARSE_COLUMNS,
+    OPENBB_COLUMNS,
+    envelope_payload,
+    upsert_ticker_profile,
+)
 
 try:
     from src.crispdm.openbb_client import dividends as openbb_dividends
@@ -515,10 +521,17 @@ SERIES_RE = re.compile(r"\bSeries\b.*", re.IGNORECASE | re.DOTALL)
 PERCENT_RE = re.compile(r"(\d+(?:\.\d+)?)\s*%")
 CALL_DATE_RE = re.compile(r"(\d{1,2})[/-](\d{1,2})[/-](\d{2,4})|(\d{2,4})-(\d{1,2})-(\d{1,2})")
 LIQUIDATION_RE = re.compile(
-    r"(?:liquidation\s+(?:preference|value)|par\s+value)"
-    r"(?:\s+of)?\s*\$?\s*([\d,]+(?:\.\d+)?)",
+    r"liquidation\s+(?:preference|value)(?:\s+of)?\s*\$?\s*([\d,]+(?:\.\d+)?)",
     re.IGNORECASE,
 )
+LIQUIDATION_TRAILING_RE = re.compile(
+    r"\$\s*([\d,]+(?:\.\d+)?)\s*(?:per\s+share\s+)?liquidation\s+(?:preference|value)",
+    re.IGNORECASE,
+)
+PAR_VALUE_RE = re.compile(r"par\s+value(?:\s+of)?\s*\$?\s*([\d,]+(?:\.\d+)?)", re.IGNORECASE)
+#: A par value below this is a nominal legal par (``$0.01``, ``$0.0001``), not a
+#: stated liquidation amount; matches ``doc_clauses.MIN_PER_SHARE``.
+MIN_PAR_AS_LIQUIDATION = 1.0
 FIXED_TO_FLOATING_RE = re.compile(r"fixed[- ]to[- ]floating|\bfixed/floating\b", re.IGNORECASE)
 COUPON_FLOATING_RE = re.compile(
     r"\bfloating\b|\bfloat(?:ing)? rate\b|\bvariable\b|\badjustable\b", re.IGNORECASE
@@ -559,11 +572,22 @@ def parse_call_date(text):
 
 
 def parse_liquidation_preference(text):
-    """Extract a liquidation preference / par value, e.g. ``par value $25``."""
+    """Extract a per-share liquidation preference from a security title.
+
+    An explicit ``liquidation preference $25`` / ``$25.00 liquidation
+    preference`` wins. ``par value $25`` is accepted as the stated amount, but
+    a nominal par such as ``par value $0.0001`` is not a liquidation preference.
+    """
     if not text:
         return None
-    m = LIQUIDATION_RE.search(str(text))
-    return safe_float(m.group(1)) if m else None
+    s = str(text)
+    for pattern in (LIQUIDATION_RE, LIQUIDATION_TRAILING_RE):
+        m = pattern.search(s)
+        if m:
+            return safe_float(m.group(1))
+    m = PAR_VALUE_RE.search(s)
+    value = safe_float(m.group(1)) if m else None
+    return value if value is not None and value >= MIN_PAR_AS_LIQUIDATION else None
 
 
 def parse_coupon_type(text, coupon_rate=None):
@@ -635,13 +659,13 @@ def extract_security_series(security_name):
     return name.strip()
 
 
-def fetch_ticker_profile(ticker, security_name=None, security_type=None):
-    """Fetch and normalize a ticker profile summary for one dividend payer.
+def summarize_ticker_profile(ticker, security_name=None, security_type=None, data=None):
+    """Normalize one ticker profile from a title and an OpenBB summary dict.
 
-    Combines Yahoo Finance / OpenBB (yfinance provider) company profile and
-    quote data with preferred-stock terms parsed from the security name.
+    Pure (no network) so the repair job re-derives the name-parse columns with
+    exactly the logic the nightly writers use.
     """
-    data = openbb_stock_summary(ticker) if openbb_stock_summary is not None else {}
+    data = data or {}
     text_source = " ".join(
         part for part in (security_name, data.get("short_name"), data.get("long_name")) if part
     )
@@ -664,6 +688,16 @@ def fetch_ticker_profile(ticker, security_name=None, security_type=None):
         "liquidation_preference": parse_liquidation_preference(security_name),
         "raw_payload": json.dumps(data, default=str),
     }
+
+
+def fetch_ticker_profile(ticker, security_name=None, security_type=None):
+    """Fetch and normalize a ticker profile summary for one dividend payer.
+
+    Combines Yahoo Finance / OpenBB (yfinance provider) company profile and
+    quote data with preferred-stock terms parsed from the security name.
+    """
+    data = openbb_stock_summary(ticker) if openbb_stock_summary is not None else {}
+    return summarize_ticker_profile(ticker, security_name, security_type, data)
 
 
 def get_dividend_paying_securities(conn, limit=None, tickers=None):
@@ -716,11 +750,12 @@ def populate_ticker_profiles(conn, limit=None, tickers=None):
     ``raw.ticker_profile`` (upserted on ``security_id``) so re-runs refresh
     the summary with current values.
 
-    ``coupon_rate`` follows a deliberate precedence: the per-security name parse
-    wins, and any previously stored value (which ``populate_raw_tables``
-    resolved as name-parse-or-SEC-XBRL-fallback) is only used when this stage
-    cannot parse a rate from the title. Both writers use ``COALESCE(new,
-    stored)`` so the outcome does not depend on which stage ran first.
+    ``coupon_rate`` and the other per-series terms come only from the
+    per-security name parse. Writes go through
+    ``src.crispdm.ticker_profile_store``: the observation is appended to
+    ``raw.ticker_profile_load`` and the name-parse columns are owned (a NULL
+    parse clears a stale value); sector/industry are owned only when OpenBB
+    returned a profile, so a failed fetch does not erase them.
     """
     candidates = get_dividend_paying_securities(conn, limit=limit, tickers=tickers)
 
@@ -732,51 +767,17 @@ def populate_ticker_profiles(conn, limit=None, tickers=None):
                 security_name=candidate["security_name"],
                 security_type=candidate["security_type"],
             )
-            conn.execute(
-                text("""
-                INSERT INTO raw.ticker_profile AS current_profile
-                    (security_id, ticker, provider, sector, industry, security_type,
-                     coupon_type, coupon_rate, fixed_period_end, floating_spread,
-                     tax_status, call_date, liquidation_preference, raw_payload, retrieved_at)
-                VALUES (:security_id, :ticker, :provider, :sector, :industry,
-                        :security_type, :coupon_type, :coupon_rate, :fixed_period_end,
-                        :floating_spread, :tax_status, :call_date,
-                        :liquidation_preference, CAST(:raw_payload AS jsonb), now())
-                ON CONFLICT (security_id) DO UPDATE SET
-                    ticker = EXCLUDED.ticker,
-                    provider = CASE
-                        WHEN current_profile.provider = EXCLUDED.provider THEN EXCLUDED.provider
-                        WHEN current_profile.provider IN (
-                            'SEC_XBRL', 'OPENBB_YFINANCE', 'SEC_XBRL+OPENBB_YFINANCE'
-                        ) AND EXCLUDED.provider IN (
-                            'SEC_XBRL', 'OPENBB_YFINANCE', 'SEC_XBRL+OPENBB_YFINANCE'
-                        ) THEN 'SEC_XBRL+OPENBB_YFINANCE'
-                        ELSE EXCLUDED.provider
-                    END,
-                    sector = COALESCE(EXCLUDED.sector, current_profile.sector),
-                    industry = COALESCE(EXCLUDED.industry, current_profile.industry),
-                    security_type = COALESCE(EXCLUDED.security_type, current_profile.security_type),
-                    coupon_type = COALESCE(EXCLUDED.coupon_type, current_profile.coupon_type),
-                    coupon_rate = COALESCE(
-                        EXCLUDED.coupon_rate, current_profile.coupon_rate
-                    ),
-                    fixed_period_end = COALESCE(
-                        EXCLUDED.fixed_period_end, current_profile.fixed_period_end
-                    ),
-                    floating_spread = COALESCE(
-                        EXCLUDED.floating_spread, current_profile.floating_spread
-                    ),
-                    tax_status = COALESCE(EXCLUDED.tax_status, current_profile.tax_status),
-                    call_date = COALESCE(EXCLUDED.call_date, current_profile.call_date),
-                    liquidation_preference = COALESCE(
-                        EXCLUDED.liquidation_preference,
-                        current_profile.liquidation_preference
-                    ),
-                    raw_payload = COALESCE(current_profile.raw_payload, '{}'::jsonb)
-                                 || EXCLUDED.raw_payload,
-                    retrieved_at = now()
-            """),
-                {**candidate, **summary},
+            openbb = json.loads(summary.get("raw_payload") or "{}")
+            row = {
+                **candidate,
+                **summary,
+                "raw_payload": envelope_payload(openbb=openbb),
+            }
+            upsert_ticker_profile(
+                conn,
+                row,
+                loader="populate_dividend_data",
+                owned_columns=NAME_PARSE_COLUMNS + (OPENBB_COLUMNS if openbb else ()),
             )
             conn.execute(
                 text("""

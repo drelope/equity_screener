@@ -8,6 +8,7 @@ Stages (in dependency order):
     3. populate_dividend_data    -> raw.dividend_data, raw.ticker_profile, preferred.security_terms
     3a. populate_clean_ticker_profile -> clean.ticker_profile (one normalized CIK/ticker row)
     3b. populate_clean_company_profile -> clean.company_profile + clean.company_officer
+                                         + clean.corporate_action
     4a. ... --preferred-facts   -> raw.companyfacts (preferred set; priority, runs first)
     4b. populate_companyfacts   -> raw.sec_submissions + raw.companyfacts (dividend universe)
     4c. ... --sweep-unlinked    -> raw.companyfacts (CIKs in neither universe)

@@ -917,7 +917,16 @@ changes what the next one can measure:
 5. Re-derive `data_quality` over sources the pipeline actually populates for the
    whole universe, normalise `security_type` before comparing, and decide
    explicitly whether the floor is 80% of *all* securities or of the dividend
-   universe.
+   universe. **Resolved 2026-10-09: the whole universe, on real content.**
+   `populate_audit` now scores every active security over
+   `raw.companyfacts` as well as `raw.ticker_profile` — so a security is
+   `no data` only when it has neither source — and `source_reliability` comes
+   from the profile provider rather than a fixed SEC constant. `security_type`
+   is compared after normalising the OpenBB spelling to the reference class, so
+   `"Common Stock, par value $0.01 per share"` agrees with `common_stock`. The
+   nightly floor stays the original 80% over **all** actives; the 10-04/10-07
+   snapshots were recomputed with the new formula so the series stays
+   comparable.
 6. Bound `period_end` by the observation date in the fundamentals extractor, so a
    forward-dated period cannot enter a trailing-four-quarter TTM.
 

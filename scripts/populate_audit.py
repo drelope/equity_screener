@@ -125,7 +125,30 @@ def source_lineage(conn, as_of):
 
 
 def data_quality(conn, as_of):
-    """Score every security on data quality for the as-of date."""
+    """Score every active security on data quality for the as-of date.
+
+    Re-derived 2026-10-09 (WS4 step 5, data-health-workstreams.md) over the
+    sources the pipeline actually populates for the whole active universe.
+    ``raw.companyfacts`` covers the fundamental side of almost every active
+    security, so a security is only ``no data`` when *neither* companyfacts nor
+    a ticker profile exists -- not merely because it is not a dividend payer and
+    therefore unprofiled. The components are:
+
+    - ``source_reliability``: the strongest contributing source -- the profile
+      provider for ``raw.ticker_profile`` rows (WS4 item 9: an OpenBB-sourced
+      profile must not read as SEC_XBRL), or SEC XBRL when the issuer has
+      ``raw.companyfacts``.
+    - ``completeness``: full market metadata (profile) 1.0, fundamentals only
+      (companyfacts) 0.5, nothing 0.0.
+    - ``recency``: newest retrieval in either source, decaying over a year,
+      clamped to [0, 1].
+    - ``consistency``: ``security_type`` compared after normalising the OpenBB
+      spelling to the reference class (WS4 item 8: ``"Common Stock, par value
+      $0.01 per share"`` must agree with ``common_stock``, not be penalised for
+      the wording).
+
+    The ``no data`` band is reserved for securities with no source at all.
+    """
     sql = """
         INSERT INTO audit.data_quality
             (security_id, as_of_date, source_reliability, completeness,
@@ -133,30 +156,40 @@ def data_quality(conn, as_of):
         SELECT
             s.security_id,
             :as_of AS as_of_date,
-            COALESCE(MAX(q.source_reliability), 0.0) AS source_reliability,
-            COALESCE(AVG(q.completeness), 0.0) AS completeness,
-            COALESCE(MAX(q.recency), 0.0) AS recency,
-            COALESCE(MAX(q.consistency), 0.0) AS consistency,
+            q.source_reliability,
+            q.completeness,
+            q.recency,
+            q.consistency,
             COALESCE(
-                0.4 * MAX(q.source_reliability)
-                + 0.3 * AVG(q.completeness)
-                + 0.2 * MAX(q.recency)
-                + 0.1 * MAX(q.consistency),
+                0.4 * q.source_reliability
+                + 0.3 * q.completeness
+                + 0.2 * q.recency
+                + 0.1 * q.consistency,
                 0.0) AS quality_score,
             CASE
-                WHEN COALESCE(MAX(q.source_reliability), 0) = 0 THEN 'no data'
-                WHEN COALESCE(0.4 * MAX(q.source_reliability) + 0.3 * AVG(q.completeness)
-                              + 0.2 * MAX(q.recency) + 0.1 * MAX(q.consistency), 0) >= 0.8 THEN 'good'
-                WHEN COALESCE(0.4 * MAX(q.source_reliability) + 0.3 * AVG(q.completeness)
-                              + 0.2 * MAX(q.recency) + 0.1 * MAX(q.consistency), 0) >= 0.5 THEN 'fair'
+                WHEN COALESCE(q.source_reliability, 0) = 0 THEN 'no data'
+                WHEN COALESCE(0.4 * q.source_reliability + 0.3 * q.completeness
+                              + 0.2 * q.recency + 0.1 * q.consistency, 0) >= 0.8 THEN 'good'
+                WHEN COALESCE(0.4 * q.source_reliability + 0.3 * q.completeness
+                              + 0.2 * q.recency + 0.1 * q.consistency, 0) >= 0.5 THEN 'fair'
                 ELSE 'poor'
             END AS status
         FROM reference.securities s
         CROSS JOIN LATERAL (
             SELECT
-                CASE WHEN tp.security_id IS NOT NULL
-                     THEN COALESCE(:reliability, 0.7) ELSE 0.0 END
-                     AS source_reliability,
+                GREATEST(
+                    CASE
+                        WHEN tp.security_id IS NOT NULL
+                             AND LOWER(COALESCE(tp.provider, '')) LIKE '%openbb%'
+                             THEN COALESCE(:openbb_reliability, 0.9)
+                        WHEN tp.security_id IS NOT NULL
+                             AND LOWER(COALESCE(tp.provider, '')) LIKE '%yfinance%'
+                             THEN COALESCE(:yfinance_reliability, 0.8)
+                        WHEN tp.security_id IS NOT NULL THEN COALESCE(:sec_reliability, 1.0)
+                        ELSE 0.0
+                    END,
+                    CASE WHEN cf.cik IS NOT NULL THEN COALESCE(:sec_reliability, 1.0) ELSE 0.0 END
+                ) AS source_reliability,
                 CASE
                     WHEN tp.security_id IS NOT NULL THEN 1.0
                     WHEN cf.cik IS NOT NULL THEN 0.5
@@ -172,9 +205,19 @@ def data_quality(conn, as_of):
                     ELSE 0.0
                 END AS recency,
                 CASE
-                    WHEN tp.security_type IS NOT NULL AND s.security_type IS NOT NULL
-                         AND LOWER(tp.security_type) = LOWER(s.security_type) THEN 1.0
-                    WHEN tp.security_type IS NOT NULL AND s.security_type IS NOT NULL THEN 0.5
+                    WHEN tp.security_id IS NOT NULL AND tp.security_type IS NOT NULL
+                         AND s.security_type IS NOT NULL
+                         AND ((LOWER(tp.security_type) LIKE '%common%'
+                               AND LOWER(s.security_type) LIKE '%common%')
+                              OR (LOWER(tp.security_type) LIKE '%preferred%'
+                                  AND LOWER(s.security_type) LIKE '%preferred%')
+                              OR (LOWER(tp.security_type) NOT LIKE '%common%'
+                                  AND LOWER(tp.security_type) NOT LIKE '%preferred%'
+                                  AND LOWER(s.security_type) NOT LIKE '%common%'
+                                  AND LOWER(s.security_type) NOT LIKE '%preferred%'))
+                    THEN 1.0
+                    WHEN tp.security_id IS NOT NULL AND tp.security_type IS NOT NULL
+                         AND s.security_type IS NOT NULL THEN 0.5
                     ELSE 0.0
                 END AS consistency
             FROM (SELECT 1 AS one) _z
@@ -182,7 +225,6 @@ def data_quality(conn, as_of):
             LEFT JOIN raw.companyfacts cf ON cf.cik = s.cik
         ) q
         WHERE s.active = TRUE
-        GROUP BY s.security_id
         ORDER BY s.security_id
         ON CONFLICT (security_id, as_of_date) DO UPDATE SET
             source_reliability = EXCLUDED.source_reliability,
@@ -196,7 +238,9 @@ def data_quality(conn, as_of):
         text(sql),
         {
             "as_of": as_of,
-            "reliability": PROVIDER_RELIABILITY.get("SEC_XBRL", 0.7),
+            "sec_reliability": PROVIDER_RELIABILITY.get("SEC_XBRL", 1.0),
+            "openbb_reliability": PROVIDER_RELIABILITY.get("OPENBB", 0.9),
+            "yfinance_reliability": PROVIDER_RELIABILITY.get("YFINANCE", 0.8),
         },
     )
     return result.rowcount

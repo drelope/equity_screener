@@ -37,6 +37,7 @@ from src.crispdm.sec_client import (
     extract_preferred_terms_from_companyfacts,
 )
 from src.crispdm.stage import stage_exit_code
+from src.crispdm.ticker_profile_store import SEC_XBRL_SCOPE, upsert_ticker_profile
 
 DEFAULT_PROVIDER = "SEC_XBRL"
 
@@ -125,7 +126,7 @@ def upsert_preferred_profile(conn, candidate):
 
     sec_terms = _extract_sec_terms(candidate.get("raw_payload"))
 
-    raw_payload = {"sec_xbrl_scope": "issuer_level_unallocated"}
+    raw_payload = {"sec_xbrl_scope": SEC_XBRL_SCOPE}
     if any(value is not None for value in sec_terms.values()):
         raw_payload["sec_xbrl"] = sec_terms
 
@@ -145,51 +146,12 @@ def upsert_preferred_profile(conn, candidate):
         "liquidation_preference": None,
         "raw_payload": json.dumps(raw_payload),
     }
-    result = conn.execute(
-        text("""
-        INSERT INTO raw.ticker_profile AS current_profile
-            (security_id, ticker, provider, sector, industry, security_type,
-             coupon_type, coupon_rate, fixed_period_end, floating_spread,
-             tax_status, call_date, liquidation_preference, raw_payload, retrieved_at)
-        VALUES (:security_id, :ticker, :provider, :sector, :industry,
-                :security_type, :coupon_type, :coupon_rate, :fixed_period_end,
-                :floating_spread, :tax_status, :call_date,
-                :liquidation_preference, CAST(:raw_payload AS jsonb), now())
-        ON CONFLICT (security_id) DO UPDATE SET
-            ticker = EXCLUDED.ticker,
-            provider = CASE
-                WHEN current_profile.provider = EXCLUDED.provider THEN EXCLUDED.provider
-                WHEN current_profile.provider IN (
-                    'SEC_XBRL', 'OPENBB_YFINANCE', 'SEC_XBRL+OPENBB_YFINANCE'
-                ) AND EXCLUDED.provider IN (
-                    'SEC_XBRL', 'OPENBB_YFINANCE', 'SEC_XBRL+OPENBB_YFINANCE'
-                ) THEN 'SEC_XBRL+OPENBB_YFINANCE'
-                ELSE EXCLUDED.provider
-            END,
-            sector = COALESCE(EXCLUDED.sector, current_profile.sector),
-            industry = COALESCE(EXCLUDED.industry, current_profile.industry),
-            security_type = COALESCE(EXCLUDED.security_type, current_profile.security_type),
-            coupon_type = COALESCE(EXCLUDED.coupon_type, current_profile.coupon_type),
-            coupon_rate = COALESCE(EXCLUDED.coupon_rate, current_profile.coupon_rate),
-            fixed_period_end = COALESCE(
-                EXCLUDED.fixed_period_end, current_profile.fixed_period_end
-            ),
-            floating_spread = COALESCE(
-                EXCLUDED.floating_spread, current_profile.floating_spread
-            ),
-            tax_status = COALESCE(EXCLUDED.tax_status, current_profile.tax_status),
-            call_date = COALESCE(EXCLUDED.call_date, current_profile.call_date),
-            liquidation_preference = COALESCE(
-                EXCLUDED.liquidation_preference,
-                current_profile.liquidation_preference
-            ),
-            raw_payload = COALESCE(current_profile.raw_payload, '{}'::jsonb)
-                         || EXCLUDED.raw_payload,
-            retrieved_at = now()
-            """),
-        row,
-    ).rowcount
-    return result
+    # Owns no typed column: per-series terms are not derivable from issuer-level
+    # SEC facts, and security_type is owned by the name-parse writers. Typed
+    # values here only seed a brand-new row; the SEC evidence is refreshed.
+    return upsert_ticker_profile(
+        conn, row, loader="populate_preferred_profiles", owned_columns=()
+    )
 
 
 def populate_preferred_profiles(tickers=None, limit=None):
