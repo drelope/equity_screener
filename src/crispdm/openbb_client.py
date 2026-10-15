@@ -1,9 +1,12 @@
+import logging
 import re
 
 import pandas as pd
 from openbb import obb
 
 from .config import settings
+
+logger = logging.getLogger(__name__)
 
 
 def _df(response):
@@ -65,12 +68,13 @@ def stock_summary(symbol):
                 key = _norm_key(key)
                 if value is not None and not (isinstance(value, float) and pd.isna(value)):
                     data.setdefault(key, value)
-    except Exception:
-        pass
+    except Exception as exc:  # noqa: BLE001 - enrichment is best-effort, never fatal
+        logger.warning("OpenBB profile lookup failed for %s: %s", symbol, exc)
 
     try:
         import yfinance as yf
     except ImportError:
+        logger.warning("yfinance is not installed; %s will be missing quote fields", symbol)
         return data
 
     try:
@@ -79,7 +83,7 @@ def stock_summary(symbol):
             key = _norm_key(key)
             if value is not None and not (isinstance(value, float) and pd.isna(value)):
                 data.setdefault(key, value)
-    except Exception:
-        pass
+    except Exception as exc:  # noqa: BLE001 - enrichment is best-effort, never fatal
+        logger.warning("yfinance quote lookup failed for %s: %s", symbol, exc)
 
     return data

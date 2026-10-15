@@ -699,7 +699,7 @@ def populate_securities(limit=None, repopulate=False, reclassify=False):
                             cik_titles.get(row["cik"]),
                             classification,
                         )
-                except Exception:
+                except Exception:  # noqa: S112 - one bad row must not abort the reseed
                     continue
 
         # SEC live-fetch fallback for CIKs without a stored companyfacts payload.

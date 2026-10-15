@@ -3,7 +3,17 @@ line-length = 100
 extend-exclude = ["docs", ".venv", "venv"]
 
 [lint]
-# Default rule set (E4/E7/E9 + F) keeps the gate meaningful without
-# fighting the project's compact, single-file style.
-select = ["E", "F", "W", "I"]
-ignore = ["E501"]
+# Bandit (S) is on so a new `subprocess`, `assert`, hardcoded credential or
+# unsafe deserialization in library code is caught at lint time. S101 (assert)
+# and S105 (hardcoded password) are noise under tests/ and ignored there.
+#
+# S608 (SQL built from an f-string) is suppressed deliberately: every site was
+# audited and interpolates only module-level *identifiers* (table/column/alias
+# names) or goes through the explorer's `_quote`/`_quote_relation` helpers, while
+# all values are bound as SQLAlchemy parameters. Re-enable it if a query ever
+# interpolates request-supplied data.
+select = ["E", "F", "W", "I", "S"]
+ignore = ["E501", "S608"]
+
+[lint.per-file-ignores]
+"tests/*" = ["S101", "S105"]

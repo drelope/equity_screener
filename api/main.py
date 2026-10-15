@@ -147,7 +147,7 @@ def facts(ticker: str) -> dict[str, Any]:
         if not stored.empty and stored.iloc[0]["raw_payload"] is not None:
             payload = stored.iloc[0]["raw_payload"]
             return payload if isinstance(payload, dict) else {"facts": payload}
-    except Exception:
+    except Exception:  # noqa: S110 - a missing/uninitialized DB must not block a live SEC read
         # A missing/uninitialized database should not prevent a live SEC read.
         pass
     try:

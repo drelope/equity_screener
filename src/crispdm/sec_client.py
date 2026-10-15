@@ -2,13 +2,13 @@ import hashlib
 import logging
 import os
 import re
-import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field
 from datetime import date, timedelta
 from typing import Optional
 
 import requests
 from bs4 import BeautifulSoup
+from defusedxml import ElementTree as ET
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
@@ -1522,7 +1522,7 @@ def fetch_archive_index(cik, accession_no):
                 return items
         except requests.HTTPError:
             continue
-        except Exception:
+        except Exception:  # noqa: S112 - best-effort URL scan; fall through to index.json
             continue
 
     try:

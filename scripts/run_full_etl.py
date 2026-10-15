@@ -83,7 +83,7 @@ def run_module(name, args, skip=False):
         return True
     print(f"\n=== {name} ===")
     started = time.monotonic()
-    result = subprocess.run(
+    result = subprocess.run(  # noqa: S603 - fixed module name + validated flags, never a shell
         [sys.executable, "-m", name, *args],
         cwd=PROJECT_ROOT,
     )

@@ -152,7 +152,7 @@ def drop_reference(database: str, engine=None, admin=None) -> None:
     if engine is not None:
         try:
             engine.dispose()
-        except Exception:  # noqa: BLE001 - disposal must not block cleanup
+        except Exception:  # noqa: BLE001, S110 - disposal must not block cleanup
             pass
     admin = admin or create_engine(settings.database_url, isolation_level="AUTOCOMMIT")
     try:

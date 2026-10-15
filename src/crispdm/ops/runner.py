@@ -103,7 +103,8 @@ def run(
     )
 
     def pump():
-        assert proc.stdout is not None
+        if proc.stdout is None:  # pragma: no cover - stdout is always a PIPE here
+            return
         for line in proc.stdout:
             tail.add(line)
 

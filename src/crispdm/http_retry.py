@@ -38,7 +38,7 @@ def _parse_retry_after(response: requests.Response) -> Optional[float]:
 def _sleep_for(attempt: int, base_delay: float, max_delay: float, jitter: bool) -> float:
     delay = min(base_delay * (2**attempt), max_delay)
     if jitter:
-        delay *= 1.0 + random.uniform(0.0, 0.1)
+        delay *= 1.0 + random.uniform(0.0, 0.1)  # noqa: S311 - backoff jitter, not crypto
     time.sleep(delay)
     return delay
 

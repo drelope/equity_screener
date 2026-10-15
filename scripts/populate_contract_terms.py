@@ -300,7 +300,7 @@ def fetch_source_documents(conn, security, force=False):
         )
         try:
             raw_text, doc_hash = fetch_filing(url)
-        except Exception:
+        except Exception:  # noqa: S112 - a fetch failure skips this exhibit, not the run
             continue
         normalized = html_to_text(raw_text)
         # The index can call an Articles-of-Amendment exhibit "3.1"; only keep

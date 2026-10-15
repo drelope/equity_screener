@@ -21,6 +21,7 @@ Usage:
 import argparse
 import json
 import sys
+import tempfile
 import uuid
 from pathlib import Path
 
@@ -72,7 +73,7 @@ def main():
     parser.add_argument(
         "--out",
         type=Path,
-        default=Path("/tmp/walk_forward_dry_run.json"),
+        default=Path(tempfile.gettempdir()) / "walk_forward_dry_run.json",
         help="Where to write the checkpoint JSON (default /tmp)",
     )
     args = parser.parse_args()

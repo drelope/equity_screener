@@ -38,7 +38,7 @@ def run_full_etl() -> None:
     # Nightly accrual: stage 2 acquires dividends from DIVIDEND_LOOKBACK_START
     # (2025-01-01). After the PoC gate passes, switch to total history by
     # appending "--dividend-full-history" to the command below.
-    result = subprocess.run(
+    result = subprocess.run(  # noqa: S603 - fixed argv, never a shell
         [str(PYTHON), "-m", "scripts.run_full_etl", "--trigger", "airflow"],
         cwd=str(PROJECT_ROOT),
         check=False,

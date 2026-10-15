@@ -23,8 +23,9 @@ def fetch_preferred_stock_data(tickers):
     except ImportError:
         print("Installing yfinance...")
         import subprocess
+        import sys
 
-        subprocess.check_call(["pip", "install", "yfinance"])
+        subprocess.check_call([sys.executable, "-m", "pip", "install", "yfinance"])
         import yfinance as yf
 
     stock_data = {}
