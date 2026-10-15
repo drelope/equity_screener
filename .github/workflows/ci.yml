@@ -24,12 +24,34 @@ jobs:
     strategy:
       matrix:
         python-version: ["3.10", "3.12"]
+    # A real warehouse, so the ~20 DB-gated test modules run instead of
+    # silently skipping (which is what happened with no service here).
+    services:
+      postgres:
+        image: postgres:17.11
+        env:
+          POSTGRES_DB: dividend
+          POSTGRES_USER: dividend
+          POSTGRES_PASSWORD: dividend
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U dividend -d dividend"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      DATABASE_URL: postgresql+psycopg://dividend:dividend@localhost:5432/dividend
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
       - run: pip install -r requirements-dev.txt
+      - name: Create and migrate the warehouse schema
+        run: |
+          python -m scripts.init_db
+          python -m scripts.migrate
       - run: python -m pytest -q
 
   security:

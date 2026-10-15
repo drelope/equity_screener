@@ -40,11 +40,20 @@ through a branch and a reviewed pull request.
 ## 3. Before you open a PR
 
 ```bash
-ruff check .          # lint gate
+ruff check .          # lint gate (includes bandit "S" rules)
 ruff format --check . # format gate
-python -m pytest -q   # test gate (local Dockerized Postgres not required; tests are mocked)
+python -m pytest -q   # test gate; a live Postgres lifts the DB-backed modules out of skip
+pytest -m "not integration" -q   # fast lane: no warehouse needed
 python -m scripts.evaluate_walk_forward   # if the change touches the ML layer
 ```
+
+The suite splits into pure unit tests and `integration` tests that need the
+migrated warehouse. A module that declares a `_live_engine` / `_database_ready`
+probe is tagged `integration` automatically (`tests/conftest.py`), and skips
+when no database is reachable. CI (`ci.yml`) provisions Postgres and runs
+`scripts.init_db` + `scripts.migrate` first, so those modules actually execute
+there rather than skipping silently. Locally, point `DATABASE_URL` at the
+Dockerized warehouse (or run the same two scripts) to exercise them.
 
 Then push and open a pull request against `main`. For the single-owner case a
 PR is still required so the diff is attributable and reviewable; a second
