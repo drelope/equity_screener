@@ -2,6 +2,7 @@ import logging
 import re
 
 import pandas as pd
+import yfinance as yf
 from openbb import obb
 
 from .config import settings
@@ -70,12 +71,6 @@ def stock_summary(symbol):
                     data.setdefault(key, value)
     except Exception as exc:  # noqa: BLE001 - enrichment is best-effort, never fatal
         logger.warning("OpenBB profile lookup failed for %s: %s", symbol, exc)
-
-    try:
-        import yfinance as yf
-    except ImportError:
-        logger.warning("yfinance is not installed; %s will be missing quote fields", symbol)
-        return data
 
     try:
         info = yf.Ticker(symbol).info

@@ -33,10 +33,12 @@ RUNS_HELP = {
     "exit_code": ("audit.nightly_runs", "exit_code", None),
     "duration": (None, None, "finished_at minus started_at, formatted for display."),
     "failed_stages": (None, None, "Stages recorded as failed for this run."),
+    "slowest_stage": (None, None, "Longest stage in this run and its wall time."),
 }
 STAGES_HELP = {
     "stage": (None, None, "ETL stage name."),
     "result": (None, None, "Recorded outcome of the stage in this run."),
+    "seconds": (None, None, "Wall time the stage took in this run, in seconds."),
 }
 COUNTS_HELP = {
     "table": (None, None, "Warehouse relation counted at the end of the run."),
@@ -48,6 +50,30 @@ FRESHNESS_HELP = {
     "sla_hours": (None, None, "Freshness target for the source."),
     "of_sla": (None, None, "Age as a share of the SLA; 1.0 is at the limit."),
 }
+
+
+def _stage_seconds(stages: dict | None) -> dict:
+    """Per-stage wall times, stored under the reserved ``_seconds`` key."""
+    return (stages or {}).get("_seconds") or {}
+
+
+def _slowest_stage(stages: dict | None) -> str:
+    seconds = _stage_seconds(stages)
+    if not seconds:
+        return "-"
+    name = max(seconds, key=seconds.get)
+    return f"{name} ({seconds[name]:g}s)"
+
+
+def _stage_rows(stages: dict | None) -> list[dict]:
+    """Stage outcomes with their timings, the reserved key stripped out."""
+    stages = stages or {}
+    seconds = _stage_seconds(stages)
+    return [
+        {"stage": name, "result": result, "seconds": seconds.get(name)}
+        for name, result in sorted(stages.items())
+        if name != "_seconds"
+    ]
 
 
 @st.cache_data(ttl=120, show_spinner=False)
@@ -117,9 +143,22 @@ def runs_section() -> None:
     shown = runs.assign(
         duration=[ui.fmt_duration(s, f) for s, f in zip(runs.started_at, runs.finished_at)],
         failed_stages=[
-            ", ".join(k for k, v in (s or {}).items() if v == "failed") or "-" for s in runs.stages
+            ", ".join(k for k, v in (s or {}).items() if v == "failed" and k != "_seconds") or "-"
+            for s in runs.stages
         ],
-    )[["run_id", "run_date", "trigger", "status", "exit_code", "duration", "failed_stages"]]
+        slowest_stage=[_slowest_stage(s) for s in runs.stages],
+    )[
+        [
+            "run_id",
+            "run_date",
+            "trigger",
+            "status",
+            "exit_code",
+            "duration",
+            "slowest_stage",
+            "failed_stages",
+        ]
+    ]
     st.dataframe(
         shown,
         hide_index=True,
@@ -132,7 +171,7 @@ def runs_section() -> None:
     left, right = st.columns(2)
     left.markdown("**Stages**")
     left.dataframe(
-        pd.DataFrame(sorted((row.stages or {}).items()), columns=["stage", "result"]),
+        pd.DataFrame(_stage_rows(row.stages), columns=["stage", "result", "seconds"]),
         hide_index=True,
         width="stretch",
         column_config=column_docs.config_map(STAGES_HELP),
