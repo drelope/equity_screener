@@ -46,6 +46,7 @@ def _findings(**overrides):
                 "raw.market_data": 12.0,
                 "reference.securities": 6.0,
                 "raw.companyfacts": 72.0,
+                "preferred.contract_terms": 6.0,
             }
         },
         "quality": {"n": 100, "good_fair_share": 0.9, "mean_quality_score": 0.75},
@@ -58,6 +59,8 @@ def _findings(**overrides):
             "active_preferred_missing_liquidation_preference": 0,
             "active_preferred_preference_over_threshold": 0,
             "active_preferred_issuer_only_titles": 0,
+            "active_preferred_warrant_like": 0,
+            "active_common_with_preferred_terms": 0,
             "active_ticker_reuse_across_ciks": 0,
         },
         "model_gate": {"run_id": None, "recall": None, "created_at": None},
@@ -118,6 +121,22 @@ def test_assess_attention_on_reference_security_anomalies():
     assert "active_preferred_missing_liquidation_preference=4" in check["detail"]
 
 
+def test_a_warrant_like_preferred_row_needs_attention():
+    f = _findings()
+    f["security_consistency"]["active_preferred_warrant_like"] = 2
+    check = next(c for c in _f(f)["checks"] if c["name"] == "security_consistency")
+    assert check["status"] == "attention"
+    assert "active_preferred_warrant_like=2" in check["detail"]
+
+
+def test_preferred_terms_on_a_common_row_need_attention():
+    f = _findings()
+    f["security_consistency"]["active_common_with_preferred_terms"] = 5
+    check = next(c for c in _f(f)["checks"] if c["name"] == "security_consistency")
+    assert check["status"] == "attention"
+    assert "active_common_with_preferred_terms=5" in check["detail"]
+
+
 def test_preferred_reference_gaps_are_informational_not_blocking():
     f = _findings()
     f["security_consistency"]["active_preferred_missing_coupon"] = 806
@@ -175,6 +194,8 @@ def test_security_consistency_query_uses_active_rows_and_named_threshold():
     query = str(_security_consistency_query())
     assert "WHERE s.active = TRUE" in query
     assert "> :preference_review_threshold" in query
+    assert "AS active_preferred_warrant_like" in query
+    assert "AS active_common_with_preferred_terms" in query
     assert PREFERRED_PREFERENCE_REVIEW_THRESHOLD == 1000.0
 
 
@@ -481,6 +502,26 @@ def test_append_style_sources_are_still_aged_by_their_newest_row():
         assert spec["aggregate"] == "MAX", source
         query = str(_freshness_query(source, spec))
         assert f"MAX({spec['column']}) FROM {source}" in query, source
+
+
+def test_contract_terms_is_aged_by_the_latest_mine_with_the_daily_bound():
+    """The miner re-persists every term-bearing security each run, so the newest
+    updated_at is the last successful mine -- the freshness of the table the view
+    and screener read."""
+    spec = FRESHNESS_SOURCES["preferred.contract_terms"]
+    assert spec["column"] == "updated_at"
+    assert spec["aggregate"] == "MAX"
+    assert spec["sla_hours"] == POC_DAILY_BOUND_HOURS
+    assert str(_freshness_query("preferred.contract_terms", spec)) == (
+        "SELECT MAX(updated_at) FROM preferred.contract_terms"
+    )
+
+
+def test_the_document_cache_is_not_a_freshness_source():
+    """raw.contract_documents is a cache written with ON CONFLICT DO NOTHING, so
+    its retrieved_at only moves on a new fetch. Aging it would breach on a
+    healthy nightly that had nothing new to fetch."""
+    assert "raw.contract_documents" not in FRESHNESS_SOURCES
 
 
 def test_nightly_refreshes_the_preferred_set_on_a_tighter_cadence():

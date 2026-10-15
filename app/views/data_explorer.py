@@ -12,7 +12,7 @@ import plotly.express as px
 import streamlit as st
 from sqlalchemy.exc import SQLAlchemyError
 
-from app import ui
+from app import column_docs, ui
 from src.crispdm import explorer
 
 RESULT_KEY = "explorer_result"
@@ -79,7 +79,13 @@ def show_result(label: str) -> None:
     st.caption(f"{len(frame):,} rows")
     if len(frame) >= result["limit"]:
         st.warning(f"Showing the first {result['limit']:,} rows; add filters to narrow the result.")
-    st.dataframe(frame, hide_index=True, width="stretch")
+    spec = explorer.dataset(label)
+    st.dataframe(
+        frame,
+        hide_index=True,
+        width="stretch",
+        column_config=column_docs.config_for(spec.relation, frame.columns),
+    )
     st.download_button(
         "Download as CSV",
         frame.to_csv(index=False).encode("utf-8"),

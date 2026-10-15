@@ -130,6 +130,17 @@ def extract_periodic_financials(companyfacts, max_periods=DEFAULT_MAX_PERIODS):
     consumer resolve ``as_of`` correctly: pick the latest vintage whose
     ``filed`` is at or before the date being evaluated.
 
+    Two lines are derived rather than read from a single tag:
+    ``free_cash_flow`` is ``operating_cash_flow - capital_expenditures``, and
+    ``gross_profit`` is the direct ``GrossProfit`` subtotal when the filer states
+    it, else ``revenue - cost_of_revenue`` using only the total cost-of-revenue
+    concepts. The gross subtraction is safe because the SEC payload orders a
+    period key's mixed durations with the shorter one last, and the per-metric
+    overwrite keeps the last: the shorter duration was last in 100% of 51,675
+    ambiguous cost keys and 125,412 ambiguous revenue keys, so the revenue and
+    cost on one row are both the quarterly figure -- the same assumption
+    ``free_cash_flow`` already makes.
+
     Returns a list of dicts keyed by ``(period_end, fiscal_year,
     fiscal_period, filed)``.
     """
@@ -210,6 +221,19 @@ def extract_periodic_financials(companyfacts, max_periods=DEFAULT_MAX_PERIODS):
     result = []
     for row in rows.values():
         row = dict(row)
+        # Gross profit is the filer's own subtotal when tagged; otherwise it is
+        # derived as revenue minus the *total* cost of revenue. The derivation
+        # relies on the payload ordering documented in the docstring: within one
+        # (end, fp, filed) key the shorter duration is last, so the overwrite
+        # above kept both revenue and cost at the quarterly figure. A filer whose
+        # only cost tag is narrow (CostOfGoodsSold / CostOfServices) has no
+        # cost_of_revenue, so it is left with no gross profit rather than an
+        # overstated one -- absence is coverage, not a value.
+        if row.get("gross_profit") is None:
+            revenue = row.get("revenue")
+            cost = row.get("cost_of_revenue")
+            if revenue is not None and cost is not None:
+                row["gross_profit"] = revenue - cost
         ocf = row.get("operating_cash_flow")
         capex = row.get("capital_expenditures")
         if ocf is not None and capex is not None:

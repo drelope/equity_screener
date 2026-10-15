@@ -525,6 +525,22 @@ def test_dividend_growth_annual_fallback_divides_latest_by_prior(monkeypatch):
     assert "ann.current > 0 AND ann.prior > 0" in sql, "both sides need a positive base"
 
 
+def test_dividend_growth_never_keys_on_the_cadence_column(monkeypatch):
+    """raw.dividend_data.frequency is an informational cadence label.
+
+    Every row once read 'Annual' regardless of the true payment interval, so a
+    filter on it silently picked the two most recent SEC facts regardless of
+    cadence. Now that the column is truthful, the build must not key on it at
+    all -- the growth branches select on provider, concept and date only.
+    """
+    sql = _feature_sql(monkeypatch)
+
+    annual = sql.split("d_annual AS (")[1].split("),\n    ann AS (")[0]
+    annual = annual.split("SELECT p.security_id", 1)[1]
+    assert "frequency" not in annual
+    assert "d.frequency" not in sql
+
+
 def _leverage_frame(**rows):
     base = {"oi_ttm": 100.0, "da_ttm": 20.0, "int_ttm": 10.0, "debt": 240.0}
     base.update(rows)
@@ -841,3 +857,261 @@ def test_earnings_trajectory_reports_a_deterioration_as_negative():
     df = pd.DataFrame([{"eps_ttm": 4.0, "eps_ttm_prior": 5.0}])
     out = features.earnings_growth(df)
     assert out["eps_ttm_growth"].iloc[0] == pytest.approx(-0.2)
+
+
+def _financial_frame(**overrides):
+    base = {
+        "current_price": 100.0,
+        "eps_ttm": 5.0,
+        "rev_ttm": 1_000.0,
+        "oi_ttm": 150.0,
+        "ni_ttm": 100.0,
+        "gross_profit_ttm": 400.0,
+        "ocf_ttm": 120.0,
+        "fcf_ttm": 80.0,
+        "capex_ttm": 40.0,
+        "fcf_ttm_prior": 64.0,
+        "da_ttm": 50.0,
+        "debt": 300.0,
+        "cash": 100.0,
+        "current_assets": 500.0,
+        "current_liabilities": 250.0,
+        "equity": 400.0,
+        "shares_outstanding": 20.0,
+    }
+    base.update(overrides)
+    return pd.DataFrame([base])
+
+
+def test_financial_metrics_computes_the_margins_over_positive_revenue():
+    out = features.financial_metrics(_financial_frame())
+    assert out.gross_margin.iloc[0] == pytest.approx(400 / 1000)
+    assert out.operating_margin.iloc[0] == pytest.approx(150 / 1000)
+    assert out.net_margin.iloc[0] == pytest.approx(100 / 1000)
+    assert out.fcf_margin.iloc[0] == pytest.approx(80 / 1000)
+    assert out.ocf_margin.iloc[0] == pytest.approx(120 / 1000)
+
+
+def test_financial_metrics_keeps_a_negative_net_margin():
+    """A loss is a real adverse signal, not an undefined ratio.
+
+    The denominator guard disqualifies a ratio; the numerator may legitimately
+    be negative. Suppressing a loss would remove exactly the distress the
+    screener is looking for.
+    """
+    out = features.financial_metrics(_financial_frame(ni_ttm=-100.0))
+    assert out.net_margin.iloc[0] == pytest.approx(-0.1)
+
+
+def test_margins_are_null_when_revenue_is_absent_or_nonpositive():
+    absent = features.financial_metrics(_financial_frame(rev_ttm=np.nan))
+    for column in ("gross_margin", "operating_margin", "net_margin", "fcf_margin", "ocf_margin"):
+        assert pd.isna(absent[column].iloc[0]), f"{column} must not divide by a missing revenue"
+
+    zero = features.financial_metrics(_financial_frame(rev_ttm=0.0))
+    assert pd.isna(zero.gross_margin.iloc[0])
+
+    negative = features.financial_metrics(_financial_frame(rev_ttm=-1_000.0))
+    assert pd.isna(negative.operating_margin.iloc[0]), "a negative revenue flips every margin"
+
+
+def test_cash_conversion_needs_positive_earnings():
+    out = features.financial_metrics(_financial_frame())
+    assert out.cash_conversion.iloc[0] == pytest.approx(120 / 100)
+
+    loss = features.financial_metrics(_financial_frame(ni_ttm=-100.0))
+    assert pd.isna(loss.cash_conversion.iloc[0]), "no conversion rate against a loss"
+
+
+def test_capex_intensity_is_capex_over_revenue():
+    out = features.financial_metrics(_financial_frame())
+    assert out.capex_intensity.iloc[0] == pytest.approx(40 / 1000)
+
+
+def test_fcf_growth_needs_a_positive_prior_base():
+    out = features.financial_metrics(_financial_frame())
+    assert out.fcf_growth.iloc[0] == pytest.approx(80 / 64 - 1)
+
+    # 5 / -3 - 1 is -2.67: a recovery would read as a collapse.
+    negative = features.financial_metrics(_financial_frame(fcf_ttm_prior=-64.0))
+    assert pd.isna(negative.fcf_growth.iloc[0])
+
+    zero = features.financial_metrics(_financial_frame(fcf_ttm_prior=0.0))
+    assert pd.isna(zero.fcf_growth.iloc[0])
+
+
+def test_net_debt_requires_both_legs():
+    out = features.financial_metrics(_financial_frame())
+    assert out.net_debt.iloc[0] == pytest.approx(200.0)
+
+    # A missing cash balance treated as zero would inflate net debt to 300.
+    no_cash = features.financial_metrics(_financial_frame(cash=np.nan))
+    assert pd.isna(no_cash.net_debt.iloc[0])
+
+    # A missing debt balance treated as zero would fabricate 100 of net cash.
+    no_debt = features.financial_metrics(_financial_frame(debt=np.nan))
+    assert pd.isna(no_debt.net_debt.iloc[0])
+
+    # A reported zero debt is real and yields genuine net cash.
+    debt_free = features.financial_metrics(_financial_frame(debt=0.0))
+    assert debt_free.net_debt.iloc[0] == pytest.approx(-100.0)
+
+
+def test_net_debt_to_ebitda_uses_operating_income_plus_da():
+    out = features.financial_metrics(_financial_frame())
+    # EBITDA = 150 + 50 = 200, net debt = 300 - 100 = 200.
+    assert out.net_debt_to_ebitda.iloc[0] == pytest.approx(1.0)
+
+    negative_ebitda = features.financial_metrics(_financial_frame(oi_ttm=-100.0))
+    assert pd.isna(negative_ebitda.net_debt_to_ebitda.iloc[0])
+
+
+def test_current_ratio_needs_positive_current_liabilities():
+    out = features.financial_metrics(_financial_frame())
+    assert out.current_ratio.iloc[0] == pytest.approx(2.0)
+
+    zero = features.financial_metrics(_financial_frame(current_liabilities=0.0))
+    assert pd.isna(zero.current_ratio.iloc[0])
+
+
+def test_debt_to_equity_needs_positive_equity():
+    out = features.financial_metrics(_financial_frame())
+    assert out.debt_to_equity.iloc[0] == pytest.approx(300 / 400)
+
+    negative = features.financial_metrics(_financial_frame(equity=-400.0))
+    assert pd.isna(negative.debt_to_equity.iloc[0])
+
+
+def test_pe_and_earnings_yield_are_reciprocals_and_need_positive_eps():
+    out = features.financial_metrics(_financial_frame())
+    assert out.pe_ratio.iloc[0] == pytest.approx(20.0)
+    assert out.earnings_yield.iloc[0] == pytest.approx(0.05)
+    assert out.pe_ratio.iloc[0] * out.earnings_yield.iloc[0] == pytest.approx(1.0)
+
+    # price / -2.00 is negative, and a screener sorting ascending would file the
+    # deepest loss-maker as the cheapest company in the universe.
+    loss = features.financial_metrics(_financial_frame(eps_ttm=-2.0))
+    assert pd.isna(loss.pe_ratio.iloc[0])
+    assert pd.isna(loss.earnings_yield.iloc[0])
+
+
+def test_fcf_yield_and_price_to_book_use_market_cap():
+    out = features.financial_metrics(_financial_frame())
+    # market cap = 100 * 20 = 2,000
+    assert out.fcf_yield.iloc[0] == pytest.approx(80 / 2_000)
+    assert out.price_to_book.iloc[0] == pytest.approx(2_000 / 400)
+
+    no_shares = features.financial_metrics(_financial_frame(shares_outstanding=0.0))
+    assert pd.isna(no_shares.fcf_yield.iloc[0])
+    assert pd.isna(no_shares.price_to_book.iloc[0])
+
+    negative_equity = features.financial_metrics(_financial_frame(equity=-400.0))
+    assert pd.isna(negative_equity.price_to_book.iloc[0])
+
+
+def test_financial_metrics_treats_a_missing_column_as_absent():
+    """A ratio over a column that does not exist is not computable, not an error.
+
+    The same contract leverage_ratios documents: "no such input" and "the input
+    is NULL" mean the same thing.
+    """
+    out = features.financial_metrics(pd.DataFrame([{"current_price": 100.0, "eps_ttm": 5.0}]))
+    assert out.pe_ratio.iloc[0] == pytest.approx(20.0)
+    assert pd.isna(out.gross_margin.iloc[0])
+
+
+def test_financial_metrics_do_not_mutate_their_input():
+    df = _financial_frame()
+    before = df.copy()
+    features.financial_metrics(df)
+    pd.testing.assert_frame_equal(df, before)
+
+
+def test_new_financial_columns_are_declared_and_persisted():
+    """Each V0068 column must be both computed and written.
+
+    A column that exists in FEATURE_COLUMNS but not in INSERT_FEATURE is NULL
+    for every equity regardless of the data -- the empty-column bug the
+    quick_liquidity incident records.
+    """
+    sql = str(features.INSERT_FEATURE)
+    for column in (
+        "gross_margin",
+        "operating_margin",
+        "net_margin",
+        "fcf_margin",
+        "ocf_margin",
+        "cash_conversion",
+        "capex_intensity",
+        "fcf_growth",
+        "net_debt",
+        "net_debt_to_ebitda",
+        "current_ratio",
+        "debt_to_equity",
+        "pe_ratio",
+        "earnings_yield",
+        "fcf_yield",
+        "price_to_book",
+    ):
+        assert column in features.FEATURE_COLUMNS
+        assert f":{column}" in sql
+        assert f"{column}=EXCLUDED.{column}" in sql
+
+
+def test_new_financial_inputs_ride_the_vintage_chains(monkeypatch):
+    """The new flows are summed quarters with an FY fallback, the balances are FY.
+
+    A quarterly-only flow with no FY fallback would be NULL for every filer that
+    reports annually, and a quarterly-summed balance would double-count a
+    balance-sheet level across four filings.
+    """
+    sql = _feature_sql(monkeypatch)
+
+    assert "COALESCE(q.ni_ttm, fy.ni_fy)" in sql
+    assert "fy.gross_profit_fy" in sql
+    assert "COALESCE(q.ocf_ttm, fy.ocf_fy)" in sql
+    assert "COALESCE(q.capex_ttm, fy.capex_fy)" in sql
+    assert "q.fcf_ttm_prior" in sql
+    # Balances come only from the FY path.
+    for column in ("fy.equity_fy equity", "fy.current_assets_fy current_assets"):
+        assert column in sql
+    assert "fy.shares_outstanding_fy shares_outstanding" in sql
+
+
+def test_fcf_prior_ttm_is_four_quarters_before_the_current_four(monkeypatch):
+    sql = _feature_sql(monkeypatch)
+    assert "sum(value) FILTER (WHERE metric = 'fcf' AND rn > 4 AND rn <= 8) fcf_ttm_prior" in sql
+
+
+def test_new_inputs_are_not_features_by_accident():
+    """The intermediate inputs are selected but not declared model inputs.
+
+    A raw TTM dollar amount in FEATURE_COLUMNS would train the model on scale
+    (bigger companies look bigger) and inflate the declared feature count. Only
+    the derived ratios are features.
+    """
+    for column in (
+        "ni_ttm",
+        "gp_ttm",
+        "gross_profit_ttm",
+        "ocf_ttm",
+        "capex_ttm",
+        "fcf_ttm_prior",
+        "equity",
+        "current_assets",
+        "shares_outstanding",
+    ):
+        assert column not in features.FEATURE_COLUMNS
+
+
+def test_no_look_ahead_the_new_metrics_never_read_the_provider_snapshot(monkeypatch):
+    """Point-in-time discipline: the feature SQL must not touch clean.company_profile.
+
+    That table is a single current snapshot (source_retrieved_at fixed at the
+    run date), so any join would put today's P/E into a historical row. The same
+    reasoning retired data_quality_score. Every value is derived from the
+    vintaged fundamentals.periodic_financials rows keyed by `filed`.
+    """
+    sql = _feature_sql(monkeypatch)
+    assert "company_profile" not in sql
+    assert "clean." not in sql

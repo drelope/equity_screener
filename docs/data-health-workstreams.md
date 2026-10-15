@@ -451,7 +451,10 @@ reversible when the gap is closed:
 - `liquidation_discount` -- needs market capitalisation, and no shares
   outstanding are stored for any security, so equity value is not derivable.
 - `legal_rights_score` -- `preferred.contract_terms` holds 2 rows against
-  10,992 securities.
+  10,992 securities. *(Update, 2026-10-13: the contract-terms miner now runs
+  across the whole active preferred set and holds 212 rows over 612 active
+  preferreds; the feature stays retired until a score is defined over those
+  terms, so the 25% weight is still neutralised by `scoring.score`.)*
 - `data_quality_score` -- `audit.data_quality` is a two-date snapshot
   (2026-09-21, 2026-09-26), not a per-`as_of_date` series. Joining it would
   either match nothing or leak today's score into every historical row.
@@ -1364,13 +1367,19 @@ the point:
   for which the metric is *undefined*, not unknown. No source closes it.
 - `legal_rights_score` still has 2 rows of contract terms against 11,015
   securities, and carries 25% of the composite weight, which `scoring.score`
-  neutralises with `fillna(0.5)`.
+  neutralises with `fillna(0.5)`. *(Update, 2026-10-13: the miner now holds 212
+  rows over 612 active preferreds, but no score is defined over the mined terms,
+  so the weight remains neutralised.)*
 - `data_quality_score` is a two-date snapshot, not a series.
 
 `valuation_score` is separately hardcoded to 0.5 and carries 5%. So 30% of the
 composite is constant, and the remaining 70% is silently renormalised. That is a
 scoring-policy question and is untouched here; `scoring.WEIGHTS` is imported only
 by `score_rank` and its tests, so changing it cannot move the WS5 GO verdict.
+*(Update, 2026-10-14: the WS13 Phase 2 work wired a real `valuation_score` from
+the V0068 ratios, so the constant share is now 25% and the measurable subtotal
+75%. The WS5 verdict is unaffected for the reason stated -- nothing here consumes
+the composite. See the WS13 section.)*
 
 Neither restored feature is in the declared ML `FEATURES` list, so labels, the
 `features_v3` checkpoint and the walk-forward result are unaffected.
@@ -1486,6 +1495,9 @@ so the published number answers "how much of this is a measurement" rather than
 every row and a security with nothing measured would still read 43% covered. The
 two are on different denominators on purpose; the migration comment states the
 relationship (`composite_score IS NOT NULL` iff `score_coverage >= 0.2857`).
+*(Update, 2026-10-14: WS13 Phase 2 made valuation_score a real measurement, so
+the constant floor is now 0.25 and the relationship is
+`score_coverage >= 0.3333`; V0070 restates the live column comments. See WS13.)*
 
 Also fixed alongside it: `predicted_class` was `(composite >= threshold).astype(int)`,
 and `NaN >= threshold` is False, so every unscorable security was filed as a
@@ -1764,3 +1776,159 @@ the conflict returns. The check reports any open row as *attention*.
 walk-forward checkpoint was rewritten under v5 (the v4 one is kept as
 `walk_forward_checkpoint.superseded-*.json`), and the latest as-of date was re-scored.
 `model.scores` for the five earlier dates still reflect v3 features.
+
+## WS13 -- V0068 financial metrics: margins, cash flow, balance sheet, valuation
+
+Adds the point-in-time financial ratios the analyst reaches for first and the table
+did not carry: five margins, three cash-flow-quality measures, four balance-sheet
+ratios and four valuation ratios (V0068_financial_metrics.sql). The feature table
+already answered *can this dividend be paid?* (payout, coverage, leverage); it did not
+answer *what kind of business is paying it?* Two issuers on the same yield and payout
+were indistinguishable whether one turned 40% of revenue into gross profit and the
+other 8%.
+
+### Every value is derived point-in-time, from XBRL, not from the provider snapshot
+
+`clean.company_profile` already carries trailing P/E, price-to-book, the margins and
+more at 40-99% coverage. None of it is used. It is a single current snapshot
+(`source_retrieved_at` fixed at the run date), so joining it to a 2018 `as_of_date`
+would put today's P/E into a past row -- exactly the look-ahead that retired
+`data_quality_score`. Each new column is instead derived by `features.financial_metrics()`
+from the vintaged `fundamentals.periodic_financials` rows keyed by `filed`: flows are
+four summed quarters with the FY figure as fallback, balances are the latest public FY
+vintage, never a quarterly sum. The provider snapshot stays display-only in the UI,
+where "today" is the correct date.
+
+### One guard rule, and the failure mode behind each case
+
+A ratio is NULL when its denominator is absent or non-positive; no denominator is ever
+coalesced to zero. The specific hazards:
+
+- **Non-positive revenue** is not a margin of zero, it is no scale at all, and a
+  negative revenue flips every margin on the row.
+- **A loss** has no P/E and no earnings yield: `price / -2.00` is negative, and a
+  screener sorting ascending would rank the deepest loss-maker as the cheapest company.
+- **A negative prior FCF** has no growth rate: `5 / -3 - 1` is `-2.67`, reading as a
+  collapse rather than the recovery it is.
+- **Net debt** needs both legs; a missing cash balance treated as zero inflates net
+  debt, a missing debt balance treated as zero fabricates net cash.
+- **Negative equity** has no price-to-book or debt-to-equity; the accounting identity
+  has broken and the ratio is not a number to be ranked.
+
+The numerator may legitimately be negative: a negative net margin is reported as the
+filer's actual loss, since a loss is a real adverse signal. Only the denominator
+disqualifies a ratio -- the same asymmetry `leverage_ratios` documents.
+
+### Gross profit: tagged, else derived from total cost-of-revenue
+
+`gross_profit` is the filer's own `us-gaap:GrossProfit` subtotal when it states
+one; otherwise it is derived as `revenue - cost_of_revenue`. V0068 declined the
+derivation because "a quarterly cost against a YTD revenue" would manufacture a
+figure the filer never stated. That concern was measured and does not hold: the
+SEC companyfacts payload lists the shorter duration last within a
+`(period_end, fp, filed)` key, and the extractor's per-metric overwrite keeps the
+last, so the shorter duration was last in 100% of 51,675 ambiguous cost keys and
+125,412 ambiguous revenue keys. The revenue and cost stored on one row are both
+the quarterly figure, which makes the subtraction the same operation
+`free_cash_flow = ocf - capex` has always been.
+
+`cost_of_revenue` reads only the two *total* cost concepts: `us-gaap:CostOfRevenue`
+and `us-gaap:CostOfGoodsAndServicesSold`. The narrow tags are deliberately not
+read -- `CostOfGoodsSold` omits services cost and `CostOfServices` omits goods
+cost, so subtracting either from total revenue would overstate gross profit. A
+filer tagging only a narrow cost line keeps a NULL gross profit rather than an
+inflated one: under the section 4.1 house standard a gap costs the filer, it does
+not pay it. 904 candidate filers report revenue but no cost line at all and stay
+unrecoverable on this path; their `gross_profit` is NULL.
+
+### Coverage, measured
+
+The fundamentals rebuild re-read stored companyfacts and all feature rows were
+rebuilt. Coverage on the latest date (2026-10-14, 2,635 rows) and across all
+history:
+
+| Column | latest / 2,635 | all-time / 9,704,003 |
+|---|---|---|
+| `net_margin` | 1,980 | 6,889,649 |
+| `ocf_margin` | 1,985 | 6,925,815 |
+| `cash_conversion` | 2,027 | 5,090,790 |
+| `pe_ratio` / `earnings_yield` | 1,930 | 4,749,798 |
+| `fcf_margin` | 1,620 | 6,064,920 |
+| `capex_intensity` | 1,629 | 6,087,485 |
+| `operating_margin` | 1,474 | 5,854,397 |
+| `price_to_book` | 1,427 | 5,864,078 |
+| `fcf_growth` | 1,261 | 3,379,152 |
+| `debt_to_equity` | 1,218 | 4,374,063 |
+| `fcf_yield` | 1,114 | 6,200,769 |
+| `net_debt` | 1,008 | 4,706,320 |
+| `current_ratio` | 840 | 5,620,598 |
+| `net_debt_to_ebitda` | 692 | 2,818,547 |
+| `gross_margin` | 1,085 | 1,994,469 |
+
+`gross_margin` was the thinnest column (692 on the latest date) when it read only
+the direct `GrossProfit` tag, which 29% of candidate filers carry. V0069's
+derivation lifts the latest-date coverage to 1,085 (41%) and the distinct
+securities with a gross profit from 839 to 1,233: the recoverable set is 403 of
+437 no-subtotal filers, and the residual is the 904 filers with revenue but no
+cost line at all, recorded rather than filled.
+
+### Scoring integration: `valuation_score` is no longer a placeholder
+
+Phase 2 wires the four valuation ratios into the composite. `scoring.score` had
+hardcoded `valuation_score = 0.5` for every security -- the whole reason it was
+excluded from `MEASURABLE` ("a placeholder is never evidence"). It is now a
+cross-sectional percentile blend (`scoring.VALUATION_PARTS`): 0.4 earnings yield,
+0.4 FCF yield (both higher-is-better) and 0.2 price-to-book (lower-is-better),
+renormalised over whichever of the three a filer reports. P/E is deliberately not
+a fourth part -- it is the reciprocal of earnings yield, so including both would
+count the same earnings fact twice.
+
+Because it is now a real measurement, `valuation_score` moves into `MEASURABLE`
+and the coverage denominator grows from 0.70 to 0.75. The one remaining constant
+is `legal_rights_score` (0.25), so the `MIN_PRESENT_WEIGHT = 0.50` floor on the
+*total* now sits at 0.25 of the 0.75 measurable weight (33.3% coverage) instead
+of 0.20 of 0.70. The policy is unchanged -- the floor is still half the *total*
+weight -- but a row with no valuation input no longer receives a free 0.05, so a
+marginal row that used to clear the bar on the placeholder can now fall below it.
+`MEASURABLE_REGIME_KEYS` (regime.py) mirrors the split, and the per-regime
+measurable/constant figure moves from 70/30 to 75/25 at baseline and 80/20 to
+90/10 elsewhere (only `legal_rights` remains constant there).
+
+Measured on the latest feature date (2026-10-14, 2,635 rows): `valuation_score`
+is populated for 2,169 (82%) and takes 2,168 distinct values with **no** row at
+0.5 -- the placeholder is gone. The blended column is published for 2,634 of
+2,635 securities, the one exclusion being a security missing nearly every input;
+the lowest coverage among scored rows is exactly 0.3333, the new floor. The
+relationship holds with no exceptions: `composite_score IS NOT NULL` iff
+`score_coverage >= 0.3333`.
+
+### Not a feature-version bump, even now
+
+`FEATURE_VERSION` stays `features_v5`. The sixteen columns are materialised but not
+declared `model.FEATURES` inputs, so the model's input definition is unchanged and the
+recorded NO-GO gate is not invalidated. This is the V0011 precedent exactly: it added
+`shares_outstanding` and the leverage inputs to the same per-metric quarterly chain
+"without changing what any declared column means", and did not bump the version either.
+The rule scorer now reads the valuation columns directly, but that changes what the
+*composite* consumes, not what the walk-forward *model* consumes, so the checkpoint and
+its `features_v5` string still describe their inputs. Promotion to declared
+`model.FEATURES` inputs -- the step that would move the version and force a
+walk-forward re-evaluation -- is deliberately still a later phase.
+
+### UI integration: the ratios are visible
+
+Phases 3 and 4 surface the sixteen columns without adding a second definition of
+any of them. Security detail gains a **Financials** tab that reads the latest
+point-in-time `model.features` row and groups the ratios the way an analyst reads
+them -- Margins, Cash-flow quality, Balance sheet, Valuation -- each tile's help
+resolved from the stored `COMMENT ON COLUMN` via `app/column_docs.py`, so the
+tooltip is the schema's own definition. The Screener grows a "Financial metric
+columns" multiselect that appends any of the ratios to its table (labels and
+`percent`/`%.2fx`/`$%.0f` formats drawn from the same catalog), two financial
+filters (minimum gross margin, maximum price/book) and swaps two of its six
+headline medians from debt/EBITDA and interest cover to net margin and FCF yield.
+Both pages read only, and every format decision is client-side: the values stay
+NULL when their denominator is absent, so a blank cell is still a gap, not a zero.
+The reported line items gain `cost_of_revenue` and `gross_profit` on the
+Fundamentals tab, keeping the derivation auditable next to the ratio it feeds.
+

@@ -363,8 +363,8 @@ def main():
                 print(f"    {col:24} {n:5d} of {int(unscorable.sum())}")
         print(
             "  Left NULL rather than imputed. The score is published only where at\n"
-            "  least half the measurable weight is present; a row that borrowed the\n"
-            "  remaining half from percentiles would be a rank against the peers who\n"
+            "  least half the *total* weight is present; a row that borrowed the\n"
+            "  remainder from percentiles would be a rank against the peers who\n"
             "  happened to report, not against the company."
         )
 

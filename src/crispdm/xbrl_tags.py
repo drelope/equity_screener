@@ -298,6 +298,25 @@ PERIODIC_FINANCIAL_CONCEPT_TAGS: dict[str, tuple[str, ...]] = {
         "OperatingIncomeLoss",
         "OperatingIncome",
     ),
+    # Gross profit is the top of the P&L ladder, above operating income, and is
+    # reported as a single tag often enough to be worth carrying: it is the
+    # denominator-free cost structure that separates a high-margin compounder
+    # from a thin-margin distributor paying the same dividend yield. The direct
+    # GrossProfit tag is preferred, but only 839 of 2,926 candidate filers tag
+    # it, so ``extract_periodic_financials`` falls back to deriving
+    # revenue - cost_of_revenue when the subtotal is not stated (see that
+    # function for the measurement that makes the subtraction safe). Absence is
+    # still recorded as coverage, never filled from a partial cost line.
+    "gross_profit": ("GrossProfit",),
+    # The cost line the gross-profit derivation subtracts from revenue. Only the
+    # two *total* cost-of-revenue concepts are read: CostOfRevenue and
+    # CostOfGoodsAndServicesSold both cover the whole cost of sales. The narrow
+    # tags are deliberately excluded -- CostOfGoodsSold omits services cost and
+    # CostOfServices omits goods cost, so subtracting either from total revenue
+    # would overstate gross profit and, under the section 4.1 house standard, pay
+    # a filer for what it did not disclose. The same reasoning that keeps
+    # AssetsCurrent out of ``assets`` applies here.
+    "cost_of_revenue": ("CostOfRevenue", "CostOfGoodsAndServicesSold"),
     "net_income": (
         "NetIncomeLoss",
         "NetIncomeLossAvailableToCommonStockholdersBasic",
@@ -408,6 +427,17 @@ PERIODIC_FINANCIAL_CONCEPT_TAGS: dict[str, tuple[str, ...]] = {
     "operating_cash_flow": (
         "NetCashProvidedByUsedInOperatingActivities",
         "NetCashProvidedByUsedInOperatingActivitiesContinuingOperations",
+    ),
+    # Cash paid to repurchase the issuer's own shares -- the buyback leg of
+    # capital returns. It is a cash-flow (duration) fact like capex, reported in
+    # the financing section, and is the only share-repurchase quantity XBRL
+    # records reliably: ~3,392 stored filers carry the common-stock tag and 480
+    # the equity tag (which also covers repurchases of preferred). A filer that
+    # does not tag it has an unknown buyback, not a zero one, so the column
+    # stays NULL and is never coalesced to zero.
+    "share_repurchases": (
+        "PaymentsForRepurchaseOfCommonStock",
+        "PaymentsForRepurchaseOfEquity",
     ),
     "capital_expenditures": (
         "PaymentsToAcquirePropertyPlantAndEquipment",

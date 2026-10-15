@@ -77,15 +77,32 @@ def scoring_features_sql() -> str:
 
 
 def dashboard_features_sql(columns: str) -> str:
-    """Same row selection for the dashboard, plus the score join."""
+    """Same row selection for the dashboard, plus the score and preferred terms.
+
+    The preferred terms (liquidation preference, first call date and the most
+    recent dividend event) come from ``preferred.v_security_terms``, the same
+    1:1 view the Security detail page reads. Resolving them here as well is what
+    let the two pages disagree: this query took issuer-level par/aggregate as a
+    liquidation preference while the detail page did not, and this query's
+    dividend pick ignored the XBRL concept, so a preferred series often showed
+    its issuer's common dividend. One view, one answer.
+
+    The view is keyed by ``security_id`` (primary key), so a plain join holds
+    exactly one row per security and cannot fan the dashboard out.
+    """
     return f"""
-SELECT s.ticker,s.security_type,f.as_of_date,{columns},
-       sc.composite_score,sc.score_coverage
+SELECT s.ticker,s.security_type,s.currency,f.as_of_date,{columns},
+       sc.composite_score,sc.score_coverage,
+       v.ex_date AS ex_date,
+       v.dividend_amount AS dividend_amount,
+       v.liquidation_preference AS liquidation_preference,
+       v.first_call_date AS first_call_date
 FROM reference.securities s
 JOIN LATERAL (
     {_latest_row("s")}
 ) f ON TRUE
 LEFT JOIN model.scores sc ON sc.security_id=f.security_id AND sc.as_of_date=f.as_of_date
+LEFT JOIN preferred.v_security_terms v ON v.security_id=s.security_id
 WHERE s.active = TRUE
 ORDER BY sc.composite_score DESC NULLS LAST
 """

@@ -13,12 +13,21 @@ Stages (in dependency order):
     4b. populate_companyfacts   -> raw.sec_submissions + raw.companyfacts (dividend universe)
     4c. ... --sweep-unlinked    -> raw.companyfacts (CIKs in neither universe)
     5. populate_sec_documents    -> raw.sec_documents concept_groups (dividend universe only)
+    5b. populate_contract_terms  -> preferred.contract_terms (mined liquidation/call terms,
+                                    feeding preferred.v_security_terms)
     6. populate_fundamentals     -> fundamentals.periodic_financials (offline, stored XBRL)
     7. build_features            -> model.features (offline, last --feature-days only)
     8. score_rank                -> model.scores + model.predictions + model.rankings
     9. populate_audit            -> audit.source_lineage + audit.data_quality (offline)
     10. label_targets (optional) -> model.features.target_sustainable_dividend
                                     (run with --run-labels after ~12 months of data)
+
+After the reference writers (stage 3a above), two idempotent repair stages run
+before the 4a preferred sweep and the features: ``repair_security_classification``
+moves SPAC warrants/rights/units off 'preferred stock', and
+``repair_ticker_profile_sec_terms`` resets issuer-level SEC terms copied onto
+common/preferred rows. Skip both with ``--skip-repairs``; skip the miner with
+``--skip-contract-terms``.
 
 Before stage 0, ``migrate --check`` refuses to start if any migration on disk
 is unapplied. Stages 6-8 were not wired in until the 2026-09-30 session: the
@@ -264,6 +273,21 @@ def main():
     )
     parser.add_argument("--skip-sec-documents", action="store_true", help="Skip stage 5")
     parser.add_argument(
+        "--skip-contract-terms",
+        action="store_true",
+        help="Skip stage 5b, the preferred liquidation/call-price miner. The "
+        "preferred.v_security_terms view then keeps the last mined terms: an "
+        "un-refreshed run shows stale (or absent) liquidation/call values.",
+    )
+    parser.add_argument(
+        "--skip-repairs",
+        action="store_true",
+        help="Skip the classification and ticker-profile repair stages. Only safe "
+        "on a partial/debug run: a full nightly that skips them leaves "
+        "misclassified SPAC warrants as 'preferred stock' and issuer-level SEC "
+        "terms on common stock, which the view and the screener then read.",
+    )
+    parser.add_argument(
         "--skip-derived",
         action="store_true",
         help="Do not run the offline derived stages (fundamentals, features, "
@@ -371,6 +395,9 @@ def main():
     if args.limit is not None:
         unlinked_companyfacts_args += ["--max-ciks", str(args.limit)]
     sec_documents_args = list(base)
+    contract_terms_args = list(base)
+    if args.limit is not None:
+        contract_terms_args += ["--max", str(args.limit)]
 
     started_at = datetime.now(timezone.utc)
     stages = {}
@@ -454,6 +481,24 @@ def main():
         if all_ok and not stage("scripts.populate_clean_company_profile", []):
             all_ok = False
 
+        # Repair stages run after every reference writer and before 4a/features,
+        # so what downstream reads is already corrected:
+        #   - classification repair moves SPAC warrants/rights/units off
+        #     'preferred stock', which also shrinks the 4a preferred sweep and the
+        #     dividend/feature universe to real preferreds;
+        #   - the ticker-profile repair resets issuer-level SEC terms the writers
+        #     copied onto common and preferred rows.
+        # Both are DB-only and idempotent, so a re-run reports zero changes.
+        if all_ok and not stage(
+            "scripts.repair_security_classification", [], args.skip_repairs
+        ):
+            all_ok = False
+
+        if all_ok and not stage(
+            "scripts.repair_ticker_profile_sec_terms", [], args.skip_repairs
+        ):
+            all_ok = False
+
         # raw.companyfacts holds three populations, all refreshed here.
         #
         # Stage 4a is the preferred set and runs FIRST: it is the priority half, on a
@@ -506,6 +551,17 @@ def main():
                 sec_documents_args += ["--all"]
         if all_ok and not stage(
             "scripts.populate_sec_documents", sec_documents_args, args.skip_sec_documents
+        ):
+            all_ok = False
+
+        # Stage 5b: mine the governing documents for per-share liquidation and
+        # call price. It fetches its own 8-K Certificate of Designation /
+        # prospectus filings (cached in raw.contract_documents), so it runs after
+        # the document stages and before build_features, which reads
+        # preferred.v_security_terms. Without it the view keeps the last mined
+        # terms and the screener/detail pages show stale or absent values.
+        if all_ok and not stage(
+            "scripts.populate_contract_terms", contract_terms_args, args.skip_contract_terms
         ):
             all_ok = False
 

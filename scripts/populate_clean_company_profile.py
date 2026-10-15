@@ -5,7 +5,10 @@ entry is stored in clean.company_officer and each corporate_actions entry in
 clean.corporate_action, all rebuilt in one transaction. The 52_week_change
 source key is mapped to pct_change_52w, epoch fields are converted to UTC
 dates/timestamps, Infinity/NaN numerics load as NULL (listed in
-non_finite_fields), and missing compensation remains NULL.
+non_finite_fields), and missing compensation remains NULL. Issuer-level
+attributes (contact, HQ, sector/industry, fiscal dates, statement headlines)
+are harmonized across an issuer's listings via harmonize_issuer_attributes so
+thin non-primary listings (AEMRF vs AEM) do not drift from the primary.
 
 Mapping manifest: every OpenBB key is either a typed column (directly or via
 SOURCE_KEY_RENAMES), a nested array handled by NESTED_SOURCE_KEYS, or an
@@ -17,6 +20,7 @@ Usage:
 """
 
 import json
+import re
 import sys
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
@@ -101,6 +105,102 @@ CORPORATE_ACTION_COLUMNS = (
     "source_retrieved_at",
     "source_payload",
 )
+# Issuer-level columns that repeat across an issuer's listings and are backfilled
+# onto listings whose provider payload omitted them. Every key the hierarchy
+# view still counts as issuer drift (clean.v_company_hierarchy.issuer_keys,
+# V0064) is fillable here, so drift seen at the view is recoverable high in the
+# stack: cik and issuer_id are the only view issuer keys absent, and they are
+# provenance attached by the security join, not data the cleaner derives. The
+# list ALSO fills the provider's normalized-duplicate columns (business_phone_no,
+# company_url, hq_address1, hq_address_city, hq_state, hq_country,
+# full_time_employees, industry_disp, sector_disp) that the view deliberately no
+# longer flags. Never touched: row identity (symbol, parent_name), per-listing
+# venue keys (market, exchange, stock_exchange, full_exchange_name, currency)
+# and per-share statement columns (book_value, revenue_per_share,
+# total_cash_per_share), which stay NULL on a thin listing rather than being
+# overwritten.
+ISSUER_ATTRIBUTE_COLUMNS = (
+    "phone",
+    "business_phone_no",
+    "website",
+    "company_url",
+    "fax",
+    "address1",
+    "hq_address1",
+    "address2",
+    "hq_address_city",
+    "city",
+    "state",
+    "hq_state",
+    "country",
+    "hq_country",
+    "zip",
+    "language",
+    "region",
+    "employees",
+    "full_time_employees",
+    "industry",
+    "industry_key",
+    "industry_disp",
+    "sector",
+    "sector_disp",
+    "sector_key",
+    "esg_populated",
+    "financial_currency",
+    "gross_margins",
+    "gross_profits",
+    "total_revenue",
+    "net_income_to_common",
+    "debt_to_equity",
+    "ebitda_margins",
+    "profit_margins",
+    "revenue_growth",
+    "most_recent_quarter",
+    "last_fiscal_year_end",
+    "next_fiscal_year_end",
+)
+
+
+def _is_present(value):
+    return value is not None and not (isinstance(value, str) and not value.strip())
+
+
+def _listing_order_key(row):
+    # Primary listing first: no '-'/'.' postfix, then shortest symbol, then
+    # symbol - mirrors clean.v_company_hierarchy's listing_rank.
+    symbol = str(row.get("symbol") or "").upper()
+    return (bool(re.search(r"[-.]", symbol)), len(symbol), symbol)
+
+
+def harmonize_issuer_attributes(profile_rows):
+    """Backfill missing issuer-level attributes across an issuer's listings.
+
+    Thin non-primary listings (e.g. AEMRF vs AEM) cover the same issuer but
+    omit issuer-level fields, which surfaces as parent-attribute "drift" in
+    clean.v_company_hierarchy. For each CIK, a missing/blank value in
+    ISSUER_ATTRIBUTE_COLUMNS is copied from the most complete listing,
+    preferring the primary listing as donor. Existing values are never
+    overwritten, so genuine disagreement survives and keeps being reported.
+    Per-listing quote, valuation and venue columns are never touched.
+    """
+    by_cik = {}
+    for row in profile_rows:
+        by_cik.setdefault(row.get("cik"), []).append(row)
+    for cik, rows in by_cik.items():
+        if cik is None or len(rows) < 2:
+            continue
+        ordered = sorted(rows, key=_listing_order_key)
+        for column in ISSUER_ATTRIBUTE_COLUMNS:
+            donor = next(
+                (row[column] for row in ordered if _is_present(row.get(column))),
+                None,
+            )
+            if donor is None:
+                continue
+            for row in rows:
+                if not _is_present(row.get(column)):
+                    row[column] = donor
+    return profile_rows
 
 
 class NonFiniteValue(ValueError):
@@ -511,6 +611,7 @@ def rebuild_company_profiles():
                 (row["parent_name"], action)
                 for action in _clean_corporate_action_rows(source, row["symbol"])
             )
+        harmonize_issuer_attributes(profile_rows)
 
         conn.execute(text("DELETE FROM clean.company_profile"))
         conn.execute(

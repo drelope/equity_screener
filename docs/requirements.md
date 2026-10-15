@@ -6,7 +6,7 @@ criteria so they survive knowledge loss. It deliberately stays one page; the
 authoritative technical design remains `../README.md`. Values below are drawn
 from the code (`src/crispdm/scoring.py`, `src/crispdm/config.py`,
 `scripts/populate_reference_tables.py`) and are the source of truth for the
-web UI caption in `app/streamlit_app.py`.
+web UI caption in `app/views/screener.py`.
 
 ## 1. Business objectives
 
@@ -43,7 +43,7 @@ percentile rank of the factor across the current feature date
 | legal_rights_score | **25%** | preferred-stock legal terms / security-terms lookup |
 | appreciation_score | **15%** | 0.6·252d momentum + 0.4·63d momentum |
 | risk_score | **10%** | inverted percentile of 252d realized volatility |
-| valuation_score | **5%** | currently neutral placeholder (0.5) |
+| valuation_score | **5%** | 0.4·earnings yield + 0.4·fcf yield + 0.2·price/book (inverted) |
 
 `model.predictions` thresholds the composite against `precision_threshold`
 (0.5 by default). That is a relative rank, not a calibrated probability.

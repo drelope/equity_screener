@@ -599,6 +599,13 @@ def classify_instrument(
             {"phase": 0, "signal": "submissions_mismatch", "detail": {"symbol": symbol}}
         )
 
+    # The issuer's leading (primary) symbol is its common class. Issuer-level
+    # evidence (preferred dividends, a "Preferred ... Fund" name, a preferred-
+    # only concept bag) describes the issuer, not this instrument, so it must
+    # never turn the primary symbol preferred; only per-symbol evidence (dash
+    # suffix, series-bound dei title) can.
+    primary_symbol = anchor["anchor_ok"] and anchor["in_tickers"] and anchor["primary"]
+
     # Phase 1: symbol dash suffix (non-common classes decide immediately).
     suffix = symbol_suffix_evidence(symbol)
     if suffix is not None and suffix.security_type != "common_stock":
@@ -637,8 +644,15 @@ def classify_instrument(
     if issuer_name:
         issuer_type = classify_security_type(issuer_name)
         if issuer_type != "other":
-            evidence.append({"phase": 2, "signal": "issuer_title", "detail": {"type": issuer_type}})
-            if suffix is None:
+            suppressed = issuer_type == "preferred stock" and primary_symbol
+            evidence.append(
+                {
+                    "phase": 2,
+                    "signal": "issuer_title",
+                    "detail": {"type": issuer_type, "primary_symbol": primary_symbol},
+                }
+            )
+            if suffix is None and not suppressed:
                 return InstrumentClassification(
                     security_type=issuer_type,
                     source="issuer_title",
@@ -748,13 +762,31 @@ def classify_instrument(
     has_common = any("common" in tag for tag in facts)
     has_preferred = any("preferred" in tag for tag in facts)
     if has_preferred and not has_common and "preferred stock" in bag:
+        # The tag names the *issuer* (it reported a preferred dividend), not the
+        # listed instrument. The submissions leading ticker is the issuer's
+        # common class even when its preferred is unlisted and pays the
+        # dividends, so only a non-primary symbol inherits the tag (e.g. CHSCL);
+        # the primary falls through as common_stock (e.g. CNDT).
         evidence.append(
             {
                 "phase": 4,
                 "signal": "dividend_facts",
-                "detail": {"preferred_tag": True, "common_tag": False},
+                "detail": {
+                    "preferred_tag": True,
+                    "common_tag": False,
+                    "primary_symbol": primary_symbol,
+                },
             }
         )
+        if primary_symbol:
+            return InstrumentClassification(
+                security_type="common_stock",
+                source="submissions_primary",
+                confidence="medium",
+                evidence=evidence,
+                conflicts=conflicts,
+                submissions=anchor,
+            )
         return InstrumentClassification(
             security_type="preferred stock",
             source="dividend_facts",
@@ -800,7 +832,23 @@ def classify_instrument(
             submissions=anchor,
         )
     decided_type = collapse_security_types(bag, classification.get("dividend_facts"))
-    evidence.append({"phase": 5, "signal": "concept_bag", "detail": {"bag": bag}})
+    primary_suppressed = decided_type == "preferred stock" and primary_symbol
+    evidence.append(
+        {
+            "phase": 5,
+            "signal": "concept_bag",
+            "detail": {"bag": bag, "primary_symbol": primary_symbol},
+        }
+    )
+    if primary_suppressed:
+        return InstrumentClassification(
+            security_type="common_stock",
+            source="submissions_primary",
+            confidence="low",
+            evidence=evidence,
+            conflicts=conflicts,
+            submissions=anchor,
+        )
     return InstrumentClassification(
         security_type=decided_type,
         source="concept_bag",
@@ -820,6 +868,11 @@ def security_type_for_instrument(ticker, title, classification, dei_titles=None,
     never fan out into several rows. Delegates to :func:`classify_instrument`,
     which combines the symbol suffix, dei titles bound by series letter, the
     submissions anchor and dividend evidence into one audited decision.
+
+    Issuer-level evidence (preferred dividends, an issuer name like "Preferred
+    & Income Fund", a preferred-only concept bag) is only ever used to decide a
+    *non-primary* symbol: the submissions leading ticker is the issuer's common
+    class and falls through as ``common_stock`` regardless.
     """
     return classify_instrument(
         ticker,

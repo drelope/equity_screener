@@ -80,6 +80,20 @@ def test_fundamentals_extracts_canonical_metrics():
                             ]
                         }
                     },
+                    "GrossProfit": {
+                        "units": {
+                            "USD": [
+                                {
+                                    "val": 400,
+                                    "start": "2025-01-01",
+                                    "end": "2025-12-31",
+                                    "fy": 2025,
+                                    "fp": "FY",
+                                    "filed": "2026-02-01",
+                                },
+                            ]
+                        }
+                    },
                     "Assets": {
                         "units": {
                             "USD": [
@@ -106,9 +120,131 @@ def test_fundamentals_extracts_canonical_metrics():
     assert row["operating_cash_flow"] == 80
     assert row["capital_expenditures"] == 30
     assert row["free_cash_flow"] == 50
+    assert row["gross_profit"] == 400
     assert row["assets"] == 5000
     assert row["fiscal_period"] == "FY"
     assert row["source"] == "SEC_XBRL"
+
+
+def test_gross_profit_is_tagged_or_derived_from_total_cost_only():
+    """The direct GrossProfit subtotal wins; otherwise revenue - total cost.
+
+    Only the two *total* cost-of-revenue concepts are subtracted. A filer whose
+    only cost tag is narrow (CostOfServices / CostOfGoodsSold) keeps a NULL gross
+    profit rather than an overstated one, and a cost line with no revenue derives
+    nothing. Absence is recorded as coverage, not filled -- the same rule
+    share_repurchases follows.
+    """
+
+    def concept(value):
+        return {
+            "units": {
+                "USD": [
+                    {
+                        "val": value,
+                        "start": "2025-01-01",
+                        "end": "2025-12-31",
+                        "fy": 2025,
+                        "fp": "FY",
+                        "filed": "2026-02-01",
+                    }
+                ]
+            }
+        }
+
+    def extract(facts):
+        return extract_periodic_financials({"full_facts": {"facts": {"us-gaap": facts}}})[0]
+
+    revenue_tag = "RevenueFromContractWithCustomerExcludingAssessedTax"
+
+    tagged = extract({"GrossProfit": concept(400)})
+    assert tagged["gross_profit"] == 400
+
+    derived = extract({revenue_tag: concept(1000), "CostOfRevenue": concept(600)})
+    assert derived["gross_profit"] == 400
+    assert derived["cost_of_revenue"] == 600
+
+    broad = extract({revenue_tag: concept(1000), "CostOfGoodsAndServicesSold": concept(650)})
+    assert broad["gross_profit"] == 350
+
+    narrow = extract({revenue_tag: concept(1000), "CostOfServices": concept(600)})
+    assert "gross_profit" not in narrow, "a partial cost line must not overstate gross"
+
+    no_revenue = extract({"CostOfRevenue": concept(600)})
+    assert "gross_profit" not in no_revenue
+
+    direct_wins = extract(
+        {"GrossProfit": concept(275), revenue_tag: concept(1000), "CostOfRevenue": concept(600)}
+    )
+    assert direct_wins["gross_profit"] == 275, "the filer's own subtotal wins over the derivation"
+
+
+def test_share_repurchases_are_extracted_with_a_fallback_and_never_zero_filled():
+    def period(concept, value):
+        return {
+            "full_facts": {
+                "facts": {
+                    "us-gaap": {
+                        concept: {
+                            "units": {
+                                "USD": [
+                                    {
+                                        "val": value,
+                                        "start": "2025-01-01",
+                                        "end": "2025-12-31",
+                                        "fy": 2025,
+                                        "fp": "FY",
+                                        "filed": "2026-02-01",
+                                    }
+                                ]
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+    assert (
+        extract_periodic_financials(period("PaymentsForRepurchaseOfCommonStock", 250))[0][
+            "share_repurchases"
+        ]
+        == 250
+    )
+    # The equity tag also covers preferred repurchases, so it is the fallback.
+    assert (
+        extract_periodic_financials(period("PaymentsForRepurchaseOfEquity", 99))[0][
+            "share_repurchases"
+        ]
+        == 99
+    )
+
+    # A filer that reports a period but never tagged a repurchase has an unknown
+    # buyback, not a zero one: the metric is absent, not 0.
+    revenue_only = extract_periodic_financials(
+        {
+            "full_facts": {
+                "facts": {
+                    "us-gaap": {
+                        "RevenueFromContractWithCustomerExcludingAssessedTax": {
+                            "units": {
+                                "USD": [
+                                    {
+                                        "val": 1000,
+                                        "start": "2025-01-01",
+                                        "end": "2025-12-31",
+                                        "fy": 2025,
+                                        "fp": "FY",
+                                        "filed": "2026-02-01",
+                                    }
+                                ]
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    )
+    assert "share_repurchases" not in revenue_only[0]
 
 
 def test_fundamentals_prefers_canonical_concept_over_fallback():
@@ -683,7 +819,9 @@ def test_ttm_chain_is_per_metric_so_a_missing_label_cannot_mask_a_published_valu
     CREATE TEMP TABLE tmp_pf (security_id int, period_end date, fiscal_period text,
                               filed date, eps numeric, free_cash_flow numeric,
                               operating_income numeric, depreciation_amortization numeric,
-                              interest_expense numeric, revenue numeric);
+                              interest_expense numeric, revenue numeric,
+                              gross_profit numeric, cost_of_revenue numeric, net_income numeric,
+                              operating_cash_flow numeric, capital_expenditures numeric);
     CREATE TEMP TABLE tmp_mkt (security_id int, observation_date date, close numeric);
     -- Security 1: the quarter ending 2021-03-31 is filed twice under two
     -- quarterly labels, and the later filing restates EPS upward. A third
@@ -760,7 +898,9 @@ def test_a_vintage_is_not_visible_before_its_period_has_ended():
     CREATE TEMP TABLE tmp_pf (security_id int, period_end date, fiscal_period text,
                               filed date, eps numeric, free_cash_flow numeric,
                               operating_income numeric, depreciation_amortization numeric,
-                              interest_expense numeric, revenue numeric);
+                              interest_expense numeric, revenue numeric,
+                              gross_profit numeric, cost_of_revenue numeric, net_income numeric,
+                              operating_cash_flow numeric, capital_expenditures numeric);
     CREATE TEMP TABLE tmp_mkt (security_id int, observation_date date, close numeric);
     -- Filed 75 days before its own period ends. Visible from 2021-03-31, not 2021-01-15.
     INSERT INTO tmp_pf (security_id, period_end, fiscal_period, filed, eps) VALUES
@@ -1011,7 +1151,9 @@ def test_leverage_metrics_join_the_per_metric_chain_not_a_shared_one():
     CREATE TEMP TABLE tmp_pf (security_id int, period_end date, fiscal_period text,
                               filed date, eps numeric, free_cash_flow numeric,
                               operating_income numeric, depreciation_amortization numeric,
-                              interest_expense numeric, revenue numeric);
+                              interest_expense numeric, revenue numeric,
+                              gross_profit numeric, cost_of_revenue numeric, net_income numeric,
+                              operating_cash_flow numeric, capital_expenditures numeric);
     CREATE TEMP TABLE tmp_mkt (security_id int, observation_date date, close numeric);
     -- Four quarters. D&A is disclosed in the first three and omitted from the
     -- fourth; every quarter still reports EPS and operating income.
@@ -1104,8 +1246,18 @@ def test_annual_fallback_carries_the_leverage_inputs_and_debt():
                              interest_expense numeric, debt numeric, revenue numeric,
                              cash numeric, current_liabilities numeric,
                              debt_maturing_12m numeric, debt_maturing_year_2 numeric,
-                             committed_undrawn_facility numeric);
-    INSERT INTO fy_pf VALUES
+                             committed_undrawn_facility numeric,
+                             -- V0068: the FY fallback flows and the balance-sheet
+                             -- levels the new ratios read on this path.
+                             gross_profit numeric, cost_of_revenue numeric, net_income numeric,
+                             operating_cash_flow numeric, capital_expenditures numeric,
+                             equity numeric, current_assets numeric,
+                             shares_outstanding numeric);
+    INSERT INTO fy_pf
+        (security_id, period_end, fiscal_period, filed, eps, free_cash_flow,
+         operating_income, depreciation_amortization, interest_expense, debt,
+         revenue, cash, current_liabilities, debt_maturing_12m, debt_maturing_year_2)
+    VALUES
      (1,'2020-12-31','FY','2021-02-01',1.00,10,100,20,10,3000,5000,900,400,300,700),
      (1,'2021-12-31','FY','2022-02-01',1.20,12,150,30,15,2400,6000,1200,500,450,650);
     INSERT INTO tmp_mkt VALUES (1,'2022-06-01',10);

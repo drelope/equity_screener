@@ -32,6 +32,9 @@ def _scored(**rows):
         "momentum_63d": 0.05,
         "volatility_252d": 0.30,
         "legal_rights_score": 0.7,
+        "earnings_yield": 0.06,
+        "fcf_yield": 0.05,
+        "price_to_book": 2.0,
     }
     base.update(rows)
     return score(pd.DataFrame([base]))
@@ -126,7 +129,7 @@ def test_a_regime_actually_moves_the_composite():
     """
     # The frame needs several rows: pct() is a cross-sectional rank, so a
     # one-row frame scores every factor at 1.0 and shifting weight between them
-    # is a wash. Only the constant legal/valuation terms would move, which is
+    # is a wash. Only the one constant term (legal_rights) would move, which is
     # the opposite of what this test is trying to show.
     frame = pd.DataFrame(
         [
@@ -169,6 +172,9 @@ def _row(**overrides):
         "momentum_63d": 0.05,
         "volatility_252d": 0.30,
         "legal_rights_score": 0.7,
+        "earnings_yield": 0.06,
+        "fcf_yield": 0.05,
+        "price_to_book": 2.0,
     }
     base.update(overrides)
     return base
@@ -199,8 +205,8 @@ def test_a_partially_measured_row_is_renormalised_not_zeroed():
     out = _scored(volatility_252d=float("nan"))
     assert out.composite_score.notna().all()
     assert 0.0 <= out.composite_score.iloc[0] <= 1.0
-    # Risk is 0.10 of the 0.70 measurable weight, so 0.60 of it remains.
-    assert out.score_coverage.iloc[0] == pytest.approx(0.60 / 0.70)
+    # Risk is 0.10 of the 0.75 measurable weight, so 0.65 of it remains.
+    assert out.score_coverage.iloc[0] == pytest.approx(0.65 / 0.75)
 
     # Renormalised, not merely not-NaN: a single measured leg at full weight
     # must score the same as it would with the others present.
@@ -219,14 +225,16 @@ def test_a_partially_measured_row_is_renormalised_not_zeroed():
 def test_floor_is_measured_against_total_weight_not_measurable_weight():
     """The two denominators differ, and picking the wrong one is a policy change.
 
-    The floor is MIN_PRESENT_WEIGHT of the *total* 1.0. The two constant
-    components are always present, so that is the same bar as 0.35 of the 0.70
-    measurable weight. Requiring 0.50 of the measurable weight instead would be
-    a stricter rule under the same name: on the latest feature date it drops
-    2,575 securities rather than 280. This test pins the bar that was approved.
+    The floor is MIN_PRESENT_WEIGHT of the *total* 1.0. The one remaining
+    constant component (``legal_rights_score``, 0.25) is always present, so that
+    is the same bar as 0.25 of the 0.75 measurable weight. Requiring 0.50 of the
+    measurable weight instead would be a stricter rule under the same name, and
+    it would drop names that clear the total-weight bar. This test pins the bar
+    that was approved.
     """
-    # 0.15 of measurable weight present: with the 0.30 of constants that is 0.45
-    # of the total, below the 0.50 floor, so nothing is published.
+    # 0.20 of measurable weight present (appreciation + valuation): with the
+    # 0.25 constant that is 0.45 of the total, below the 0.50 floor, so nothing
+    # is published.
     below = _scored(
         dividend_yield=float("nan"),
         dividend_growth=float("nan"),
@@ -234,10 +242,10 @@ def test_floor_is_measured_against_total_weight_not_measurable_weight():
         fcf_payout=float("nan"),
         volatility_252d=float("nan"),
     )
-    assert below.score_coverage.iloc[0] == pytest.approx(0.15 / 0.70)
+    assert below.score_coverage.iloc[0] == pytest.approx(0.20 / 0.75)
     assert below.composite_score.isna().all()
 
-    # 0.25 of measurable weight: 0.55 of the total, so scored.
+    # 0.30 of measurable weight (income + valuation): 0.55 of the total, scored.
     above = _scored(
         dividend_growth=float("nan"),
         dividend_coverage=float("nan"),
@@ -246,25 +254,25 @@ def test_floor_is_measured_against_total_weight_not_measurable_weight():
         momentum_63d=float("nan"),
         volatility_252d=float("nan"),
     )
-    assert above.score_coverage.iloc[0] == pytest.approx(0.25 / 0.70)
+    assert above.score_coverage.iloc[0] == pytest.approx(0.30 / 0.75)
     assert above.composite_score.notna().all()
 
-    # The boundary: sustainability alone is exactly 0.20 of measurable, which is
-    # exactly 0.50 of the total, and the floor is inclusive.
+    # The boundary: sustainability + valuation is exactly 0.25 of measurable,
+    # which with the 0.25 constant is exactly 0.50 of the total -- inclusive.
     edge = _scored(
         dividend_yield=float("nan"),
         momentum_252d=float("nan"),
         momentum_63d=float("nan"),
         volatility_252d=float("nan"),
     )
-    assert edge.score_coverage.iloc[0] == pytest.approx(0.20 / 0.70)
+    assert edge.score_coverage.iloc[0] == pytest.approx(0.25 / 0.75)
     assert edge.composite_score.notna().all()
 
 
 def test_coverage_below_the_floor_publishes_no_composite():
     """Below the floor, the score is mostly a rescaled fragment of percentiles."""
-    # Only dividend income survives: 0.25 of the 0.70 measurable weight, and
-    # 0.55 of the total once the two constants are counted.
+    # Only dividend income and valuation survive: 0.30 of the 0.75 measurable
+    # weight, and 0.55 of the total once the 0.25 constant is counted.
     out = _scored(
         dividend_growth=float("nan"),
         dividend_coverage=float("nan"),
@@ -273,11 +281,11 @@ def test_coverage_below_the_floor_publishes_no_composite():
         momentum_63d=float("nan"),
         volatility_252d=float("nan"),
     )
-    assert out.score_coverage.iloc[0] == pytest.approx(0.25 / 0.70)
+    assert out.score_coverage.iloc[0] == pytest.approx(0.30 / 0.75)
     assert out.composite_score.notna().all()
 
-    # Nothing measured at all: 0.30 of the total, the guaranteed constant floor,
-    # which is below the floor and correctly publishes nothing.
+    # Nothing measured at all: only the 0.25 constant remains, which is below the
+    # floor and correctly publishes nothing with zero coverage.
     empty = _scored(
         dividend_yield=float("nan"),
         dividend_growth=float("nan"),
@@ -286,18 +294,23 @@ def test_coverage_below_the_floor_publishes_no_composite():
         momentum_252d=float("nan"),
         momentum_63d=float("nan"),
         volatility_252d=float("nan"),
+        earnings_yield=float("nan"),
+        fcf_yield=float("nan"),
+        price_to_book=float("nan"),
     )
     assert empty.score_coverage.iloc[0] == pytest.approx(0.0)
     assert empty.composite_score.isna().all()
 
 
-def test_coverage_ignores_the_constant_components():
+def test_coverage_ignores_the_constant_component():
     """A placeholder must not be counted as evidence.
 
-    legal_rights_score is imputed to 0.5 and valuation is hardcoded to 0.5, so
-    they are present for every row. Counting them would put a 0.30 floor under
-    every coverage figure and a security with nothing measured would still read
-    43% covered.
+    ``legal_rights_score`` is still imputed to 0.5 for every row, so it is
+    present for every row. Counting it would put a 0.25 floor under every
+    coverage figure and a security with nothing measured would still read 33%
+    covered. ``valuation_score`` was the second such constant and is excluded no
+    longer: it is a real percentile blend now, and a row that lacks the inputs
+    simply drops it.
     """
     out = _scored(
         dividend_yield=float("nan"),
@@ -307,12 +320,15 @@ def test_coverage_ignores_the_constant_components():
         momentum_252d=float("nan"),
         momentum_63d=float("nan"),
         volatility_252d=float("nan"),
+        earnings_yield=float("nan"),
+        fcf_yield=float("nan"),
+        price_to_book=float("nan"),
     )
-    # A total-weight denominator would have to report 0.30 here.
+    # A total-weight denominator would have to report 0.25 here.
     assert out.score_coverage.iloc[0] == 0.0
     assert out.composite_score.isna().all()
 
-    # The constants still move the composite, they just do not vouch for it.
+    # The constant still moves the composite, it just does not vouch for it.
     partial = _scored(
         volatility_252d=float("nan"),
         legal_rights_score=0.9,
@@ -353,6 +369,9 @@ def test_coverage_is_published_for_every_row_including_unscorable_ones():
         momentum_252d=float("nan"),
         momentum_63d=float("nan"),
         volatility_252d=float("nan"),
+        earnings_yield=float("nan"),
+        fcf_yield=float("nan"),
+        price_to_book=float("nan"),
     )
     assert out.score_coverage.notna().all()
     assert out.score_coverage.iloc[0] == pytest.approx(0.0)

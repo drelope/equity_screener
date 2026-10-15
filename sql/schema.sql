@@ -364,7 +364,8 @@ CREATE TABLE IF NOT EXISTS clean.company_profile (
   gross_margins NUMERIC, gross_profits BIGINT, industry_disp TEXT,
   price_to_book NUMERIC, total_revenue BIGINT, pct_change_52w NUMERIC,
   average_volume BIGINT, debt_to_equity NUMERIC, dividend_yield NUMERIC,
-  dividend_yield_fraction NUMERIC, dividend_yield_source_unit VARCHAR(32),
+  -- dividend_yield_fraction/_source_unit are appended by V0030 (idempotent),
+  -- which is where this table's real order puts them.
   ebitda_margins NUMERIC, fullday_change NUMERIC, previous_close NUMERIC,
   profit_margins NUMERIC, revenue_growth NUMERIC, stock_exchange TEXT,
   hq_address_city TEXT, pre_market_time TIMESTAMPTZ, source_interval BIGINT,
@@ -456,8 +457,6 @@ BEGIN
       WHEN 'source_retrieved_at' THEN 'Retrieval timestamp of the selected raw profile source'
       WHEN 'pct_change_52w' THEN '52-week relative price change; source JSON key 52_week_change'
       WHEN 'dividend_yield' THEN 'Provider-native yield in percent points when supplied by OpenBB/YFinance; original value is preserved'
-      WHEN 'dividend_yield_fraction' THEN 'Canonical decimal yield fraction, populated only when dividend_rate/current_price corroborates the source unit'
-      WHEN 'dividend_yield_source_unit' THEN 'How source dividend_yield was interpreted: fraction, percent_points, ambiguous, or unverified'
       WHEN 'payout_ratio' THEN 'Provider-native payout ratio; no scaling is applied without source-unit confirmation'
       WHEN 'debt_to_equity' THEN 'Provider leverage multiple, not a percentage; raw provider value is preserved'
       WHEN 'quick_ratio' THEN 'Provider-native liquidity multiple, not a percentage'
@@ -547,7 +546,10 @@ COMMENT ON COLUMN raw.dividend_data.record_date IS
 COMMENT ON COLUMN raw.dividend_data.payment_date IS
   'Payment date from iXBRL filing narrative (ix:paymentDate); companyfacts fact end is the fallback';
 COMMENT ON COLUMN raw.dividend_data.frequency IS
-  'Dividend frequency (Annual/Quarterly/Monthly). Inferred; not an XBRL us-gaap fact';
+  'Payment-interval cadence (Monthly/Quarterly/Semi-annual/Annual/Irregular), '
+  'inferred from the median gap between consecutive ex-dates across the stored and '
+  'incoming series (OpenBB true ex-dates first, SEC period-end proxies as fallback). '
+  'One label per security. Informational; the feature build does not key on this column';
 COMMENT ON COLUMN raw.dividend_data.currency IS
   'Currency of the dividend amount, derived from the XBRL unit (e.g. USD per share)';
 
@@ -894,6 +896,12 @@ CREATE TABLE IF NOT EXISTS fundamentals.periodic_financials (
   period_end DATE NOT NULL, fiscal_year INT, fiscal_period VARCHAR(16),
   filed DATE NOT NULL,
   revenue NUMERIC, operating_income NUMERIC, net_income NUMERIC, eps NUMERIC,
+  -- V0068: the gross-profit subtotal, read from the GrossProfit tag when the
+  -- filer states it. V0069: cost_of_revenue, the total cost line (CostOfRevenue
+  -- or CostOfGoodsAndServicesSold) the derived gross_profit subtracts when the
+  -- subtotal is not tagged. Stored because they are reported; the margin ratios
+  -- are derived at feature time.
+  gross_profit NUMERIC, cost_of_revenue NUMERIC,
   cash NUMERIC, assets NUMERIC, liabilities NUMERIC, debt NUMERIC, equity NUMERIC,
   -- V0016: the current-basis subtotals, stored separately. They were previously
   -- XBRL fallbacks for `assets`/`liabilities`, which mixed two accounting bases
@@ -905,6 +913,10 @@ CREATE TABLE IF NOT EXISTS fundamentals.periodic_financials (
   debt_maturing_12m NUMERIC, debt_maturing_year_2 NUMERIC,
   committed_undrawn_facility NUMERIC,
   operating_cash_flow NUMERIC, capital_expenditures NUMERIC, free_cash_flow NUMERIC,
+  -- V0067: cash paid to repurchase the issuer's own shares -- the buyback leg
+  -- of capital returns. 3,392 stored filers tag the common-stock concept and
+  -- 480 the equity one (which also covers preferred repurchases).
+  share_repurchases NUMERIC,
   -- V0011: the inputs the leverage ratios need, populated from the stored XBRL
   -- payload. Stored because they are reported; EBITDA is derived at feature
   -- time rather than persisted here.
@@ -928,6 +940,18 @@ CREATE TABLE IF NOT EXISTS model.features (
   quick_liquidity NUMERIC,
   -- V0018: maturity cliff over cash. Feeds circuit breaker C4 and the CVS.
   refinancing_wall NUMERIC,
+  -- V0068: point-in-time financial metrics -- margins, cash-flow quality,
+  -- balance-sheet and valuation ratios -- all derived from the vintaged
+  -- periodic_financials rows keyed by `filed`, never from the current
+  -- clean.company_profile snapshot (which would leak look-ahead). See
+  -- V0068_financial_metrics.sql and features.py financial_metrics().
+  gross_margin NUMERIC, operating_margin NUMERIC, net_margin NUMERIC,
+  fcf_margin NUMERIC, ocf_margin NUMERIC,
+  cash_conversion NUMERIC, capex_intensity NUMERIC, fcf_growth NUMERIC,
+  net_debt NUMERIC, net_debt_to_ebitda NUMERIC, current_ratio NUMERIC,
+  debt_to_equity NUMERIC,
+  pe_ratio NUMERIC, earnings_yield NUMERIC, fcf_yield NUMERIC,
+  price_to_book NUMERIC,
   PRIMARY KEY(security_id, as_of_date)
 );
 

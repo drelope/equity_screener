@@ -5,43 +5,130 @@ from __future__ import annotations
 import plotly.express as px
 import streamlit as st
 
-from app import ui
+from app import column_docs, ui
 from src.crispdm.feature_window import carry_forward_days, dashboard_features_sql
 
-COLUMNS = (
-    "f.current_price,f.dividend_yield,f.dividend_growth,f.fcf_payout,"
-    "f.dividend_coverage,f.debt_to_ebitda,f.interest_coverage,f.volatility_252d"
+#: The V0068 point-in-time ratios the screener can display, as
+#: ``display label -> (model.features column, kind)``. ``kind`` picks the format:
+#: ``percent`` for a fraction (margins, yields), ``multiple`` for a ratio and
+#: ``currency`` for the net-debt magnitude. Every one is NULL upstream when its
+#: denominator is absent or non-positive, so a blank cell is a real signal.
+FINANCIAL_METRICS = {
+    "Gross margin": ("gross_margin", "percent"),
+    "Operating margin": ("operating_margin", "percent"),
+    "Net margin": ("net_margin", "percent"),
+    "FCF margin": ("fcf_margin", "percent"),
+    "OCF margin": ("ocf_margin", "percent"),
+    "Cash conversion": ("cash_conversion", "multiple"),
+    "Capex intensity": ("capex_intensity", "percent"),
+    "FCF growth": ("fcf_growth", "percent"),
+    "Net debt": ("net_debt", "currency"),
+    "Net debt/EBITDA": ("net_debt_to_ebitda", "multiple"),
+    "Current ratio": ("current_ratio", "multiple"),
+    "Debt/equity": ("debt_to_equity", "multiple"),
+    "P/E": ("pe_ratio", "multiple"),
+    "Earnings yield": ("earnings_yield", "percent"),
+    "FCF yield": ("fcf_yield", "percent"),
+    "Price/book": ("price_to_book", "multiple"),
+}
+METRIC_COLUMNS = tuple(column for column, _kind in FINANCIAL_METRICS.values())
+#: On by default, so the two most diagnostic ratios are visible without a click.
+DEFAULT_METRICS = ["Net margin", "FCF yield"]
+
+COLUMNS = "f.current_price,f.dividend_yield,f.debt_to_ebitda,f.interest_coverage," + ",".join(
+    f"f.{column}" for column in METRIC_COLUMNS
 )
 
 SORTABLE = {
     "Composite score": "composite_score",
     "Dividend yield": "dividend_yield",
-    "Score coverage": "score_coverage",
-    "Dividend growth": "dividend_growth",
-    "Debt / EBITDA": "debt_to_ebitda",
-    "Interest coverage": "interest_coverage",
-    "Volatility (252d)": "volatility_252d",
+    "Ex-date": "ex_date",
     "Price": "current_price",
     "Ticker": "ticker",
+    "Gross margin": "gross_margin",
+    "Net margin": "net_margin",
+    "FCF yield": "fcf_yield",
+    "Price/book": "price_to_book",
 }
 
 TABLE_COLUMNS = [
     "ticker",
-    "security_type",
     "as_of_date",
     "current_price",
+    "currency",
     "dividend_yield",
-    "dividend_growth",
+    "ex_date",
+    "dividend_amount",
+    "liquidation_preference",
+    "first_call_date",
     "composite_score",
-    "score_coverage",
-    "fcf_payout",
-    "dividend_coverage",
-    "debt_to_ebitda",
-    "interest_coverage",
-    "volatility_252d",
 ]
 
 SELECTED_KEY = "selected_ticker"
+
+# The table mixes several relations and renames a few columns, so each output column names
+# its source explicitly: (relation, column, note). A note sharpens a column whose value the
+# dashboard derives, such as the dividend pulled from the most recent stored event.
+TABLE_HELP = {
+    "ticker": ("reference.securities", "ticker", None),
+    "as_of_date": ("model.features", "as_of_date", None),
+    "current_price": ("model.features", "current_price", None),
+    "currency": ("reference.securities", "currency", None),
+    "dividend_yield": ("model.features", "dividend_yield", None),
+    "ex_date": (
+        "preferred.v_security_terms",
+        "ex_date",
+        (
+            "Most recent dividend date for the security. OPENBB rows are true ex-dates; "
+            "SEC XBRL rows are fiscal period-ends. A preferred series prefers its own "
+            "dividend over the issuer's common."
+        ),
+    ),
+    "dividend_amount": (
+        "preferred.v_security_terms",
+        "dividend_amount",
+        "Per-share amount on ex_date; the CashPaid annual aggregate is not shown.",
+    ),
+    "liquidation_preference": (
+        "preferred.v_security_terms",
+        "liquidation_preference",
+        "Per-share liquidation preference from per-series evidence only; N/A when unknown.",
+    ),
+    "first_call_date": (
+        "preferred.v_security_terms",
+        "first_call_date",
+        "Earliest issuer call date from the governing document, else reference.securities.call_date.",
+    ),
+    "composite_score": ("model.scores", "composite_score", None),
+}
+
+
+def _help(column: str) -> str | None:
+    relation, source, note = TABLE_HELP[column]
+    return column_docs.help_text(relation=relation, column=source, note=note)
+
+
+#: Table formats by kind. The printf-style strings are handed to the front end verbatim.
+_METRIC_FORMATS = {"percent": "percent", "multiple": "%.2fx", "currency": "$%.0f"}
+
+
+def _metric_config(columns) -> dict:
+    """``st.column_config`` for the selected financial-metric columns.
+
+    The label comes from :data:`FINANCIAL_METRICS` and the tooltip from the stored
+    ``COMMENT ON COLUMN`` via column_docs, so the header help stays the schema's
+    definition rather than a second copy that can drift.
+    """
+    config = {}
+    for label, (column, kind) in FINANCIAL_METRICS.items():
+        if column not in columns:
+            continue
+        config[column] = st.column_config.NumberColumn(
+            label,
+            format=_METRIC_FORMATS[kind],
+            help=column_docs.help_text(relation="model.features", column=column),
+        )
+    return config
 
 
 def _median(series, fmt: str) -> str:
@@ -55,24 +142,61 @@ def metrics(df) -> None:
     empty for everyone then reads as a pipeline gap, not a sector of tidy companies."""
     scored = df.composite_score.dropna()
     cov = df.score_coverage.dropna()
-    d2e = df.debt_to_ebitda.dropna()
-    ic = df.interest_coverage.dropna()
+    net = df.net_margin.dropna()
+    fcf = df.fcf_yield.dropna()
+
+    def feature(name: str, note: str) -> str | None:
+        return column_docs.help_text(relation="model.features", column=name, note=note)
+
     cells = st.columns(6)
-    cells[0].metric("Securities", len(df))
-    cells[1].metric("Median yield", _median(df.dividend_yield, "{:.2%}"))
-    cells[2].metric(f"Median score ({len(scored)}/{len(df)} scored)", _median(scored, "{:.2f}"))
-    cells[3].metric(f"Median coverage ({len(cov)}/{len(df)} scored)", _median(cov, "{:.0%}"))
-    cells[4].metric(f"Median debt/EBITDA ({len(d2e)}/{len(df)})", _median(d2e, "{:.2f}x"))
-    cells[5].metric(f"Median interest cover ({len(ic)}/{len(df)})", _median(ic, "{:.2f}x"))
+    cells[0].metric("Securities", len(df), help="Active securities matching the current filters.")
+    cells[1].metric(
+        "Median yield",
+        _median(df.dividend_yield, "{:.2%}"),
+        help=feature("dividend_yield", "Median across securities that report a yield."),
+    )
+    cells[2].metric(
+        f"Median score ({len(scored)}/{len(df)} scored)",
+        _median(scored, "{:.2f}"),
+        help=column_docs.help_text(
+            relation="model.scores",
+            column="composite_score",
+            note="Median across the scored securities; the bracket counts how many are scored.",
+        ),
+    )
+    cells[3].metric(
+        f"Median coverage ({len(cov)}/{len(df)} scored)",
+        _median(cov, "{:.0%}"),
+        help=column_docs.help_text(
+            relation="model.scores",
+            column="score_coverage",
+            note="Median across scored securities.",
+        ),
+    )
+    cells[4].metric(
+        f"Median net margin ({len(net)}/{len(df)})",
+        _median(net, "{:.1%}"),
+        help=feature("net_margin", "Median across securities that report a net margin."),
+    )
+    cells[5].metric(
+        f"Median FCF yield ({len(fcf)}/{len(df)})",
+        _median(fcf, "{:.1%}"),
+        help=feature("fcf_yield", "Median across securities that report an FCF yield."),
+    )
 
 
 def apply_filters(df):
-    """Render the filter controls and return the filtered, sorted frame."""
+    """Render the filter and sort controls, returning ``(view, metric_columns)``.
+
+    ``metric_columns`` are the ``model.features`` ratio columns the user asked to append
+    to the table, so :func:`table` can label and format exactly those.
+    """
     with st.expander("Filter and sort", expanded=True):
         a, b, c = st.columns([2, 2, 2])
         min_yield = a.slider("Minimum dividend yield", 0.0, 0.20, 0.0, 0.005, format="%.3f")
         types_all = sorted(df.security_type.dropna().unique())
-        types = b.multiselect("Security type", types_all, default=types_all)
+        default_types = ["preferred stock"] if "preferred stock" in types_all else types_all
+        types = b.multiselect("Security type", types_all, default=default_types)
         search = c.text_input("Ticker contains", max_chars=32).strip()
 
         d, e, f, g = st.columns([2, 2, 2, 2])
@@ -82,6 +206,28 @@ def apply_filters(df):
         sort_label = f.selectbox("Sort by", list(SORTABLE))
         descending = g.checkbox("Descending", value=sort_label != "Ticker")
 
+        h, i, j = st.columns([3, 2, 2])
+        metric_labels = h.multiselect(
+            "Financial metric columns",
+            list(FINANCIAL_METRICS),
+            default=DEFAULT_METRICS,
+            help="Extra model.features ratios to append to the table.",
+        )
+        min_gross = i.number_input(
+            "Minimum gross margin",
+            value=None,
+            step=0.01,
+            format="%.3f",
+            help="Hide securities below this gross margin. Blank disables the filter.",
+        )
+        max_pb = j.number_input(
+            "Maximum price/book",
+            value=None,
+            step=0.1,
+            format="%.2f",
+            help="Hide securities above this price-to-book. Blank disables the filter.",
+        )
+
     view = df[df.dividend_yield.fillna(0) >= min_yield]
     view = view[view.security_type.isin(types)]
     if search:
@@ -90,11 +236,40 @@ def apply_filters(df):
         view = view[view.composite_score.notna()]
     if min_score > 0:
         view = view[view.composite_score.fillna(-1) >= min_score]
-    return view.sort_values(SORTABLE[sort_label], ascending=not descending, na_position="last")
+    if min_gross is not None:
+        view = view[view.gross_margin >= min_gross]
+    if max_pb is not None:
+        view = view[view.price_to_book <= max_pb]
+    ordered = view.sort_values(SORTABLE[sort_label], ascending=not descending, na_position="last")
+    return ordered, [FINANCIAL_METRICS[label][0] for label in metric_labels]
 
 
-def table(view) -> None:
-    shown = view[TABLE_COLUMNS]
+def table(view, metric_columns) -> None:
+    extra = [column for column in metric_columns if column not in TABLE_COLUMNS]
+    shown = view[TABLE_COLUMNS + extra]
+    config = {
+        "ticker": st.column_config.TextColumn("Ticker", pinned=True, help=_help("ticker")),
+        "as_of_date": st.column_config.DateColumn("As of", help=_help("as_of_date")),
+        "current_price": st.column_config.NumberColumn(
+            "Price", format="%.2f", help=_help("current_price")
+        ),
+        "currency": st.column_config.TextColumn("Ccy", width="small", help=_help("currency")),
+        "dividend_yield": st.column_config.NumberColumn(
+            "Yield", format="percent", help=_help("dividend_yield")
+        ),
+        "ex_date": st.column_config.DateColumn("Ex-date", help=_help("ex_date")),
+        "dividend_amount": st.column_config.NumberColumn(
+            "Dividend paid", format="%.4f", help=_help("dividend_amount")
+        ),
+        "liquidation_preference": st.column_config.NumberColumn(
+            "Liquidation", format="%.2f", help=_help("liquidation_preference")
+        ),
+        "first_call_date": st.column_config.DateColumn("First call", help=_help("first_call_date")),
+        "composite_score": st.column_config.NumberColumn(
+            "Score", format="%.3f", help=_help("composite_score")
+        ),
+    }
+    config.update(_metric_config(extra))
     event = st.dataframe(
         shown,
         hide_index=True,
@@ -102,21 +277,7 @@ def table(view) -> None:
         on_select="rerun",
         selection_mode="single-row",
         key="screener_table",
-        column_config={
-            "ticker": st.column_config.TextColumn("Ticker", pinned=True),
-            "security_type": "Type",
-            "as_of_date": st.column_config.DateColumn("As of"),
-            "current_price": st.column_config.NumberColumn("Price", format="%.2f"),
-            "dividend_yield": st.column_config.NumberColumn("Yield", format="percent"),
-            "dividend_growth": st.column_config.NumberColumn("Div. growth", format="percent"),
-            "composite_score": st.column_config.NumberColumn("Score", format="%.3f"),
-            "score_coverage": st.column_config.NumberColumn("Coverage", format="percent"),
-            "fcf_payout": st.column_config.NumberColumn("FCF payout", format="%.2f"),
-            "dividend_coverage": st.column_config.NumberColumn("Div. cover", format="%.2f"),
-            "debt_to_ebitda": st.column_config.NumberColumn("Debt/EBITDA", format="%.2f"),
-            "interest_coverage": st.column_config.NumberColumn("Int. cover", format="%.2f"),
-            "volatility_252d": st.column_config.NumberColumn("Vol 252d", format="%.3f"),
-        },
+        column_config=config,
     )
     rows = event.selection.rows if event and event.selection else []
     if rows:
@@ -194,10 +355,10 @@ def render() -> None:
         return
 
     metrics(df)
-    view = apply_filters(df)
+    view, metric_columns = apply_filters(df)
     st.caption(f"Showing {len(view):,} of {len(df):,} securities")
     if view.empty:
         st.warning("No securities match these filters.")
         return
-    table(view)
+    table(view, metric_columns)
     charts(view)

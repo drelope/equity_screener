@@ -38,7 +38,7 @@ _MONTH_JOIN = "|".join(sorted(MONTHS, key=len, reverse=True))
 
 DOLLAR_RE = re.compile(r"\$([0-9][0-9,]*(?:\.[0-9]{1,4})?)")
 BARE_PER_SHARE_RE = re.compile(
-    r"(?<![A-Za-z0-9$.,])[0-9][0-9,]*(?:\.[0-9]{1,4})?\s+per\s+(?:depositary\s+)?share",
+    r"(?<![A-Za-z0-9$.,])([0-9][0-9,]*(?:\.[0-9]{1,4})?)\s+per\s+(?:depositary\s+)?share",
     re.IGNORECASE,
 )
 PER_SHARE_RE = re.compile(r"per\s+(?:depositary\s+)?share", re.IGNORECASE)
@@ -113,6 +113,93 @@ def _per_share_vicinity(text, value_offset):
     return per_share is not None
 
 
+#: Depositary fraction in a security name: "1/40th", "1/1,000th", "(1/10)". The
+#: denominator is how many depositary shares represent one preferred share, so a
+#: per-share amount is divided by it to reach the per-depositary figure.
+DEPOSITARY_RATIO_RE = re.compile(r"1\s*/\s*([0-9][0-9,]*)")
+#: A figure followed by this is already stated per depositary share.
+PER_DEPOSITARY_RE = re.compile(r"per\s+depositary\s+share", re.IGNORECASE)
+#: The first "per [depositary ]share" unit after a money value; group 1 captures
+#: "depositary " only when present, which is what marks a per-depositary figure.
+_SHARE_UNIT_RE = re.compile(r"per\s+(depositary\s+)?share", re.IGNORECASE)
+#: "..is $25,000.00 per share (equivalent to $25.00 per depositary share)" gives
+#: the per-depositary value directly, so it beats dividing the share figure.
+DEPOSITARY_EQUIVALENT_RE = re.compile(
+    r"equivalent\s+to\s+(?:a\s+)?\$([0-9][0-9,]*(?:\.[0-9]+)?)[^.$]{0,48}?"
+    r"per\s+depositary\s+share",
+    re.IGNORECASE,
+)
+
+
+def depositary_ratio(name):
+    """The depositary fraction denominator in ``name`` (1/N -> N), else None.
+
+    ``None`` means either not a depositary or a single-share American depositary
+    receipt (ratio 1), both of which need no scaling. The "depositary" guard
+    keeps the 1/N pattern from latching onto rights and warrants, which are also
+    described as fractions ("each right entitling the holder to one-tenth (1/10)
+    of a share") but are not preferred shares and must not be divided.
+    """
+    if not name or not re.search(r"depositar", name, re.IGNORECASE):
+        return None
+    match = DEPOSITARY_RATIO_RE.search(name)
+    if not match:
+        return None
+    try:
+        ratio = int(match.group(1).replace(",", ""))
+    except ValueError:
+        return None
+    return ratio if ratio > 1 else None
+
+
+def _is_per_depositary(text, offset):
+    """True when the amount at ``offset`` is itself stated per depositary share.
+
+    Only the amount's *own* unit decides: the first "per ... share" after it. A
+    later parenthetical ("... per share (equivalent to $25.00 per depositary
+    share)") belongs to the per-depositary equivalent, not to this figure, so it
+    must not be mistaken for the figure's unit.
+    """
+    match = _SHARE_UNIT_RE.search(text, offset, offset + 60)
+    return match is not None and match.group(1) is not None
+
+
+def _depositary_equivalent(text, offset):
+    """The per-depositary equivalent of the amount at ``offset``, if stated nearby.
+
+    The search stops at the first sentence break so an "equivalent to ... per
+    depositary share" further down the paragraph (e.g. next to the dividend
+    rate) cannot stand in for this amount's own equivalent.
+    """
+    tail = text[offset : offset + 200]
+    stop = next((m.start() for m in re.finditer(r"\.\s", tail)), len(tail))
+    match = DEPOSITARY_EQUIVALENT_RE.search(tail[:stop])
+    if not match:
+        return None
+    return _parse_money(match.group(1))
+
+
+def _scale_for_depositary(text, offset, value, ratio):
+    """Convert a per-share amount to its per-depositary value.
+
+    Order matters: a figure already given per depositary share is left alone; a
+    per-depositary equivalent the document states outright wins; otherwise the
+    known 1/N fraction is applied. A result below 1 is not a plausible
+    per-depositary preferred figure -- it means the matched number was not the
+    underlying par -- so it is refused rather than stored as a wrongly precise
+    value.
+    """
+    if _is_per_depositary(text, offset):
+        return value
+    equivalent = _depositary_equivalent(text, offset)
+    if equivalent is not None:
+        return equivalent
+    if ratio and ratio > 1:
+        scaled = value / ratio
+        return scaled if scaled >= 1 else None
+    return value
+
+
 def _all_dates(text):
     return [(match.start(), _month_day_year(match)) for match in DATE_RE.finditer(text)]
 
@@ -146,11 +233,13 @@ LIQUIDATION_ANCHOR = re.compile(
 )
 
 
-def _extract_liquidation_preference(text):
+def _extract_liquidation_preference(text, depositary_ratio=None):
     """Whole-text per-share Liquidation Preference scan (internal helper)."""
     best = None
     for anchor in LIQUIDATION_ANCHOR.finditer(text):
         start = anchor.start()
+        if _in_spac_narrative(text, start):
+            continue
         window_left = max(0, start - 500)
         window_right = min(len(text), start + 1500)
         window = text[window_left:window_right]
@@ -161,9 +250,31 @@ def _extract_liquidation_preference(text):
         for offset, value, match in _dollar_values(window, near=near, span=1000):
             if not (MIN_PER_SHARE <= value <= MAX_PER_SHARE):
                 continue
+            if _in_spac_narrative(window, offset):
+                continue
+            absolute = window_left + offset
+            amount = _scale_for_depositary(window, offset, value, depositary_ratio)
+            if amount is None:
+                # Not a plausible per-depositary figure (e.g. the underlying par
+                # divided by the fraction); prefer another candidate, if any.
+                continue
             per_share = _per_share_vicinity(window, offset)
+            if not per_share and not _looks_like_preference_clause(window, offset):
+                # A figure with no "per share" unit is only a liquidation
+                # preference when its clause says so; otherwise it is an
+                # aggregate or unrelated amount that happened to sit near a
+                # stray "liquidation" mention.
+                continue
+            if _looks_like_aggregate_amount(window, offset, match, per_share):
+                continue
+            if _looks_like_warrant_clause(window, offset):
+                continue
+            if not per_share and _IN_EXCESS_OF_RE.search(_clause_prefix(window, offset)):
+                continue
+            if _negates_liquidation_rights(window, offset):
+                continue
             candidate = {
-                "amount": value,
+                "amount": amount,
                 "per_share": per_share,
                 "distance": abs(offset - near),
                 "confidence": 0.8 if per_share else 0.5,
@@ -176,8 +287,8 @@ def _extract_liquidation_preference(text):
             ):
                 best = {
                     **candidate,
-                    "heading": _heading_at(text, window_left + offset) or "Liquidation Preference",
-                    "snippet": _snippet(text, window_left + offset),
+                    "heading": _heading_at(text, absolute) or "Liquidation Preference",
+                    "snippet": _snippet(text, absolute),
                 }
     if best is not None:
         best.pop("distance", None)
@@ -187,8 +298,12 @@ def _extract_liquidation_preference(text):
 REDEMPTION_ANCHOR = re.compile(
     r"optional\s+redemption|redemption\s+at\s+the\s+option|"
     r"redeemable\s+at\s+(?:the\s+)?(?:option|(?:our|its|the\s+(?:company|issuer)(?:['\u2019]s)?)\s+option)"
-    r"|(?:we|the\s+(?:company|issuer))\s+(?:may\s+)?redeem"
-    r"|at\s+(?:our|its|the\s+(?:company|issuer)(?:['\u2019]s)?)\s+option\s*,?\s*(?:we|the\s+(?:company|issuer))?\s*(?:may\s+)?redeem",
+    # Excluding the past participle keeps "the Company redeemed ... for
+    # $2,000,000" out: a sentence narrating a completed redemption is not a call
+    # provision, and reading its aggregate payment as a call price is how an
+    # aggregate became a per-share figure. Present-tense "redeems" still counts.
+    r"|(?:we|the\s+(?:company|issuer))\s+(?:may\s+)?redeem(?!ed\b)"
+    r"|at\s+(?:our|its|the\s+(?:company|issuer)(?:['\u2019]s)?)\s+option\s*,?\s*(?:we|the\s+(?:company|issuer))?\s*(?:may\s+)?redeem(?!ed\b)",
     re.IGNORECASE,
 )
 
@@ -200,12 +315,196 @@ OPTION_RE = re.compile(
     re.IGNORECASE,
 )
 
+#: Event-triggered redemption clauses (ratings downgrade, regulatory capital
+#: event, change of control, tax event, make-whole) carry a *premium* over the
+#: standing optional-redemption price. A dollar amount read from one of these
+#: must not be mistaken for the scheduled call price: a $25,000-par series that
+#: is callable at par on its first reset date also redeems at $25,500 on a
+#: rating event, and the premium often appears first in the text.
+EVENT_REDEMPTION_RE = re.compile(
+    r"ratings?\s+event|rating\s+agency\s+event|regulatory\s+capital\s+event"
+    r"|change\s+of\s+control|special\s+event|tax\s+event|make[-\s]?whole"
+    r"|delisting\s+event|capital\s+event"
+    r"|following\s+the\s+occurrence\s+of",
+    re.IGNORECASE,
+)
+#: How far back of a dollar amount to look for the clause that introduces it.
+EVENT_CONTEXT_CHARS = 200
+#: A clause ends at a semicolon, a numbered/lettered sub-clause marker, or a
+#: sentence boundary. The trigger phrase lives in the same sub-clause as the
+#: amount it introduces, so cutting at the previous break keeps a schedule's
+#: preceding event clause from tainting a later scheduled price.
+_CLAUSE_BREAK_RE = re.compile(r";|\.\s|\(\w{1,3}\)")
 
-def _extract_redemption(text):
+
+def _in_event_clause(window, offset):
+    """True when the text introducing ``offset`` describes an event redemption.
+
+    Only the prefix back to the previous clause break is inspected: the trigger
+    phrase ("within 90 days after a Ratings Event at a redemption price of ...")
+    precedes the amount, whereas a scheduled price is introduced by "on or after
+    <date> at ...". Looking past the amount would let an event clause later in
+    the paragraph taint the scheduled price it follows.
+    """
+    tail = window[max(0, offset - EVENT_CONTEXT_CHARS) : offset]
+    cut = 0
+    for match in _CLAUSE_BREAK_RE.finditer(tail):
+        cut = match.end()
+    return EVENT_REDEMPTION_RE.search(tail[cut:]) is not None
+
+
+#: Blank-check (SPAC) trust language is not a preferred clause: "we redeem the
+#: public shares for the funds held in the Trust Account" and "public
+#: shareholders may receive ... $10.00 per share on the liquidation of our trust
+#: account" describe returning trust money to public holders, not a preferred
+#: call or liquidation preference.
+_SPAC_NARRATIVE_RE = re.compile(
+    r"trust\s+account|public\s+shares|public\s+stockholders|public\s+shareholders"
+    r"|founder\s+shares|initial\s+business\s+combination|\bsponsor\b",
+    re.IGNORECASE,
+)
+#: A definition of a stated/par/conversion value is not a redemption price:
+#: "... (mm) "Stated Value" shall mean $10,000 per share" and "... "Conversion
+#: Price" means $23.25 per share" define a value, not the price at which shares
+#: are called. A mere use ("at a price equal to the stated value of $1,000") is
+#: left alone -- there the stated value *is* the redemption price.
+_VALUE_DEFINITION_RE = re.compile(
+    r"(?:stated|par|initial|conversion|exercise)\s+(?:value|amount|price)"
+    r"[^.;]{0,40}?(?:shall\s+mean|means?|has\s+the\s+meaning)",
+    re.IGNORECASE,
+)
+#: "110% of the Stated Value" prices the call as a fraction of a defined value,
+#: so the value being defined nearby must not be read as the call price.
+_PERCENT_OF_VALUE_RE = re.compile(
+    r"\d{1,3}(?:\.\d+)?\s*%\s*of\s+the\s+(?:stated|par|initial)\s+value",
+    re.IGNORECASE,
+)
+_STATED_VALUE_RE = re.compile(r"(?:stated|par|initial)\s+value", re.IGNORECASE)
+
+
+def _in_spac_narrative(text, position):
+    """True when ``position`` sits inside blank-check (SPAC) trust language."""
+    return (
+        _SPAC_NARRATIVE_RE.search(text[max(0, position - 200) : position + 200])
+        is not None
+    )
+
+
+def _clause_prefix(window, offset, back=EVENT_CONTEXT_CHARS):
+    """Text introducing ``offset`` since the previous clause break."""
+    tail = window[max(0, offset - back) : offset]
+    cut = 0
+    for match in _CLAUSE_BREAK_RE.finditer(tail):
+        cut = match.end()
+    return tail[cut:]
+
+
+def _looks_like_value_definition(window, offset, percentage_priced=False):
+    """True when the amount at ``offset`` defines a value rather than a price."""
+    clause = _clause_prefix(window, offset)
+    if _VALUE_DEFINITION_RE.search(clause):
+        return True
+    return percentage_priced and _STATED_VALUE_RE.search(clause) is not None
+
+
+#: A non-per-share liquidation figure is only trusted when its own clause names
+#: a preference ("liquidation preference of $...", "Series A Liquidation
+#: Preference means $...", "an amount equal to the Stated Value"). Without this,
+#: a stray "liquidation" mention pulls in a nearby aggregate indebtedness
+#: covenant ("an aggregate of $400,000 of Indebtedness"), a lease payment or a
+#: listing-fee figure and stores it as a preferred liquidation value.
+_PREFERENCE_CLAUSE_RE = re.compile(
+    r"preference|liquidation\s+(?:value|price|amount)|stated\s+value"
+    r"|liquidating\s+distribution",
+    re.IGNORECASE,
+)
+
+
+def _looks_like_preference_clause(window, offset):
+    return _PREFERENCE_CLAUSE_RE.search(_clause_prefix(window, offset)) is not None
+
+
+#: "purchase price ... for the issuance and sale of" is the price of a new
+#: offering, not a redemption price. Reads like BTCY's Series A, whose redemption
+#: pays "an amount equal to the aggregate purchase price paid" with no fixed
+#: per-share figure, would otherwise adopt the Series B issue price ($9,091).
+_ISSUANCE_CONTEXT_RE = re.compile(
+    r"issuance|gross\s+proceeds|securities\s+purchase\s+agreement|\boffering\b|sale\s+of",
+    re.IGNORECASE,
+)
+
+
+def _looks_like_issuance_price(window, offset):
+    clause = _clause_prefix(window, offset)
+    return (
+        "purchase price" in clause.lower()
+        and _ISSUANCE_CONTEXT_RE.search(clause) is not None
+    )
+
+
+#: A warrant/right figure ("exercise price that is $6.36 per share", "we may
+#: redeem the public warrants ... at $0.01 per warrant", the "$18.00" price
+#: trigger for warrant redemption) is neither a preferred call nor a liquidation
+#: preference. SPAC warrants are routinely mis-classified as preferred stock, so
+#: this also neutralises those.
+_WARRANT_CLAUSE_RE = re.compile(
+    r"\bwarrants?\b|exercise\s+price|\bper\s+warrant\b", re.IGNORECASE
+)
+#: "an aggregate Liquidation Preference in excess of $1,000,000" is a funding
+#: threshold, not the per-unit preference.
+_IN_EXCESS_OF_RE = re.compile(r"in\s+excess\s+of", re.IGNORECASE)
+
+
+def _looks_like_warrant_clause(window, offset):
+    # A wider window than the clause prefix: bulleted warrant-redemption terms
+    # put "per warrant" before a ";", so the trigger price in a later bullet
+    # ("... equals or exceeds $18.00 per share") has no warrant in its own clause.
+    return _WARRANT_CLAUSE_RE.search(window[max(0, offset - 200) : offset + 200]) is not None
+
+
+#: An aggregate expressed in millions/billions ("an aggregate liquidation
+#: preference of $300.0 million", "$1 28 million") is a balance-sheet total, not
+#: a per-unit value.
+_VALUE_SCALE_RE = re.compile(r"\s*\d{0,3}\s*(?:million|billion)\b", re.IGNORECASE)
+#: A clause that says the stock has *no* liquidation rights is not stating a
+#: liquidation preference, however many per-share figures sit nearby.
+_NEGATED_PREFERENCE_RE = re.compile(
+    r"does\s+not\s+have[^.;]{0,48}?liquidation\s+(?:rights|preference|value)",
+    re.IGNORECASE,
+)
+
+
+def _looks_like_aggregate_amount(window, offset, match, per_share):
+    """True when a figure is an aggregate/total, not a unit value."""
+    # A figure scaled by "million"/"billion" is a total regardless of any nearby
+    # "per share" (e.g. "$300.0 million ... each share receives $25.00").
+    if _VALUE_SCALE_RE.match(window[match.end() : match.end() + 18]):
+        return True
+    if per_share:
+        return False
+    # Comparative balance-sheet total: "$544,800 and $247,200" (prior year), on
+    # either side of the figure.
+    after = window[match.end() : match.end() + 16]
+    before = window[max(0, offset - 16) : offset]
+    return re.match(r"\s*(?:and\s+)?\$", after) is not None or re.search(
+        r"\$\s*[0-9][0-9,]*\s*(?:and\s+)?$", before
+    ) is not None
+
+
+def _negates_liquidation_rights(window, offset):
+    return (
+        _NEGATED_PREFERENCE_RE.search(window[max(0, offset - 40) : offset + 240]) is not None
+    )
+
+
+def _extract_redemption(text, depositary_ratio=None):
     """Whole-text optional/call-feature scan (internal helper)."""
+    percentage_priced = _PERCENT_OF_VALUE_RE.search(text) is not None
     best = None
     for anchor in REDEMPTION_ANCHOR.finditer(text):
         start = anchor.start()
+        if _in_spac_narrative(text, start):
+            continue
         window = text[start : min(len(text), start + 2200)]
         window_pre = text[max(0, start - 160) : start]
         optional = OPTION_RE.search(window) is not None or OPTION_RE.search(window_pre) is not None
@@ -215,13 +514,38 @@ def _extract_redemption(text):
         if call_match:
             call_date = _month_day_year(call_match)
 
+        # The standing call price is the first per-share amount introduced by a
+        # scheduled (non-event) redemption clause. An event-triggered premium
+        # that appears earlier in the window is skipped; if every per-share
+        # amount sits in an event clause the first one is kept as a fallback.
         call_price = None
-        for offset, value, match in _dollar_values(window):
+        call_offset = None
+        event_fallback = None
+        event_offset = None
+        for offset, value, _match in _dollar_values(window):
             if not (MIN_PER_SHARE <= value <= MAX_PER_SHARE):
                 continue
-            if _per_share_vicinity(window, offset):
-                call_price = value
-                break
+            if not _per_share_vicinity(window, offset):
+                continue
+            if _in_event_clause(window, offset):
+                if event_fallback is None:
+                    event_fallback = value
+                    event_offset = offset
+                continue
+            if _looks_like_value_definition(window, offset, percentage_priced):
+                continue
+            if _looks_like_issuance_price(window, offset):
+                continue
+            if _looks_like_warrant_clause(window, offset):
+                continue
+            call_price = value
+            call_offset = offset
+            break
+        if call_price is None:
+            call_price = event_fallback
+            call_offset = event_offset
+        if call_price is not None:
+            call_price = _scale_for_depositary(window, call_offset, call_price, depositary_ratio)
 
         schedule = []
         for step in ON_OR_AFTER_RE.finditer(window):
@@ -229,10 +553,28 @@ def _extract_redemption(text):
             if not effective:
                 continue
             after = window[step.end() : step.end() + 260]
-            for _offset, price, _m in _dollar_values(after):
-                if MIN_PER_SHARE <= price <= MAX_PER_SHARE:
-                    schedule.append({"effective_date": effective, "price": float(price)})
+            picked = None
+            for offset, price, _m in _dollar_values(after):
+                if MIN_PER_SHARE <= price <= MAX_PER_SHARE and not _in_event_clause(
+                    after, offset
+                ):
+                    picked = (offset, price)
                     break
+            if picked is None:
+                # Every per-share value in the step sits in an event clause;
+                # fall back to the first so the step is not silently dropped.
+                for offset, price, _m in _dollar_values(after):
+                    if MIN_PER_SHARE <= price <= MAX_PER_SHARE:
+                        picked = (offset, price)
+                        break
+            if picked is None:
+                continue
+            # A schedule states per-share prices like the call price, so the
+            # depositary fraction (or a stated equivalent) applies here too.
+            offset, price = picked
+            scaled = _scale_for_depositary(after, offset, price, depositary_ratio)
+            if scaled is not None:
+                schedule.append({"effective_date": effective, "price": float(scaled)})
         if call_date:
             schedule = [entry for entry in schedule if entry["effective_date"] >= call_date]
 
@@ -325,21 +667,23 @@ def _merge_best_clause(current, candidate):
     return candidate if priority else current
 
 
-def extract_liquidation_preference(text, series_pattern=None):
+def extract_liquidation_preference(text, series_pattern=None, depositary_ratio=None):
     """Per-share Liquidation Preference; scoped to ``series_pattern`` when given."""
     if series_pattern is None:
-        return _extract_liquidation_preference(text)
+        return _extract_liquidation_preference(text, depositary_ratio)
     best = None
     for start, end in _series_regions(text, series_pattern):
-        best = _merge_best_clause(best, _extract_liquidation_preference(text[start:end]))
+        best = _merge_best_clause(
+            best, _extract_liquidation_preference(text[start:end], depositary_ratio)
+        )
     return best
 
 
-def extract_redemption(text, series_pattern=None):
+def extract_redemption(text, series_pattern=None, depositary_ratio=None):
     """Optional / call features; scoped to ``series_pattern`` when given."""
     if series_pattern is None:
-        return _extract_redemption(text)
+        return _extract_redemption(text, depositary_ratio)
     best = None
     for start, end in _series_regions(text, series_pattern):
-        best = _merge_best_clause(best, _extract_redemption(text[start:end]))
+        best = _merge_best_clause(best, _extract_redemption(text[start:end], depositary_ratio))
     return best

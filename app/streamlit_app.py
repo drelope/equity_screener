@@ -8,7 +8,11 @@ import sys
 from pathlib import Path
 
 import streamlit as st
+from sqlalchemy.exc import SQLAlchemyError
 
+# `streamlit run app/streamlit_app.py` puts `app/` on sys.path, not the repository root,
+# so `import app.views` needs the root added explicitly. Remove this if the package is
+# ever installed.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from app import ui  # noqa: E402
@@ -21,7 +25,21 @@ from app.views import (  # noqa: E402
     security,
 )
 
-st.set_page_config(page_title="Dividend Equity CRISP-DM", layout="wide")
+st.set_page_config(
+    page_title="Dividend Equity CRISP-DM",
+    page_icon="💰",
+    layout="wide",
+    initial_sidebar_state="expanded",
+    menu_items={
+        "Get help": None,
+        "Report a bug": None,
+        "About": (
+            "Dividend Equity Decision System. Scores are rule-based percentile ranks: "
+            "Income 25% | Sustainability 20% | Legal/Economic Rights 25% | "
+            "Appreciation 15% | Risk 10% | Valuation 5%."
+        ),
+    },
+)
 
 navigation = st.navigation(
     {
@@ -66,4 +84,12 @@ navigation = st.navigation(
     }
 )
 ui.operator_panel()
-navigation.run()
+try:
+    navigation.run()
+except SQLAlchemyError:
+    # The most likely runtime failure: Postgres is down or DATABASE_URL is wrong. Show a
+    # readable message instead of a traceback; any other exception still propagates.
+    st.error(
+        "Database unavailable. Check that PostgreSQL is running and that DATABASE_URL "
+        "is correct, then reload the page."
+    )

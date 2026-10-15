@@ -7,8 +7,10 @@ import pandas as pd
 from scripts import populate_dividend_data as dividend_data
 from scripts.populate_dividend_data import (
     SEC_DIVIDEND_CONCEPTS,
+    cadence_from_events,
     extract_sec_dividend_data,
     get_latest_dividend_rate,
+    infer_frequency,
     normalize_currency,
     normalize_openbb_dividend_rows,
     normalize_sec_dividend_rows,
@@ -17,6 +19,60 @@ from scripts.populate_dividend_data import (
     populate_preferred_terms,
     populate_ticker_profiles,
 )
+
+
+def test_infer_frequency_buckets_by_median_interval():
+    # Median of the sorted gaps, so an even count interpolates between the two
+    # middle values (linear interpolation matches percentile_cont(0.5)).
+    assert infer_frequency([30, 30, 29]) == "Monthly"
+    assert infer_frequency([35]) == "Monthly"
+    assert infer_frequency([60, 90]) == "Quarterly"
+    assert infer_frequency([90, 100]) == "Quarterly"
+    assert infer_frequency([95, 106]) == "Semi-annual", "median 100.5 sits past the quarterly border"
+    assert infer_frequency([177]) == "Semi-annual"
+    assert infer_frequency([365]) == "Annual"
+    assert infer_frequency([400]) == "Annual"
+    assert infer_frequency([30, 400]) == "Annual", "median 215 still sits inside the annual border"
+    assert infer_frequency([450]) == "Irregular"
+
+
+def test_infer_frequency_is_irregular_without_two_events():
+    assert infer_frequency([]) == "Irregular"
+    assert infer_frequency([None]) == "Irregular"
+    assert infer_frequency([450]) == "Irregular"
+
+
+def test_cadence_from_events_prefers_openbb_with_two_true_ex_dates():
+    fresh = [("s1", "OPENBB", date(2025, 3, 15)), ("s1", "OPENBB", date(2025, 6, 15))]
+    stored = []
+
+    assert cadence_from_events(fresh, stored) == {"s1": "Quarterly"}
+
+
+def test_cadence_from_events_falls_back_to_sec_period_end_series():
+    fresh = [("s1", "OPENBB", date(2025, 6, 15))]
+    stored = [
+        ("s1", "SEC_XBRL", date(2025, 1, 1)),
+        ("s1", "SEC_XBRL", date(2025, 4, 1)),
+        ("s1", "SEC_XBRL", date(2025, 7, 1)),
+    ]
+
+    assert cadence_from_events(fresh, stored) == {"s1": "Quarterly"}
+
+
+def test_cadence_from_events_is_irregular_for_a_single_event():
+    fresh = [("s1", "OPENBB", date(2025, 6, 15))]
+    stored = [("s1", "SEC_XBRL", date(2025, 1, 1))]
+
+    assert cadence_from_events(fresh, stored) == {"s1": "Irregular"}
+
+
+def test_cadence_from_events_matches_the_python_median_to_the_sql_backfill():
+    # Even counts: percentile_cont(0.5) interpolates the two middle gaps.
+    fresh = [("s1", "OPENBB", date(2025, 1, 1)), ("s1", "OPENBB", date(2025, 4, 1))]
+    stored = [("s1", "OPENBB", date(2025, 7, 1)), ("s1", "OPENBB", date(2025, 9, 30))]
+
+    assert cadence_from_events(fresh, stored) == {"s1": "Quarterly"}
 
 
 def test_extract_sec_dividend_data_unwraps_live_facts_shape():

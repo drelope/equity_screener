@@ -18,10 +18,34 @@ from zoneinfo import ZoneInfo, available_timezones
 import pandas as pd
 import streamlit as st
 
-from app import ui
+from app import column_docs, ui
 from src.crispdm.ops import catalog, schedule, store
 
 STATUSES = ["queued", "running", "succeeded", "failed", "cancelled", "timed_out"]
+
+# The queue and schedule frames are rebuilt from ops.tasks / ops.schedules rows with display
+# labels, so a few columns are renamed and two are computed; those carry a short note.
+QUEUE_HELP = {
+    "id": ("ops.tasks", "task_id", "Task identifier assigned when queued."),
+    "task": ("ops.tasks", "task_key", None),
+    "parameters": ("ops.tasks", "params", None),
+    "status": ("ops.tasks", "status", None),
+    "source": ("ops.tasks", "source", None),
+    "requested by": ("ops.tasks", "requested_by", None),
+    "created": ("ops.tasks", "created_at", None),
+    "duration": (None, None, "finished_at minus started_at, formatted for display."),
+    "exit": ("ops.tasks", "exit_code", None),
+}
+SCHEDULE_HELP = {
+    "id": ("ops.schedules", "schedule_id", "Schedule identifier."),
+    "name": ("ops.schedules", "name", None),
+    "task": ("ops.schedules", "task_key", None),
+    "parameters": ("ops.schedules", "params", None),
+    "when": (None, None, "Human reading of the schedule's kind and timing."),
+    "state": ("ops.schedules", "enabled", "active when enabled, paused otherwise."),
+    "next run": ("ops.schedules", "next_run_at", None),
+    "last run": ("ops.schedules", "last_run_at", None),
+}
 RISK_TEXT = {
     "read": "Read-only.",
     "write": "Writes to the database.",
@@ -181,12 +205,26 @@ def task_detail(task_id: int) -> None:
     except ValueError:
         st.caption("This task's definition is no longer in the catalog.")
     cells = st.columns(4)
-    cells[0].metric("Exit code", "-" if row["exit_code"] is None else row["exit_code"])
-    cells[1].metric(
-        "Duration", ui.fmt_duration(row["started_at"], row["finished_at"] or ui.now_utc())
+    cells[0].metric(
+        "Exit code",
+        "-" if row["exit_code"] is None else row["exit_code"],
+        help=column_docs.help_text(relation="ops.tasks", column="exit_code"),
     )
-    cells[2].metric("Attempts", row["attempts"])
-    cells[3].metric("Worker", row["worker"] or "-")
+    cells[1].metric(
+        "Duration",
+        ui.fmt_duration(row["started_at"], row["finished_at"] or ui.now_utc()),
+        help="finished_at minus started_at, formatted for display.",
+    )
+    cells[2].metric(
+        "Attempts",
+        row["attempts"],
+        help=column_docs.help_text(relation="ops.tasks", column="attempts"),
+    )
+    cells[3].metric(
+        "Worker",
+        row["worker"] or "-",
+        help=column_docs.help_text(relation="ops.tasks", column="worker"),
+    )
     if row["cancel_requested"] and row["status"] == "running":
         st.warning("Cancel requested; waiting for the worker to stop the process.")
     st.code(row["log_tail"] or "(no output yet)", language=None)
@@ -233,7 +271,12 @@ def queue_view() -> None:
             for t in tasks
         ]
     )
-    st.dataframe(frame, hide_index=True, width="stretch")
+    st.dataframe(
+        frame,
+        hide_index=True,
+        width="stretch",
+        column_config=column_docs.config_map(QUEUE_HELP, frame.columns),
+    )
     st.caption("Times are UTC.")
     picked = st.selectbox("Inspect a task", [t["task_id"] for t in tasks], key="ops_inspect")
     task_detail(picked)
@@ -264,7 +307,12 @@ def schedule_table(rows: list[dict]) -> None:
             for s in rows
         ]
     )
-    st.dataframe(frame, hide_index=True, width="stretch")
+    st.dataframe(
+        frame,
+        hide_index=True,
+        width="stretch",
+        column_config=column_docs.config_map(SCHEDULE_HELP, frame.columns),
+    )
     st.caption(
         "Times are UTC. A schedule never stacks: if its last task is still open, that slot is skipped."
     )

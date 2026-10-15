@@ -383,6 +383,91 @@ def merge_dividend_records(records):
     return list(merged.values())
 
 
+#: Median-interval cadence buckets, days between consecutive ex-dates, in
+#: ascending limit order. A security's cadence is one label shared by all its
+#: rows. ``Irregular`` covers fewer than two events and any median above the
+#: ``Annual`` border. Kept in lockstep with the V0065 backfill (PostgreSQL
+#: ``percentile_cont(0.5)`` with the same borders). The cadence is
+#: informational only: the feature build must not key on this column.
+FREQUENCY_BUCKETS = (("Monthly", 35), ("Quarterly", 95), ("Semi-annual", 200), ("Annual", 400))
+
+
+def _median(gaps):
+    ordered = sorted(gaps)
+    if not ordered:
+        return None
+    n = len(ordered)
+    if n % 2:
+        return ordered[n // 2]
+    return (ordered[n // 2 - 1] + ordered[n // 2]) / 2.0
+
+
+def infer_frequency(gap_days):
+    """Classify a payment cadence from the days between consecutive ex-dates.
+
+    The median interval decides. Linear interpolation between the two middle
+    gaps matches PostgreSQL ``percentile_cont(0.5)``, so this Python and the
+    V0065 SQL backfill agree. Fewer than two gaps, or a median above the
+    ``Annual`` border, is ``Irregular``.
+    """
+    gaps = [int(g) for g in gap_days if g is not None]
+    mid = _median(gaps)
+    if mid is None:
+        return "Irregular"
+    for label, limit in FREQUENCY_BUCKETS:
+        if mid <= limit:
+            return label
+    return "Irregular"
+
+
+def cadence_from_events(fresh, stored):
+    """Map each security to its payment-cadence label.
+
+    ``fresh`` and ``stored`` are (security_id, provider, ex_date) event rows.
+    The OPENBB series carries the true ex-dates and wins when it holds at
+    least two events; the SEC series (fiscal period-end proxies) is the
+    fallback. A security with fewer than two events in either series reads
+    ``Irregular``.
+    """
+    merged = {}
+    for security_id, provider, ex_date in [*fresh, *stored]:
+        merged.setdefault(security_id, {}).setdefault(provider, set()).add(ex_date)
+    out = {}
+    for security_id, by_provider in merged.items():
+        chosen = None
+        for provider in ("OPENBB", "SEC_XBRL"):
+            dates = sorted(by_provider.get(provider) or [])
+            if len(dates) >= 2:
+                chosen = dates
+                break
+        if chosen is None:
+            out[security_id] = "Irregular"
+            continue
+        gaps = [(later - earlier).days for earlier, later in zip(chosen, chosen[1:])]
+        out[security_id] = infer_frequency(gaps)
+    return out
+
+
+def _cadence_by_security(conn, pending):
+    """Load stored ex-dates for the affected securities and combine with fresh.
+
+    Computed over the stored plus incoming series, not the incoming window
+    alone, so a true-annual payer is not relabelled ``Irregular`` by a
+    12-month nightly lookback that only ever sees one of its payments.
+    """
+    if not pending:
+        return {}
+    security_ids = sorted({security_id for security_id, _, _ in pending})
+    stored = conn.execute(
+        text(
+            "SELECT security_id, provider, ex_dividend_date FROM raw.dividend_data "
+            "WHERE security_id = ANY(:security_ids)"
+        ),
+        {"security_ids": security_ids},
+    ).all()
+    return cadence_from_events(pending, stored)
+
+
 def get_target_tickers(limit=None, tickers=None, ticker_map=None):
     if tickers:
         return [t.strip().upper() for t in tickers if t and t.strip()]
@@ -504,13 +589,34 @@ def load_security_ids(conn):
 
 
 def get_latest_dividend_rate(conn, security_id):
-    """Return the most recent positive dividend amount for a security."""
+    """Return the most recent positive per-share dividend amount for a security.
+
+    Class-aware, because a preferred series routinely carries its issuer's
+    common-stock dividend facts: without the concept filter the "latest amount"
+    for a preferred was usually the issuer's common dividend or an annual
+    CashPaid aggregate. For a preferred security this accepts an OPENBB row (a
+    true per-symbol event) or the per-share PreferredStockDividendsPerShareDeclared
+    concept; the CashPaid aggregate is never a per-share amount and is excluded.
+    Amounts above $1000 per share are refused as implausible (matches
+    doc_clauses.MAX_PER_SHARE / the security-terms view guard).
+    """
     return conn.execute(
         text("""
-        SELECT amount
-        FROM raw.dividend_data
-        WHERE security_id = :security_id AND amount > 0
-        ORDER BY ex_dividend_date DESC NULLS LAST, payment_date DESC NULLS LAST
+        SELECT d.amount
+        FROM raw.dividend_data d
+        JOIN reference.securities s ON s.security_id = d.security_id
+        WHERE d.security_id = :security_id AND d.amount > 0
+          AND COALESCE(d.concept, '') <> 'CommonStockDividendsPerShareCashPaid'
+          AND d.amount <= 1000
+          AND (
+                s.security_type <> 'preferred stock'
+                OR d.provider = 'OPENBB'
+                OR d.concept = 'PreferredStockDividendsPerShareDeclared'
+                OR COALESCE(d.concept, '') = ''
+              )
+        ORDER BY (d.provider = 'OPENBB') DESC,
+                 d.ex_dividend_date DESC NULLS LAST,
+                 d.payment_date DESC NULLS LAST
         LIMIT 1
     """),
         {"security_id": security_id},
@@ -779,16 +885,25 @@ def populate_ticker_profiles(conn, limit=None, tickers=None):
                 loader="populate_dividend_data",
                 owned_columns=NAME_PARSE_COLUMNS + (OPENBB_COLUMNS if openbb else ()),
             )
+            # Only a preferred series carries the terms this name parse recovers.
+            # Without the security_type guard a common-stock ticker such as "BCO"
+            # inherited the issuer's preferred coupon/liquidation from its name
+            # (103 common rows were carrying a coupon). The liquidation value is
+            # also range-guarded: a nominal par below $1 is not a stated
+            # preference (matches doc_clauses.MIN_PER_SHARE and the view guard).
             conn.execute(
                 text("""
                 UPDATE reference.securities
                 SET coupon_rate = COALESCE(:coupon_rate, coupon_rate),
                     liquidation_preference = COALESCE(
-                        :liquidation_preference, liquidation_preference
+                        CASE WHEN :liquidation_preference BETWEEN 1 AND 1000
+                             THEN :liquidation_preference END,
+                        liquidation_preference
                     ),
                     call_date = COALESCE(:call_date, call_date),
                     updated_at = now()
                 WHERE security_id = :security_id
+                  AND security_type = 'preferred stock'
             """),
                 {**candidate, **summary},
             )
@@ -924,6 +1039,7 @@ def populate_dividend_data(
 
     with engine.begin() as conn:
         ticker_security_ids, cik_security_ids = load_security_ids(conn)
+        pending = []
         insert_rows = []
         for div in dividend_data:
             ticker = (div.get("ticker") or "").upper()
@@ -938,6 +1054,8 @@ def populate_dividend_data(
                     print(f"  Warning: No security found for ticker {ticker or 'unknown'}")
                 continue
 
+            provider = div.get("provider", "SEC_XBRL")
+            pending.append((security_id, provider, ex_div_date))
             insert_rows.append(
                 {
                     "sec_id": security_id,
@@ -947,13 +1065,21 @@ def populate_dividend_data(
                     "pay_date": div.get("payment_date"),
                     "amount": float(div.get("amount", 0)),
                     "adjusted_amount": div.get("adjusted_amount"),
-                    "frequency": div.get("frequency", "Annual"),
+                    "frequency": "Irregular",  # overwritten from the cadence pass below
                     "currency": normalize_currency(div.get("currency")),
-                    "provider": div.get("provider", "SEC_XBRL"),
+                    "provider": provider,
                     "concept": (div.get("concept") or "")[:96],
                     "retrieved_at": datetime.now(timezone.utc),
                 }
             )
+
+        # The cadence is a property of the security's payment series, not of a
+        # single provider row: derive it once per security from the stored and
+        # incoming ex-dates (OpenBB's true ex-dates first, SEC's period-end
+        # proxies as the fallback) and stamp every row alike.
+        frequencies = _cadence_by_security(conn, pending)
+        for row, (security_id, _, _) in zip(insert_rows, pending):
+            row["frequency"] = frequencies.get(security_id, "Irregular")
 
         if insert_rows:
             conn.execute(

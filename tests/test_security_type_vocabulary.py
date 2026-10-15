@@ -390,7 +390,51 @@ def test_classify_instrument_dividend_facts_preferred():
     assert decided.source == "dividend_facts"
 
 
-def test_classify_instrument_unavailable_is_other():
+def test_classify_instrument_primary_symbol_is_common_despite_preferred_dividends():
+    classification = _classification(dividend_facts=["PreferredStockDividendsPerShare"])
+    submissions = {"order": ["CNDT"], "exchange_by_symbol": {"CNDT": "nasdaq"}}
+    decided = _instrument(
+        "CNDT", "Conduent Inc", classification=classification, submissions=submissions
+    )
+    assert decided.security_type == "common_stock"
+    assert decided.source == "submissions_primary"
+
+
+def test_classify_instrument_non_primary_symbol_keeps_preferred_dividend_reading():
+    classification = _classification(dividend_facts=["PreferredStockDividendsPerShare"])
+    submissions = {"order": ["CHSCP", "CHSCL"], "exchange_by_symbol": {}}
+    decided = _instrument("CHSCL", "CHS Inc", classification=classification, submissions=submissions)
+    assert decided.security_type == "preferred stock"
+    assert decided.source == "dividend_facts"
+
+
+def test_classify_instrument_primary_symbol_ignores_issuer_name_preferred_hint():
+    """A "Preferred & Income Fund" name describes the issuer, not its common share."""
+    submissions = {"order": ["JPC"], "exchange_by_symbol": {}}
+    decided = _instrument(
+        "JPC", "Nuveen Preferred & Income Opportunities Fund", submissions=submissions
+    )
+    assert decided.security_type == "common_stock"
+
+
+def test_classify_instrument_primary_symbol_ignores_preferred_only_concept_bag():
+    classification = _classification(bag=["preferred stock"])
+    primary = _instrument(
+        "JPC",
+        "Nuveen Fund",
+        classification=classification,
+        submissions={"order": ["JPC"], "exchange_by_symbol": {}},
+    )
+    assert primary.security_type == "common_stock"
+    assert primary.source == "submissions_primary"
+    sibling = _instrument(
+        "JPCX",
+        "Nuveen Fund",
+        classification=classification,
+        submissions={"order": ["JPC", "JPCX"], "exchange_by_symbol": {}},
+    )
+    assert sibling.security_type == "preferred stock"
+    assert sibling.source == "concept_bag"
     decided = _instrument("ZZZZ", "Nowhere Inc", classification={"status": "unavailable"})
     assert decided.security_type == "other"
     assert decided.source == "unavailable"

@@ -342,6 +342,12 @@ python -m scripts.populate_companyfacts --preferred-taxonomy
 # requests (dividend payers only by default)
 python -m scripts.populate_sec_documents --tickers AAPL,MSFT,JNJ
 
+# Stage 5b — Mine preferred.contract_terms (liquidation / call terms) from the
+# stored raw.contract_documents. Re-mines every active preferred; set
+# SEC_ETL_OFFLINE=1 to mine only already-stored documents (no SEC fetch). Skip
+# with --skip-contract-terms on run_full_etl.
+python -m scripts.populate_contract_terms
+
 # Stage 6 — Offline derived financials over stored XBRL (no network)
 python -m scripts.populate_fundamentals
 
@@ -532,8 +538,8 @@ and the worker use the same database as everything else.
 
 | Page | What it does |
 | --- | --- |
-| Screener | The scored universe as a sortable table with filters (yield, type, score, ticker), charts, CSV download. Selecting a row carries the ticker to Security detail. |
-| Security detail | Price history, dividend events by provider, score history, latest features and reported fundamentals for one ticker. |
+| Screener | The scored universe as a sortable table with filters (yield, type, score, ticker, minimum gross margin, maximum price/book), selectable point-in-time financial-metric columns (margins, cash-flow quality, balance sheet, valuation), headline medians for net margin and FCF yield, charts and CSV download. Selecting a row carries the ticker to Security detail. |
+| Security detail | Price history, dividend events by provider, score history, latest features, a Financials tab grouping the point-in-time ratios (margins, cash-flow quality, balance sheet, valuation) and the reported fundamentals for one ticker. |
 | Data explorer | Browse an allowlisted set of tables with column choice, up to 8 filters, sorting, a row limit, CSV download and a quick chart. |
 | Health | The same checks as `scripts.verify_nightly_run` (freshness against each source's SLA, data quality, dividend coverage, security consistency, walk-forward gate) plus recent nightly runs and their stages. |
 | Operations | Queue a task, follow its live log, cancel it, run it again, and create, pause or delete schedules (once, every N minutes, daily in a chosen time zone). |
@@ -805,6 +811,7 @@ call_date, liquidation_preference (par), raw_payload (JSONB), retrieved_at
 | Table | Purpose | Key columns |
 |---|---|---|
 | `preferred.security_terms` | Preferred-stock legal/economic terms | `security_id` PK, `preferred_series`, `dividend_rate`, `liquidation_preference`, `confidence_score`, `reviewed_by` |
+| `preferred.contract_terms` | **Mined** liquidation / call terms (stage 5b, `scripts.populate_contract_terms`), one row per preferred security, extracted from the issuer's stored `raw.contract_documents` by `src/crispdm/doc_clauses.py`. Evidence — the matched clause and the filing it came from — is kept in `sections` (JSONB). A security with no mineable clause has **no row**: absence is *unresolved*, not "no call". Feeds the `preferred.v_security_terms` lookup the app reads. | `security_id` PK, `liquidation_preference`, `call_price`, `first_call_date`, `redemption_schedule` (JSONB), `optional_redemption`, `source_document_id`, `sections` (JSONB), `confidence`, `updated_at` |
 | `preferred.dividend_snapshot` | Preferred issuers with dividend evidence (built by `scripts.sec_xbrl_dividend_tags`); `active=False` flags issuers whose latest dividend fact falls outside the lookback window | `security_id` PK, `ticker`, `cik`, `preferred_flag`, `pays_dividend`, `active`, `dividend_evidence_tag`, `latest_dividend_period_end/filed/form` |
 | `preferred.issuer_terms` | **View.** SEC XBRL preferred terms at *issuer* granularity, recovered from `raw.ticker_profile.raw_payload->sec_xbrl` where `populate_preferred_profiles` parks them. Exists because Company Facts carry no series dimension, so these values are deliberately **not** promoted into `clean.ticker_profile`'s per-series columns | `cik` (grouping key), `issuer_name`, `issuer_coupon_rate_pct`, `issuer_liquidation_or_par_value`, `security_count`, `distinct_coupon_values`, `distinct_liquidation_values`, `terms_scope` (constant `issuer_level_unallocated`) |
 
@@ -814,6 +821,49 @@ Rows are seeded by the dividend stage's preferred-term gap-fill and by
 preferred series and cumulative values. Both paths leave researched economic
 terms intact, and rows can be enriched manually via
 `scripts.yahoo_FetchPreferredStock.py`.
+
+`preferred.contract_terms` is a distinct, *document-mined* source rather than a
+name/Company-Facts derivation. Stage 5b downloads each preferred issuer's
+redemption-relevant filings into `raw.contract_documents` and extracts the
+per-share liquidation preference, call price, first call date and any redemption
+schedule from their text (`src/crispdm/doc_clauses.py`). The rules that keep the
+extraction honest:
+
+- **Per-share only.** Only amounts between $1 and $1,000,000 next to a per-share
+  phrase are kept; an aggregate offering or funding figure is never read as a
+  per-share price.
+- **Depositary-share scaling.** A class named e.g. `1/40th Interest in a Share of
+  ...` has its per-depositary figures scaled back to the underlying share (the
+  reverse when the filing quotes the underlying price), unless an explicit
+  per-depositary equivalent is stated. The ratio is only applied when the class
+  name actually contains "depositary", so a rights/warrants `1/N` split is left
+  alone.
+- **False-positive guards.** Blank-check (SPAC) trust language — "we redeem the
+  public shares for the funds held in the Trust Account" or "$10.00 per share on
+  the liquidation of our trust account" — is not a preferred call or preference.
+  A *definition* of a stated/par/conversion value (`"Stated Value" shall mean
+  $10,000 per share`, `"Conversion Price" means ...`) and a percentage-of-value
+  price (`107% of the Stated Value`) are not call prices, while a plain *use* of
+  the value as the price ("at a price equal to the stated value of $1,000") is.
+  A warrant/right figure — an exercise price, "per warrant", or a warrant
+  redemption trigger ("... equals or exceeds $18.00") — is neither a call nor a
+  liquidation preference; this also neutralises the many blank-check warrant
+  documents mis-typed as preferred stock. Aggregate totals scaled by
+  "million"/"billion", funding thresholds ("an aggregate Liquidation Preference in
+  excess of $1,000,000"), figures paired with a prior/next amount, and clauses
+  that negate liquidation rights are dropped.
+- **The primary symbol is always common.** The issuer's submissions leading
+  ticker is its common class, so issuer-level evidence — preferred dividend
+  facts, an issuer name like "Preferred & Income Fund", a preferred-only concept
+  bag — never types it preferred. Only per-symbol evidence (a dash suffix or a
+  series-bound dei title) makes a listed series preferred, keeping `CNDT`,
+  `MPLX`, `ET` and the SPAC / preferred-income closed-end funds common. A
+  reclassified primary keeps its old row as inactive history, and the terms that
+  had been mined against the wrong ticker re-home to the genuine series.
+- **Re-mine is authoritative.** Stage 5b re-mines every active preferred; a row
+  whose stored documents now yield nothing is deleted, and rows for securities
+  no longer an active preferred (reclassified or deactivated) are pruned, so an
+  over-eager earlier extraction cannot linger as a stale value.
 
 ### XBRL / Inline XBRL tag registry
 
@@ -840,6 +890,7 @@ name. The tag prefixes are `dei` (Document and Entity Information), `us-gaap`
 | `raw.dividend_data.ex_dividend_date` | `xbrl:periodEnd` (the concept `end` date is the proxy; SEC XBRL has no ex-date fact) |
 | `raw.dividend_data.declaration_date` / `record_date` / `payment_date` | `ix:declarationDate`, `ix:recordDate`, `ix:paymentDate` — iXBRL filing narrative, not companyfacts facts |
 | `raw.dividend_data.frequency` / `currency` | inferred / derived from the XBRL unit, not standalone us-gaap facts |
+| `fundamentals.periodic_financials.share_repurchases` | `us-gaap:PaymentsForRepurchaseOfCommonStock`, fallback `us-gaap:PaymentsForRepurchaseOfEquity` (financing-section duration fact; NULL where no repurchase is tagged) |
 | security class (`reference.securities.security_type`) | `SECURITY_FACT_RULES` — normalized concept-name rules (e.g. `commonstock`, `preferredstock`, `debt`/`borrowings`, `stockholdersequity`) |
 | dividend evidence (`reference.securities.dividend`, `preferred.dividend_snapshot.pays_dividend`) | `DIVIDEND_FACT_TERMS` — concepts containing `dividend` or `distributionstoowners` with positive reported values |
 | `preferred.security_terms.dividend_rate` | `us-gaap:PreferredStockDividendRatePercentage` (seeded from the latest `raw.dividend_data` amount when no XBRL rate was filed) |
@@ -860,8 +911,8 @@ there are no duplicated tag sets left in the codebase.
 
 | Table | Purpose |
 |---|---|
-| `fundamentals.periodic_financials` | Normalized financial statements, PK `(security_id, period_end, fiscal_period)` |
-| `model.features` | Derived dividend-model features, PK `(security_id, as_of_date)` |
+| `fundamentals.periodic_financials` | Normalized periodic financials, PK `(security_id, period_end, fiscal_period)`. Includes `share_repurchases` (cash paid to repurchase the issuer's own shares; `us-gaap:PaymentsForRepurchaseOfCommonStock`, fallback `PaymentsForRepurchaseOfEquity`) — the buyback half of capital return, alongside the dividend metrics. NULL means the filer disclosed no repurchase, **not** a zero buyback. Also `gross_profit` — the P&L subtotal the `gross_margin` feature reads: the direct `us-gaap:GrossProfit` tag when the filer states it, otherwise derived as `revenue − cost_of_revenue`. `cost_of_revenue` is the total cost line (`us-gaap:CostOfRevenue`, fallback `CostOfGoodsAndServicesSold`); narrow tags (`CostOfGoodsSold`, `CostOfServices`) are deliberately not read, so a filer tagging only a partial cost keeps a NULL `gross_profit` rather than an overstated one. |
+| `model.features` | Derived dividend-model features, PK `(security_id, as_of_date)`. Beyond the payout/coverage/leverage set it carries the **V0068 point-in-time financial metrics** — margins (`gross_margin`, `operating_margin`, `net_margin`, `fcf_margin`, `ocf_margin`), cash-flow quality (`cash_conversion`, `capex_intensity`, `fcf_growth`), balance sheet (`net_debt`, `net_debt_to_ebitda`, `current_ratio`, `debt_to_equity`) and valuation (`pe_ratio`, `earnings_yield`, `fcf_yield`, `price_to_book`). Every one is derived from the vintaged `fundamentals.periodic_financials` rows keyed by `filed`, never from the current `clean.company_profile` snapshot, and is NULL rather than imputed when its denominator is absent or non-positive. |
 | `model.scores` | Rule/ML scores, PK `(security_id, as_of_date)` |
 | `model.predictions` | Model predictions per run, PK `(run_id, security_id, as_of_date)` |
 | `model.rankings` | Final ranked output, PK `(security_id, as_of_date)` |

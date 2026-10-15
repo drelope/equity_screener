@@ -1,6 +1,8 @@
 import json
+import re
 from datetime import date, datetime, timezone
 from decimal import Decimal
+from pathlib import Path
 
 from scripts import populate_clean_company_profile as clean_profiles
 
@@ -240,3 +242,140 @@ def test_officer_rows_carry_every_insert_column():
     rows = clean_profiles._clean_officer_rows("ABR", "Arbor", [{"name": "A"}])
 
     assert set(rows[0]) == set(clean_profiles.OFFICER_COLUMNS)
+
+
+def test_harmonize_backfills_missing_issuer_attributes_from_primary():
+    rows = [
+        {
+            "symbol": "ABR",
+            "parent_name": "Arbor Realty Trust, Inc.",
+            "cik": "0000000001",
+            "sector": "Real Estate",
+            "industry": "REIT - Mortgage",
+            "industry_key": "reit-mortgage",
+            "city": "Bethesda",
+            "employees": 339,
+            "last_fiscal_year_end": date(2025, 12, 31),
+            "current_price": Decimal("3.71"),
+            "market_cap": Decimal("2300000000"),
+            "exchange": "NYQ",
+            "market": "us_market",
+        },
+        {
+            "symbol": "ABR-PD",
+            "parent_name": "Arbor Realty Trust, Inc.",
+            "cik": "0000000001",
+            "sector": None,
+            "industry": "   ",
+            "industry_key": None,
+            "city": None,
+            "employees": None,
+            "last_fiscal_year_end": None,
+            "current_price": Decimal("25.00"),
+            "market_cap": Decimal("1000000000"),
+            "exchange": "PNK",
+            "market": None,
+        },
+    ]
+
+    clean_profiles.harmonize_issuer_attributes(rows)
+    thin = rows[1]
+
+    assert thin["sector"] == "Real Estate"
+    assert thin["industry"] == "REIT - Mortgage"
+    assert thin["industry_key"] == "reit-mortgage"
+    assert thin["city"] == "Bethesda"
+    assert thin["employees"] == 339
+    assert thin["last_fiscal_year_end"] == date(2025, 12, 31)
+    assert thin["current_price"] == Decimal("25.00")
+    assert thin["market_cap"] == Decimal("1000000000")
+    assert thin["exchange"] == "PNK"
+    assert thin["market"] is None
+
+
+def test_harmonize_uses_primary_first_as_donor_and_fills_primary_from_siblings():
+    rows = [
+        {
+            "symbol": "AEM",
+            "cik": "0000000002",
+            "sector": "Basic Materials",
+            "total_revenue": None,
+            "country": None,
+        },
+        {
+            "symbol": "AEMRF",
+            "cik": "0000000002",
+            "sector": None,
+            "total_revenue": Decimal("8000000000"),
+            "country": "Canada",
+        },
+    ]
+
+    clean_profiles.harmonize_issuer_attributes(rows)
+
+    assert rows[0]["sector"] == "Basic Materials"
+    assert rows[1]["sector"] == "Basic Materials"
+    assert rows[1]["total_revenue"] == Decimal("8000000000")
+    assert rows[0]["total_revenue"] == Decimal("8000000000")
+    assert rows[0]["country"] == "Canada"
+
+
+def test_harmonize_overwrites_never_and_leaves_single_and_null_cik_alone():
+    rows = [
+        {"symbol": "A", "cik": "0000000003", "city": "Toronto", "sector": "X"},
+        {"symbol": "A-PR", "cik": "0000000003", "city": "Vancouver", "sector": None},
+        {"symbol": "B", "cik": "0000000004", "city": "New York", "sector": None},
+        {"symbol": "C", "cik": None, "city": None, "sector": None},
+    ]
+
+    clean_profiles.harmonize_issuer_attributes(rows)
+
+    assert rows[0]["city"] == "Toronto"
+    assert rows[1]["city"] == "Vancouver"
+    assert rows[1]["sector"] == "X"
+    assert rows[2]["city"] == "New York"
+    assert rows[2]["sector"] is None
+    assert rows[3]["city"] is None
+    assert rows[3]["sector"] is None
+
+
+def test_harmonize_skips_single_listing_issuers():
+    rows = [{"symbol": "BRK-B", "cik": "0000000005", "sector": "Financials", "city": "Omaha"}]
+
+    clean_profiles.harmonize_issuer_attributes(rows)
+
+    assert rows[0] == {"symbol": "BRK-B", "cik": "0000000005", "sector": "Financials", "city": "Omaha"}
+
+
+def test_view_issuer_keys_are_a_subset_of_the_etl_fill_list():
+    """Every issuer key the hierarchy view can still flag must be fillable.
+
+    clean.v_company_hierarchy (V0064) flags a key only when a data column
+    disagrees across a CIK's listings; the cleaner must be able to harmonize
+    that key, or thin listings would drift forever. cik and issuer_id are the
+    exception: they are provenance attached by the security join, not data the
+    cleaner derives. The canonical array is read from the LATEST migration
+    that declares issuer_keys, so editing either side without the other fails
+    loudly.
+    """
+    repo = Path(__file__).resolve().parents[1]
+    declaring = []
+    for path in repo.glob("sql/migrations/V*.sql"):
+        text = path.read_text()
+        match = re.search(
+            r"ARRAY\[\s*([^\]]*?)\]::\w+\[\]\s+AS\s+issuer_keys", text, flags=re.S
+        )
+        if match:
+            declaring.append((path.stem, match.group(1)))
+    assert declaring, "no migration declares issuer_keys"
+    latest_stem, array_literal = sorted(declaring, key=lambda item: item[0])[-1]
+
+    view_keys = set(re.findall(r"'([^']*)'", array_literal))
+    assert view_keys, f"issuer_keys array in {latest_stem} is empty"
+
+    assert view_keys - {"cik", "issuer_id"} <= set(
+        clean_profiles.ISSUER_ATTRIBUTE_COLUMNS
+    ), (
+        f"{latest_stem} flags an issuer key the cleaner cannot harmonize; add it to "
+        "ISSUER_ATTRIBUTE_COLUMNS or remove it from the view"
+    )

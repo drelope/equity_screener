@@ -74,6 +74,32 @@ def test_stale_security_with_children_is_deactivated_and_retained():
     assert "SET active = FALSE" in conn.statements[2][0]
 
 
+def test_contract_terms_is_a_security_child_and_a_reseed_cascade_target():
+    """A reclassified primary keeps its old row but must not keep its terms row."""
+    assert "preferred.contract_terms" in populate_reference_tables.SECURITY_CHILD_TABLES
+    assert "preferred.contract_terms" in populate_reference_tables.RESEED_CASCADE_TABLES
+
+
+def test_prune_drops_terms_for_inactive_or_non_preferred_securities():
+    from scripts import populate_contract_terms
+
+    statements = []
+
+    class _Result:
+        rowcount = 3
+
+    class _Conn:
+        def execute(self, statement, *args):
+            statements.append(str(statement))
+            return _Result()
+
+    pruned = populate_contract_terms._prune_non_preferred_contract_terms(_Conn())
+
+    assert pruned == 3
+    assert "s.active IS NOT TRUE" in statements[0]
+    assert "LOWER(s.security_type) NOT IN ('preferred', 'preferred stock')" in statements[0]
+
+
 def test_limited_reference_run_skips_global_identity_query(monkeypatch):
     conn = _Connection([_Result()])
     monkeypatch.setattr(

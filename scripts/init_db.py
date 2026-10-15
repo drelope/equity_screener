@@ -467,7 +467,10 @@ migrations = [
     COMMENT ON COLUMN raw.dividend_data.payment_date IS
       'Payment date from iXBRL filing narrative (ix:paymentDate); companyfacts fact end is the fallback';
     COMMENT ON COLUMN raw.dividend_data.frequency IS
-      'Dividend frequency (Annual/Quarterly/Monthly). Inferred; not an XBRL us-gaap fact';
+      'Payment-interval cadence (Monthly/Quarterly/Semi-annual/Annual/Irregular), '
+      'inferred from the median gap between consecutive ex-dates across the stored and '
+      'incoming series (OpenBB true ex-dates first, SEC period-end proxies as fallback). '
+      'One label per security. Informational; the feature build does not key on this column';
     COMMENT ON COLUMN raw.dividend_data.currency IS
       'Currency of the dividend amount, derived from the XBRL unit (e.g. USD per share)';
     COMMENT ON COLUMN raw.ticker_profile.coupon_rate IS

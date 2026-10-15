@@ -53,17 +53,18 @@ def test_regime_weight_rows_match_the_specification_summary():
 
     Recovery was listed as 75% measurable against weights that sum to 80%. The
     summary is recomputed from the weights rather than read, so the two cannot
-    disagree -- an unrated leg carrying 15% of the weight also puts a floor
-    under CVS, and both facts are calibration, not rounding.
+    disagree -- the one unrated leg (``legal_rights``) carries 10% of the weight
+    in every non-baseline regime, which also puts a floor under CVS, and both
+    facts are calibration, not rounding.
     """
     expected = {
-        "Baseline": (0.70, 0.30),
-        "Expansion": (0.75, 0.25),
-        "Late Cycle": (0.80, 0.20),
-        "Transition": (0.75, 0.25),
-        "Slowdown": (0.80, 0.20),
-        "Recession": (0.85, 0.15),
-        "Recovery": (0.80, 0.20),
+        "Baseline": (0.75, 0.25),
+        "Expansion": (0.90, 0.10),
+        "Late Cycle": (0.90, 0.10),
+        "Transition": (0.90, 0.10),
+        "Slowdown": (0.90, 0.10),
+        "Recession": (0.90, 0.10),
+        "Recovery": (0.90, 0.10),
     }
     for regime, weights in REGIME_WEIGHTS.items():
         measurable = sum(weights[k] for k in MEASURABLE_REGIME_KEYS)

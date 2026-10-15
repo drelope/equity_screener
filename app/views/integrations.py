@@ -12,11 +12,23 @@ import time
 import pandas as pd
 import streamlit as st
 
-from app import ui
+from app import column_docs, ui
 from src.crispdm.api_client import ENDPOINTS, ApiClient, ApiResult
 from src.crispdm.config import settings
 
 PLACEHOLDER_AGENT = "Your Name your.email@example.com"
+
+# These frames are assembled in the view, not read from a relation, so each label carries a
+# short note in place of a stored column definition.
+DB_TABLES_HELP = {
+    "schema": (None, None, "Warehouse schema."),
+    "tables": (None, None, "Number of tables in the schema."),
+    "approx_rows": (None, None, "The planner's row estimate, not an exact count."),
+}
+SETTINGS_HELP = {
+    "setting": (None, None, "Configuration setting or secret; secrets are reported as set / not set."),
+    "value": (None, None, "Configured value; a secret's value is never shown."),
+}
 
 
 @st.cache_data(ttl=30, show_spinner=False)
@@ -40,10 +52,12 @@ def database_section() -> None:
         return
     elapsed = (time.perf_counter() - started) * 1000
     cells = st.columns(4)
-    cells[0].metric("Database", info.database)
-    cells[1].metric("Size", info["size"])
+    cells[0].metric("Database", info.database, help="The database currently connected.")
+    cells[1].metric("Size", info["size"], help="On-disk size of the current database.")
     cells[2].metric(
-        "Latest migration", f"V{int(info.migration):04d}" if pd.notna(info.migration) else "N/A"
+        "Latest migration",
+        f"V{int(info.migration):04d}" if pd.notna(info.migration) else "N/A",
+        help="Highest applied version in `schema_migrations`.",
     )
     cells[3].metric("Last query", f"{elapsed:.0f} ms", help="Cached results show a lower figure.")
     st.caption(info.server)
@@ -58,7 +72,12 @@ def database_section() -> None:
         GROUP BY 1 ORDER BY 3 DESC
         """
     )
-    st.dataframe(tables, hide_index=True, width="stretch")
+    st.dataframe(
+        tables,
+        hide_index=True,
+        width="stretch",
+        column_config=column_docs.config_map(DB_TABLES_HELP, tables.columns),
+    )
     st.caption("Row counts are the planner's estimates, not exact counts.")
 
 
@@ -132,7 +151,12 @@ def providers_section() -> None:
         ("Operator token", "set" if settings.ops_admin_token else "not set (controls are off)"),
         ("API base URL", settings.api_base_url),
     ]
-    st.dataframe(pd.DataFrame(rows, columns=["setting", "value"]), hide_index=True, width="stretch")
+    st.dataframe(
+        pd.DataFrame(rows, columns=["setting", "value"]),
+        hide_index=True,
+        width="stretch",
+        column_config=column_docs.config_map(SETTINGS_HELP),
+    )
 
 
 def render() -> None:

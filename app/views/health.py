@@ -12,7 +12,7 @@ import pandas as pd
 import plotly.express as px
 import streamlit as st
 
-from app import ui
+from app import column_docs, ui
 from scripts import verify_nightly_run as verify
 from src.crispdm.config import settings
 
@@ -21,6 +21,32 @@ THRESHOLDS = {
     "min_good_share": 0.80,
     "min_coverage": 0.95,
     "max_age_hours": 26.0,
+}
+
+# Only some of these are real columns (audit.nightly_runs, audit.nightly_checks); the rest are
+# computed in the view, so a short note stands in for a stored definition.
+RUNS_HELP = {
+    "run_id": ("audit.nightly_runs", "run_id", None),
+    "run_date": ("audit.nightly_runs", "run_date", None),
+    "trigger": ("audit.nightly_runs", "trigger", None),
+    "status": ("audit.nightly_runs", "status", None),
+    "exit_code": ("audit.nightly_runs", "exit_code", None),
+    "duration": (None, None, "finished_at minus started_at, formatted for display."),
+    "failed_stages": (None, None, "Stages recorded as failed for this run."),
+}
+STAGES_HELP = {
+    "stage": (None, None, "ETL stage name."),
+    "result": (None, None, "Recorded outcome of the stage in this run."),
+}
+COUNTS_HELP = {
+    "table": (None, None, "Warehouse relation counted at the end of the run."),
+    "rows": (None, None, "Row count recorded for the relation."),
+}
+FRESHNESS_HELP = {
+    "source": (None, None, "Data source checked for freshness."),
+    "age_hours": (None, None, "Hours since the source last refreshed."),
+    "sla_hours": (None, None, "Freshness target for the source."),
+    "of_sla": (None, None, "Age as a share of the SLA; 1.0 is at the limit."),
 }
 
 
@@ -68,7 +94,12 @@ def freshness_section(findings: dict) -> None:
     fig.add_vline(x=1.0, line_dash="dash")
     fig.update_layout(showlegend=False, margin={"t": 10})
     st.plotly_chart(fig, width="stretch")
-    st.dataframe(frame.round(2), hide_index=True, width="stretch")
+    st.dataframe(
+        frame.round(2),
+        hide_index=True,
+        width="stretch",
+        column_config=column_docs.config_map(FRESHNESS_HELP, frame.columns),
+    )
 
 
 def runs_section() -> None:
@@ -89,7 +120,12 @@ def runs_section() -> None:
             ", ".join(k for k, v in (s or {}).items() if v == "failed") or "-" for s in runs.stages
         ],
     )[["run_id", "run_date", "trigger", "status", "exit_code", "duration", "failed_stages"]]
-    st.dataframe(shown, hide_index=True, width="stretch")
+    st.dataframe(
+        shown,
+        hide_index=True,
+        width="stretch",
+        column_config=column_docs.config_map(RUNS_HELP, shown.columns),
+    )
 
     pick = st.selectbox("Inspect a run", runs.run_id.tolist(), key="health_run")
     row = runs[runs.run_id == pick].iloc[0]
@@ -99,6 +135,7 @@ def runs_section() -> None:
         pd.DataFrame(sorted((row.stages or {}).items()), columns=["stage", "result"]),
         hide_index=True,
         width="stretch",
+        column_config=column_docs.config_map(STAGES_HELP),
     )
     right.markdown("**Row counts at the end of the run**")
     counts = row.row_counts or {}
@@ -107,6 +144,7 @@ def runs_section() -> None:
             pd.DataFrame(sorted(counts.items()), columns=["table", "rows"]),
             hide_index=True,
             width="stretch",
+            column_config=column_docs.config_map(COUNTS_HELP),
         )
     else:
         right.caption("Not recorded for this run.")

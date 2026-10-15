@@ -33,6 +33,30 @@ FEATURE_COLUMNS = (
     # fail-closed rule cannot tell them apart. Not in model.FEATURES -- it is
     # an input to the regime layer's precondition, not a model predictor.
     "debt",
+    # V0068. Margins, cash-flow quality, balance-sheet and valuation ratios,
+    # all derived point-in-time from the vintaged periodic_financials rows (see
+    # financial_metrics below), never from the current clean.company_profile
+    # snapshot. Materialised for the analyst and the screener; NOT in
+    # model.FEATURES yet -- the same measure-then-promote path debt_to_ebitda
+    # took through V0011/V0012. Each is NULL when its denominator is absent or
+    # non-positive rather than imputed, and the NULL rate is itself a signal a
+    # reader can act on.
+    "gross_margin",
+    "operating_margin",
+    "net_margin",
+    "fcf_margin",
+    "ocf_margin",
+    "cash_conversion",
+    "capex_intensity",
+    "fcf_growth",
+    "net_debt",
+    "net_debt_to_ebitda",
+    "current_ratio",
+    "debt_to_equity",
+    "pe_ratio",
+    "earnings_yield",
+    "fcf_yield",
+    "price_to_book",
     "volatility_252d",
     "momentum_252d",
     "momentum_63d",
@@ -67,10 +91,12 @@ FEATURE_COLUMNS = (
 #:   ``shares_outstanding``, which makes equity value derivable from price, but
 #:   that is a precondition for a different metric and no data source closes
 #:   this gap.
-#: - ``legal_rights_score`` -- still retired. preferred.contract_terms holds 2
-#:   rows against 10,992 securities. Carries 25% of the composite weight, which
-#:   ``scoring.score`` neutralises with ``fillna(0.5)``; the weight itself is a
-#:   policy decision and is untouched.
+#: - ``legal_rights_score`` -- still retired. When written, preferred.contract_terms
+#:   held only 2 rows against 10,992 securities; the stage-5b miner now runs at
+#:   scale (212 rows over 612 active preferreds), but no score is defined over
+#:   those terms yet, so the column stays absent. Carries 25% of the composite
+#:   weight, which ``scoring.score`` neutralises with ``fillna(0.5)``; the weight
+#:   itself is a policy decision and is untouched.
 #: - ``data_quality_score`` -- still retired. audit.data_quality is a two-date
 #:   snapshot (2026-09-21, 2026-09-26), not a per-as_of_date series, so joining
 #:   it to a feature row would either match nothing or leak today's score into
@@ -80,7 +106,7 @@ FEATURE_COLUMNS = (
 #: data genuinely does not support them.
 RETIRED_FEATURES = {
     "liquidation_discount": "preferred-only concept; undefined for 57% common_stock",
-    "legal_rights_score": "preferred.contract_terms has 2 of 10992 securities",
+    "legal_rights_score": "no score defined over preferred.contract_terms (212 rows, 612 preferreds)",
     "data_quality_score": "audit.data_quality is a 2-date snapshot, not a series",
 }
 
@@ -90,14 +116,21 @@ INSERT INTO model.features
     (security_id,as_of_date,current_price,annualized_dividend,dividend_yield,
      dividend_growth,earnings_payout,fcf_payout,dividend_coverage,
      eps_ttm_growth,debt,debt_to_ebitda,interest_coverage,quick_liquidity,
-     refinancing_wall,volatility_252d,
+     refinancing_wall,gross_margin,operating_margin,net_margin,fcf_margin,
+     ocf_margin,cash_conversion,capex_intensity,fcf_growth,net_debt,
+     net_debt_to_ebitda,current_ratio,debt_to_equity,pe_ratio,earnings_yield,
+     fcf_yield,price_to_book,volatility_252d,
      momentum_252d,momentum_63d,target_sustainable_dividend,price_quality,
      price_quality_rule,yield_exclusion_reason,raw_current_price,
      raw_annual_dividend,raw_dividend_yield)
 VALUES (:security_id,:as_of_date,:current_price,:annualized_dividend,
      :dividend_yield,:dividend_growth,:earnings_payout,:fcf_payout,
      :dividend_coverage,:eps_ttm_growth,:debt,:debt_to_ebitda,:interest_coverage,
-     :quick_liquidity,:refinancing_wall,:volatility_252d,:momentum_252d,:momentum_63d,
+     :quick_liquidity,:refinancing_wall,:gross_margin,:operating_margin,
+     :net_margin,:fcf_margin,:ocf_margin,:cash_conversion,:capex_intensity,
+     :fcf_growth,:net_debt,:net_debt_to_ebitda,:current_ratio,:debt_to_equity,
+     :pe_ratio,:earnings_yield,:fcf_yield,:price_to_book,:volatility_252d,
+     :momentum_252d,:momentum_63d,
      :target_sustainable_dividend,:price_quality,
      :price_quality_rule,:yield_exclusion_reason,:raw_current_price,
      :raw_annual_dividend,:raw_dividend_yield)
@@ -115,6 +148,22 @@ ON CONFLICT(security_id,as_of_date) DO UPDATE SET
     debt=EXCLUDED.debt,
     quick_liquidity=EXCLUDED.quick_liquidity,
     refinancing_wall=EXCLUDED.refinancing_wall,
+    gross_margin=EXCLUDED.gross_margin,
+    operating_margin=EXCLUDED.operating_margin,
+    net_margin=EXCLUDED.net_margin,
+    fcf_margin=EXCLUDED.fcf_margin,
+    ocf_margin=EXCLUDED.ocf_margin,
+    cash_conversion=EXCLUDED.cash_conversion,
+    capex_intensity=EXCLUDED.capex_intensity,
+    fcf_growth=EXCLUDED.fcf_growth,
+    net_debt=EXCLUDED.net_debt,
+    net_debt_to_ebitda=EXCLUDED.net_debt_to_ebitda,
+    current_ratio=EXCLUDED.current_ratio,
+    debt_to_equity=EXCLUDED.debt_to_equity,
+    pe_ratio=EXCLUDED.pe_ratio,
+    earnings_yield=EXCLUDED.earnings_yield,
+    fcf_yield=EXCLUDED.fcf_yield,
+    price_to_book=EXCLUDED.price_to_book,
     volatility_252d=EXCLUDED.volatility_252d,
     momentum_252d=EXCLUDED.momentum_252d,
     momentum_63d=EXCLUDED.momentum_63d,
@@ -359,6 +408,119 @@ def leverage_ratios(df):
     return x
 
 
+#: Inputs financial_metrics() consumes. Named once so the "missing column is an
+#: absent value" rule and the SQL that produces them stay visibly paired.
+_FINANCIAL_METRIC_INPUTS = (
+    "current_price",
+    "eps_ttm",
+    "rev_ttm",
+    "oi_ttm",
+    "ni_ttm",
+    "gross_profit_ttm",
+    "ocf_ttm",
+    "fcf_ttm",
+    "capex_ttm",
+    "fcf_ttm_prior",
+    "da_ttm",
+    "debt",
+    "cash",
+    "current_assets",
+    "current_liabilities",
+    "equity",
+    "shares_outstanding",
+)
+
+
+def financial_metrics(df):
+    """Add the V0068 margins, cash-flow, balance-sheet and valuation ratios.
+
+    Every input arrives from the point-in-time feature SQL -- four summed
+    quarters for flows, the latest public FY vintage for balances -- never from
+    the current clean.company_profile snapshot. That distinction is the whole
+    reason this function exists here rather than as a join in the UI: the
+    provider snapshot has today's P/E on it, and folding it into a 2018 row is
+    the look-ahead that retired data_quality_score.
+
+    One rule governs all sixteen columns: a ratio is NULL when its denominator
+    is absent or non-positive, and no denominator is ever coalesced to zero.
+    The failure modes that rule avoids are specific:
+
+    * **A zero/negative revenue** is not a margin of zero, it is no scale at
+      all. ``gross_profit / 0`` is undefined and a negative revenue flips the
+      sign of every margin on the row.
+    * **A loss** has no P/E and no earnings yield. ``price / -2.00`` is
+      negative, and a screener sorting ascending on P/E would rank the deepest
+      loss-making company as the cheapest.
+    * **A negative prior FCF** has no growth rate: ``5 / -3 - 1`` is ``-2.67``,
+      which reads as a collapse rather than the recovery it is, and the sign
+      flip makes a turnaround look like the worst deterioration in the universe.
+    * **Net debt** needs both legs. A missing cash balance treated as zero
+      inflates net debt; a missing debt balance treated as zero would fabricate
+      net cash. Neither is inferable, so both mean NULL.
+    * **Negative equity** has no price-to-book and no debt-to-equity. The
+      accounting identity has broken, and the ratio is not a large number to be
+      ranked, it is not a number.
+
+    Margins are the exception on the *numerator* side: a negative net margin is
+    reported as the filer's actual loss rather than suppressed, because a loss
+    is a real, adverse signal and the model should see it. Only the denominator
+    disqualifies a ratio, which is the same asymmetry leverage_ratios documents.
+
+    Missing columns are treated as absent values rather than raising, so the
+    arithmetic is testable against a frame that carries only the columns a given
+    test cares about -- again matching leverage_ratios.
+    """
+    x = df.copy()
+    for column in _FINANCIAL_METRIC_INPUTS:
+        if column not in x.columns:
+            x[column] = np.nan
+
+    # Margins share one revenue denominator. A non-positive revenue makes every
+    # one of them undefined at once, so they share one guard.
+    revenue = x["rev_ttm"].where(x["rev_ttm"] > 0)
+    x["gross_margin"] = x["gross_profit_ttm"] / revenue
+    x["operating_margin"] = x["oi_ttm"] / revenue
+    x["net_margin"] = x["ni_ttm"] / revenue
+    x["fcf_margin"] = x["fcf_ttm"] / revenue
+    x["ocf_margin"] = x["ocf_ttm"] / revenue
+
+    # Cash conversion: how much of accounting profit is collected in cash.
+    # Positive earnings only -- against a loss the quotient is meaningless, and
+    # its sign is not a quality signal.
+    x["cash_conversion"] = x["ocf_ttm"] / x["ni_ttm"].where(x["ni_ttm"] > 0)
+    # Capex is stored as a positive outflow magnitude (free_cash_flow = ocf -
+    # capex), so intensity is capex over revenue, guarded only on revenue.
+    x["capex_intensity"] = x["capex_ttm"] / revenue
+
+    # FCF growth needs a positive prior base on both sides, the same guard
+    # eps_ttm_growth uses.
+    prior_fcf = x["fcf_ttm_prior"]
+    x["fcf_growth"] = (x["fcf_ttm"] / prior_fcf.where(prior_fcf > 0) - 1).where(prior_fcf > 0)
+
+    # Balance sheet. Net debt requires both legs reported.
+    has_both_legs = x["debt"].notna() & x["cash"].notna()
+    x["net_debt"] = (x["debt"] - x["cash"]).where(has_both_legs)
+    ebitda = x["oi_ttm"] + x["da_ttm"]
+    x["net_debt_to_ebitda"] = x["net_debt"] / ebitda.where(ebitda > 0)
+    x["current_ratio"] = x["current_assets"] / x["current_liabilities"].where(
+        x["current_liabilities"] > 0
+    )
+    x["debt_to_equity"] = x["debt"] / x["equity"].where(x["equity"] > 0)
+
+    # Valuation. P/E and earnings yield are inverses kept as separate columns
+    # because a screener sorts on either and a reader expects both; both need a
+    # positive EPS. Market cap is a price times a point-in-time share count, so
+    # the yields are per-dollar-of-company rather than per share.
+    price = x["current_price"].where(x["current_price"] > 0)
+    positive_eps = x["eps_ttm"].where(x["eps_ttm"] > 0)
+    x["pe_ratio"] = price / positive_eps
+    x["earnings_yield"] = positive_eps / price
+    market_cap = price * x["shares_outstanding"].where(x["shares_outstanding"] > 0)
+    x["fcf_yield"] = x["fcf_ttm"] / market_cap
+    x["price_to_book"] = market_cap / x["equity"].where(x["equity"] > 0)
+    return x
+
+
 def capture_raw_observations(df, price_column="current_price"):
     """Copy the unfiltered per-share inputs into ``raw_*`` audit columns.
 
@@ -559,6 +721,26 @@ def build_features(date_from=None, date_to=None):
       GROUP BY 1, 2
     ),
     d_declared AS (
+      -- SEC fallback when OpenBB has no trailing payments: the latest per-share
+      -- fact, period-end based. Deliberately single and conservative.
+      --
+      -- The per-share series cannot be annualized and this is why: the XBRL
+      -- "fact.end" used as ex_dividend_date does not carry the fact's own
+      -- duration. The same CISK/period mix loads per-quarter amounts (BAC
+      -- 0.26) and cumulative-to-date or full-year totals (T 0.555 per
+      -- half-year, KO, MMM) under the same column, so neither of the obvious
+      -- annualizers is sound. A trailing-365-day sum with MAX-deduped ends
+      -- reaches a 2.37x median and only ~20% within 0.5x-1.5x of the OpenBB
+      -- total at the same as-of date (n=1919), and scaling the latest fact by
+      -- the cadence label (4x for 'Quarterly') doubles KO/MMM/T/VZ exactly --
+      -- a factor-of-two for cumulative filers. The last fact, uncooked, is
+      -- the least-wrong figure: it understates, safe for a yield screen, and
+      -- it never invents a dividend total.
+      --
+      -- The same limitation governs the rn=1/rn=2 growth fallback below, so
+      -- the real fix for both is provider coverage, not a formula: pulling the
+      -- full OpenBB payment history lets d_paid (and the 365-day comparison)
+      -- cover the ~660 securities that currently read from XBRL.
       SELECT DISTINCT ON (p.security_id, p.observation_date)
              p.security_id, p.observation_date, d.amount AS annual_dividend
       FROM p JOIN d
@@ -577,10 +759,11 @@ def build_features(date_from=None, date_to=None):
     -- 2007, so it supplies the prior year where OPENBB cannot.
     --
     -- The two are compared on the same basis within each source: two trailing
-    -- 365-day payment windows for OPENBB, and the two most recent annual
-    -- declarations for XBRL. They are never mixed, so a growth figure is
-    -- always like-for-like. The OPENBB path is preferred because a payment
-    -- series is fresher than an annual declaration.
+    -- 365-day payment windows for OPENBB, and the two most recent XBRL
+    -- declarations for XBRL (an adjacency reading, never a same-duration
+    -- comparison -- see the d_annual note). They are never mixed, so a growth
+    -- figure is always like-for-like. The OPENBB path is preferred because a
+    -- payment series is fresher than an annual declaration.
     -- The first per-payment record held for each security. The prior-year window
     -- below is only *observed* from this date on: before it, a missing payment means
     -- the pull started late (the 2025-01-02 lookback) or the issuer had not begun
@@ -616,6 +799,23 @@ def build_features(date_from=None, date_to=None):
       GROUP BY 1, 2
     ),
     d_annual AS (
+      -- The two most recent XBRL facts. raw.dividend_data.frequency is an
+      -- informational cadence label, not a fact row attribute, so it must not
+      -- filter this build; the build keys only on provider, concept and date.
+      --
+      -- This adjacency comparison is accepted only because it is a documented
+      -- lower-fidelity fallback, not because it is a true year-over-year
+      -- rate. For a quarterly declarer the two newest period-ends are usually
+      -- consecutive quarters, so "current/prior" is a quarter-over-quarter
+      -- reading; for a cumulative-to-date filer (T, KO) it compares two
+      -- running totals. That was validated alongside annual_dividend: summing
+      -- a 365-day window instead (mirroring d_paid/d_prior_paid, MAX-deduped
+      -- per period-end) reaches a 2.4x median against the OpenBB trailing
+      -- comparison because it mixes per-quarter amounts with full-year
+      -- totals -- worse, in the wrong direction, than an explicit quarter
+      -- measurement. The OpenBB branches above are preferred for exactly this
+      -- reason, and extending OpenBB history coverage shrinks how often a
+      -- security lands here.
       SELECT p.security_id, p.observation_date, d.ex_dividend_date, d.amount,
              ROW_NUMBER() OVER (PARTITION BY p.security_id, p.observation_date
                                 ORDER BY d.ex_dividend_date DESC) rn
@@ -625,7 +825,6 @@ def build_features(date_from=None, date_to=None):
       JOIN d
         ON d.security_id = p.security_id
        AND d.provider <> 'OPENBB'
-       AND d.frequency = 'Annual'
        AND d.ex_dividend_date <= p.observation_date
     ),
     ann AS (
@@ -706,7 +905,12 @@ def build_features(date_from=None, date_to=None):
              GREATEST(pf.filed, pf.period_end) AS filed,
              pf.eps, pf.free_cash_flow,
              pf.operating_income, pf.depreciation_amortization, pf.interest_expense,
-             pf.revenue
+             pf.revenue,
+             -- V0068: the P&L, cash-flow and gross-profit lines the new margins
+             -- and cash-conversion ratio need, carried on the same quarterly
+             -- vintage chain as eps and fcf.
+             pf.gross_profit, pf.net_income,
+             pf.operating_cash_flow, pf.capital_expenditures
       FROM fundamentals.periodic_financials pf
       WHERE pf.fiscal_period IN ('Q1', 'Q2', 'Q3', 'Q4')
       ORDER BY pf.security_id, pf.period_end, GREATEST(pf.filed, pf.period_end),
@@ -749,6 +953,22 @@ def build_features(date_from=None, date_to=None):
       UNION ALL
       SELECT security_id, period_end, filed, 'rev', revenue
       FROM q_quarterly WHERE revenue IS NOT NULL
+      -- V0068: each new line travels its own per-metric chain, exactly as the
+      -- leverage inputs above do and for the same reason -- a quarter that
+      -- omits gross profit should not drop a slot from the four-quarter net
+      -- income sum. The sums are consumed by financial_metrics().
+      UNION ALL
+      SELECT security_id, period_end, filed, 'ni', net_income
+      FROM q_quarterly WHERE net_income IS NOT NULL
+      UNION ALL
+      SELECT security_id, period_end, filed, 'gp', gross_profit
+      FROM q_quarterly WHERE gross_profit IS NOT NULL
+      UNION ALL
+      SELECT security_id, period_end, filed, 'ocf', operating_cash_flow
+      FROM q_quarterly WHERE operating_cash_flow IS NOT NULL
+      UNION ALL
+      SELECT security_id, period_end, filed, 'capex', capital_expenditures
+      FROM q_quarterly WHERE capital_expenditures IS NOT NULL
     ),
     q_vintages AS (
       SELECT security_id, period_end, metric, filed, value,
@@ -766,10 +986,15 @@ def build_features(date_from=None, date_to=None):
              sum(value) FILTER (WHERE metric = 'eps' AND rn <= 4) eps_ttm,
              sum(value) FILTER (WHERE metric = 'eps' AND rn > 4 AND rn <= 8) eps_ttm_prior,
              sum(value) FILTER (WHERE metric = 'fcf' AND rn <= 4) fcf_ttm,
+             sum(value) FILTER (WHERE metric = 'fcf' AND rn > 4 AND rn <= 8) fcf_ttm_prior,
              sum(value) FILTER (WHERE metric = 'oi' AND rn <= 4) oi_ttm,
              sum(value) FILTER (WHERE metric = 'da' AND rn <= 4) da_ttm,
              sum(value) FILTER (WHERE metric = 'int' AND rn <= 4) int_ttm,
-             sum(value) FILTER (WHERE metric = 'rev' AND rn <= 4) rev_ttm
+             sum(value) FILTER (WHERE metric = 'rev' AND rn <= 4) rev_ttm,
+             sum(value) FILTER (WHERE metric = 'ni' AND rn <= 4) ni_ttm,
+             sum(value) FILTER (WHERE metric = 'gp' AND rn <= 4) gp_ttm,
+             sum(value) FILTER (WHERE metric = 'ocf' AND rn <= 4) ocf_ttm,
+             sum(value) FILTER (WHERE metric = 'capex' AND rn <= 4) capex_ttm
       FROM (
         SELECT f.security_id, f.observation_date, v.metric, v.value,
                ROW_NUMBER() OVER (PARTITION BY f.security_id, f.observation_date, v.metric
@@ -795,7 +1020,15 @@ def build_features(date_from=None, date_to=None):
              pf.interest_expense, pf.revenue, pf.debt,
              pf.cash, pf.current_liabilities,
              pf.debt_maturing_12m, pf.debt_maturing_year_2,
-             pf.committed_undrawn_facility
+             pf.committed_undrawn_facility,
+             -- V0068: the FY fallback legs for the new metrics, plus the
+             -- balance-sheet levels (equity, current_assets, shares) the ratios
+             -- need. Balances are read as of the latest public FY vintage, never
+             -- summed across quarters; shares travel here because a point-in-time
+             -- share count is a balance, and using today's count would leak.
+             pf.gross_profit, pf.net_income,
+             pf.operating_cash_flow, pf.capital_expenditures,
+             pf.equity, pf.current_assets, pf.shares_outstanding
       FROM fundamentals.periodic_financials pf
       WHERE pf.fiscal_period = 'FY'
     ),
@@ -812,7 +1045,15 @@ def build_features(date_from=None, date_to=None):
              v.current_liabilities AS current_liabilities_fy,
              v.debt_maturing_12m AS debt_maturing_12m_fy,
              v.debt_maturing_year_2 AS debt_maturing_year_2_fy,
-             v.committed_undrawn_facility AS committed_undrawn_fy
+             v.committed_undrawn_facility AS committed_undrawn_fy,
+             -- V0068 FY fallbacks and balance-sheet levels.
+             v.gross_profit AS gross_profit_fy,
+             v.net_income AS ni_fy,
+             v.operating_cash_flow AS ocf_fy,
+             v.capital_expenditures AS capex_fy,
+             v.equity AS equity_fy,
+             v.current_assets AS current_assets_fy,
+             v.shares_outstanding AS shares_outstanding_fy
       FROM (SELECT DISTINCT security_id, observation_date FROM raw.market_data
             WHERE close IS NOT NULL
               AND observation_date >= :date_from AND observation_date < :date_to) f
@@ -856,6 +1097,21 @@ def build_features(date_from=None, date_to=None):
       COALESCE(q.int_ttm, fy.int_fy)  int_ttm,
       COALESCE(q.rev_ttm, fy.rev_fy)  rev_ttm,
       fy.debt_fy debt,
+      -- V0068 inputs to financial_metrics(). Each flow is four summed quarters
+      -- with the FY figure as fallback, exactly like eps_ttm/fcf_ttm above; each
+      -- balance is the latest public FY vintage, never a quarterly sum. These are
+      -- inputs, not features, so they are selected but not in FEATURE_COLUMNS --
+      -- the same treatment oi_ttm/da_ttm/int_ttm already get.
+      COALESCE(q.ni_ttm, fy.ni_fy)         ni_ttm,
+      COALESCE(q.gp_ttm, fy.gross_profit_fy) gross_profit_ttm,
+      COALESCE(q.ocf_ttm, fy.ocf_fy)       ocf_ttm,
+      COALESCE(q.capex_ttm, fy.capex_fy)   capex_ttm,
+      q.fcf_ttm_prior,
+      fy.cash_fy cash,
+      fy.current_liabilities_fy current_liabilities,
+      fy.equity_fy equity,
+      fy.current_assets_fy current_assets,
+      fy.shares_outstanding_fy shares_outstanding,
       -- Quick liquidity: cash and short-term investments over obligations due
       -- within a year. Both legs are current-basis, taken from the FY vintage
       -- path on the same point-in-time discipline as debt -- a balance is read
@@ -970,6 +1226,7 @@ def build_features(date_from=None, date_to=None):
     df["dividend_coverage"] = eps_ttm.where(eps_ttm > 0) / annual.where(annual > 0)
     df = earnings_growth(df)
     df = leverage_ratios(df)
+    df = financial_metrics(df)
     df["target_sustainable_dividend"] = np.nan
     df = df.replace([np.inf, -np.inf], np.nan)
     # Capture first, filter second. raw_* must hold the unfiltered inputs, so

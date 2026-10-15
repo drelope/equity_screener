@@ -349,6 +349,7 @@ SECURITY_CHILD_TABLES = (
     "raw.ticker_profile",
     "raw.dividend_data",
     "raw.sec_documents",
+    "preferred.contract_terms",
     "preferred.security_terms",
     "preferred.dividend_snapshot",
     "fundamentals.periodic_financials",
@@ -368,6 +369,7 @@ SECURITY_CHILD_TABLES = (
 RESEED_CASCADE_TABLES = (
     "raw.ticker_profile",
     "raw.dividend_data",
+    "preferred.contract_terms",
     "preferred.security_terms",
     "preferred.dividend_snapshot",
     "fundamentals.periodic_financials",

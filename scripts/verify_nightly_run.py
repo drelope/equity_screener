@@ -116,6 +116,29 @@ FRESHNESS_SOURCES = {
         "aggregate": "MAX",
         "sla_hours": POC_DAILY_BOUND_HOURS,
     },
+    # preferred.contract_terms, not raw.contract_documents, and MAX, not MIN.
+    #
+    # The miner (scripts.populate_contract_terms) re-mines *every* active
+    # preferred each run and upserts its terms, which sets updated_at = now() --
+    # even when the value is unchanged -- so MAX(updated_at) is the timestamp of
+    # the last successful mine. That is the freshness of the column the view and
+    # the screener actually read.
+    #
+    # raw.contract_documents is deliberately NOT a source: it is a document
+    # *cache*, written with ON CONFLICT DO NOTHING, so its retrieved_at only
+    # moves when a genuinely new filing is fetched. On a healthy nightly -- docs
+    # already cached, no new filing -- it does not move at all, so aging it
+    # would report a breach on a pipeline that worked. The table that the
+    # nightly rewrites is the one whose age means something.
+    #
+    # MIN is wrong here for the companyfacts reason in reverse: a security whose
+    # governing document states no liquidation or call term is never persisted,
+    # so its row is legitimately absent -- an old row is not a stale one.
+    "preferred.contract_terms": {
+        "column": "updated_at",
+        "aggregate": "MAX",
+        "sla_hours": POC_DAILY_BOUND_HOURS,
+    },
     # MIN, not MAX, and deliberately unlike every source above.
     #
     # raw.companyfacts holds one row per CIK and a refresh run rewrites *every*
@@ -236,12 +259,18 @@ def assess(
             _check("security_consistency", "info", "reference security checks not measured")
         )
     else:
-        # Identity duplication is a hard integrity failure. The preferred-term
-        # fields are known reference data debt (the preferred snapshot is
-        # incomplete for SPAC units/rights/warrants classified as 'preferred
-        # stock', so coupon/liquidation/issuer fields are NULL for them), so
-        # they are reported as informational and never block the pipeline.
-        hard_fields = ("active_identity_duplicates",)
+        # Identity duplication is a hard integrity failure, as is a
+        # misclassification the repair pass is meant to have fixed (a preferred
+        # row still carrying a warrant/right/unit code, or a common row carrying
+        # preferred coupon/liquidation terms). The remaining preferred-term
+        # fields are known reference data debt -- the preferred snapshot is
+        # incomplete for the securities whose terms the SEC documents do not
+        # state -- so they are reported as informational and never block.
+        hard_fields = (
+            "active_identity_duplicates",
+            "active_preferred_warrant_like",
+            "active_common_with_preferred_terms",
+        )
         soft_fields = (
             "active_preferred_missing_issuer_id",
             "active_repeated_preferred_titles",
@@ -541,6 +570,20 @@ def _security_consistency_query():
                   AND issuer_name IS NOT NULL
                   AND LOWER(BTRIM(security_name)) = LOWER(BTRIM(issuer_name))
             ) AS active_preferred_issuer_only_titles,
+            -- A preferred row whose symbol carries a decisive warrant/right/unit
+            -- code is a misclassification repair_security_classification should
+            -- have moved; a non-zero count means it regressed. Dash suffixes only:
+            -- a hyphenless ...W/...R is ambiguous (AEHR, BMNR) unless a base
+            -- sibling confirms it, which the repair already applied.
+            COUNT(*) FILTER (
+                WHERE security_type = 'preferred stock'
+                  AND (ticker ~ '-W(S|T)?$' OR ticker ~ '-R$' OR ticker ~ '-U$'
+                       OR ticker ~ '^[A-Z0-9]{1,5}U$')
+            ) AS active_preferred_warrant_like,
+            COUNT(*) FILTER (
+                WHERE security_type = 'common_stock'
+                  AND (coupon_rate IS NOT NULL OR liquidation_preference IS NOT NULL)
+            ) AS active_common_with_preferred_terms,
             (SELECT COUNT(*) FROM active_ticker_reuse)
                 AS active_ticker_reuse_across_ciks
         FROM active_securities

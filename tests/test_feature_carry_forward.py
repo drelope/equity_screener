@@ -120,6 +120,32 @@ class TestDashboardQuery:
     def test_includes_requested_columns(self):
         assert "f.current_price" in _flat(fw.dashboard_features_sql("f.current_price"))
 
+    def test_delegates_the_dividend_and_terms_to_the_shared_view(self):
+        """The dashboard and the Security detail page must resolve terms the same way.
+
+        The dividend precedence and the liquidation source live in
+        preferred.v_security_terms so both consumers read one definition rather than
+        drifting into two different answers.
+        """
+        flat = _flat(fw.dashboard_features_sql("f.current_price"))
+        assert "LEFT JOIN preferred.v_security_terms v ON v.security_id=s.security_id" in flat
+
+    def test_exposes_currency_and_preferred_columns(self):
+        flat = _flat(fw.dashboard_features_sql("f.current_price"))
+        assert "s.currency" in flat
+        assert "v.ex_date AS ex_date" in flat
+        assert "v.dividend_amount AS dividend_amount" in flat
+        assert "v.liquidation_preference AS liquidation_preference" in flat
+        assert "v.first_call_date AS first_call_date" in flat
+
+    def test_never_uses_issuer_level_par_as_liquidation(self):
+        """preferred.issuer_terms mixes per-share, par and issuer-aggregate values and
+        is keyed by CIK, so it must never reach the dashboard as a liquidation
+        preference."""
+        flat = _flat(fw.dashboard_features_sql("f.current_price"))
+        assert "issuer_terms" not in flat
+        assert "issuer_liquidation_or_par_value" not in flat
+
 
 def _live_engine():
     pytest.importorskip("sqlalchemy")
@@ -163,6 +189,16 @@ class TestLiveWindow:
             fw.dashboard_features_sql("f.current_price,f.dividend_yield,f.volatility_252d")
         )
         assert rows, "query returned nothing; the fixture is empty"
+
+    def test_dashboard_sql_does_not_fan_out(self):
+        """The preferred joins must stay one row per security.
+
+        The dashboard query projects ticker rather than security_id, so ticker
+        stands in as the per-security key for the duplicate check.
+        """
+        rows = self._run(f"SELECT ticker FROM ({fw.dashboard_features_sql('f.current_price')}) t")
+        tickers = [r.ticker for r in rows]
+        assert len(tickers) == len(set(tickers)), "dashboard fanned out: duplicate securities"
 
     def test_default_tolerance_widens_the_universe(self):
         strict = self._run(f"SELECT count(*) AS n FROM ({fw.scoring_features_sql()}) t", days=0)[

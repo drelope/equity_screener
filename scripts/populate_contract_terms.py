@@ -45,6 +45,7 @@ from sqlalchemy import text
 
 from src.crispdm.db import engine
 from src.crispdm.doc_clauses import (
+    depositary_ratio,
     extract_liquidation_preference,
     extract_redemption,
     html_to_text,
@@ -384,19 +385,24 @@ def load_stored_documents(conn, security_id):
     ]
 
 
-def extract_from_documents(docs, series_pattern=None):
+def extract_from_documents(docs, series_pattern=None, depositary_ratio=None):
     """Mine clauses across the fetched documents; prefer the certificate.
 
     ``series_pattern`` (from :func:`series_pattern_from_security`) scopes every
     extractor to the passages that mention THIS series, so a combined
     prospectus covering Series A and Series B produces series-accurate terms
     instead of whichever section appears first.
+
+    ``depositary_ratio`` (1/N from the security name) converts an underlying
+    preferred share's per-share amounts to the per-depositary figures the listed
+    security actually trades in; the extractors also prefer a per-depositary
+    equivalent stated in the document when one is present.
     """
     results = []
     for doc in docs:
         text = doc.get("raw_text") or ""
-        liquidation = extract_liquidation_preference(text, series_pattern)
-        redemption = extract_redemption(text, series_pattern)
+        liquidation = extract_liquidation_preference(text, series_pattern, depositary_ratio)
+        redemption = extract_redemption(text, series_pattern, depositary_ratio)
         results.append(
             {
                 "document_id": doc["document_id"],
@@ -577,9 +583,15 @@ def populate_contract_terms(tickers=None, cik=None, limit=None, force=False, dis
                     continue
 
                 terms = extract_from_documents(
-                    docs, series_pattern=series_pattern_from_security(security)
+                    docs,
+                    series_pattern=series_pattern_from_security(security),
+                    depositary_ratio=depositary_ratio(security.get("security_name")),
                 )
                 if terms["liquidation_preference"] is None and terms["call_price"] is None:
+                    # Documents exist but yield nothing: drop any row left by an
+                    # earlier mine so an over-eager extraction cannot linger as a
+                    # stale false positive.
+                    _delete_contract_terms(conn, security["security_id"])
                     if not OFFLINE_ON:
                         print(f"  No liquidation/redemption clause found for {security['ticker']}")
                     processed += 1
@@ -595,8 +607,43 @@ def populate_contract_terms(tickers=None, cik=None, limit=None, force=False, dis
                 if errors <= 10:
                     print(f"  Error {security['ticker']}: {exc}")
 
+        pruned = _prune_non_preferred_contract_terms(conn)
+
+    if pruned:
+        print(f"  Pruned {pruned} contract_terms row(s) for non-preferred securities")
     print(f"Completed: processed={processed}, updated={updated}, errors={errors}")
     return processed, updated, errors
+
+
+def _prune_non_preferred_contract_terms(conn):
+    """Drop rows that no longer belong to a preferred security.
+
+    A security can be reclassified (e.g. a SPAC right stored as preferred then
+    later typed as a derivative), leaving an orphaned terms row that no future
+    mine revisits. A reclassified primary symbol keeps the old row as inactive
+    history instead of deleting it (``_reconcile_instrument_rows``), so an
+    inactive security is pruned too. ``preferred.contract_terms`` should only
+    hold active preferreds.
+    """
+    result = conn.execute(
+        text("""
+        DELETE FROM preferred.contract_terms ct
+        USING reference.securities s
+        WHERE ct.security_id = s.security_id
+          AND (
+              s.active IS NOT TRUE
+              OR LOWER(s.security_type) NOT IN ('preferred', 'preferred stock')
+          )
+        """),
+    )
+    return result.rowcount or 0
+
+
+def _delete_contract_terms(conn, security_id):
+    conn.execute(
+        text("DELETE FROM preferred.contract_terms WHERE security_id = :sid"),
+        {"sid": security_id},
+    )
 
 
 def _persist_contract_terms(conn, security_id, terms):

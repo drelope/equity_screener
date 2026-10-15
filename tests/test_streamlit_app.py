@@ -7,6 +7,7 @@ name ``pytest-ui`` and remove everything that name created.
 
 from pathlib import Path
 
+import pandas as pd
 import pytest
 
 pytest.importorskip("streamlit.testing.v1")
@@ -95,11 +96,62 @@ def test_the_screener_shows_the_universe_and_its_filters_narrow_it(without_token
     assert shown and int(shown[0].split()[1].replace(",", "")) < total
 
 
+def test_the_screener_defaults_to_preferred_stock(without_token):
+    at = page("screener").run()
+    assert not at.exception
+    widget = next(m for m in at.multiselect if m.label == "Security type")
+    assert widget.value == ["preferred stock"]
+
+
 def test_a_screener_filter_that_matches_nothing_says_so(without_token):
     at = page("screener").run()
     at.text_input[0].set_value("ZZZZZZZZ-NO-SUCH-TICKER").run()
     assert not at.exception
     assert any("No securities match" in w.value for w in at.warning)
+
+
+def test_the_screener_headlines_include_margin_and_fcf_yield(without_token):
+    at = page("screener").run()
+    assert not at.exception
+    labels = [m.label for m in at.metric]
+    assert len(labels) == 6, labels
+    assert any("net margin" in label for label in labels), labels
+    assert any("FCF yield" in label for label in labels), labels
+
+
+def test_the_screener_can_add_a_financial_metric_column(without_token):
+    at = page("screener").run()
+    assert not at.exception
+    frame = at.get("dataframe")[0].value
+    assert {"net_margin", "fcf_yield"} <= set(frame.columns), "default metric columns"
+
+    widget = next(m for m in at.multiselect if m.label == "Financial metric columns")
+    widget.set_value(["Gross margin", "Price/book"]).run()
+
+    assert not at.exception, [e.value for e in at.exception]
+    frame = at.get("dataframe")[0].value
+    assert {"gross_margin", "price_to_book"} <= set(frame.columns)
+    assert "net_margin" not in frame.columns, "the unselected metric must drop out"
+
+
+def test_a_screener_financial_filter_narrows_the_universe(without_token):
+    at = page("screener").run()
+    types = next(m for m in at.multiselect if m.label == "Security type")
+    at = types.set_value(types.options).run()
+    assert not at.exception
+
+    total = int(
+        next(c.value for c in at.caption if c.value.startswith("Showing "))
+        .split()[1]
+        .replace(",", "")
+    )
+    assert total > 0
+
+    at = next(n for n in at.number_input if n.label == "Minimum gross margin").set_value(0.0).run()
+
+    assert not at.exception, [e.value for e in at.exception]
+    shown = next(c.value for c in at.caption if c.value.startswith("Showing "))
+    assert int(shown.split()[1].replace(",", "")) < total, shown
 
 
 def test_the_security_page_opens_the_ticker_chosen_on_the_screener(without_token):
@@ -119,6 +171,246 @@ def test_the_security_page_opens_the_ticker_chosen_on_the_screener(without_token
     assert not at.exception, [e.value for e in at.exception]
     assert at.selectbox[0].value == ticker
     assert any(ticker in m.value for m in at.markdown)
+
+
+def test_the_security_header_shows_overview_and_ex_date_toggle(without_token):
+    with engine.connect() as conn:
+        ticker = conn.execute(
+            text(
+                "SELECT s.ticker FROM reference.securities s "
+                "JOIN clean.company_profile cp ON cp.reference_security_id = s.security_id "
+                "WHERE s.active AND EXISTS (SELECT 1 FROM raw.dividend_data d "
+                "  WHERE d.security_id = s.security_id AND d.ex_dividend_date IS NOT NULL) "
+                "ORDER BY s.ticker LIMIT 1"
+            )
+        ).scalar()
+    at = AppTest.from_function(page_script, args=("security",), default_timeout=TIMEOUT)
+    at.session_state["selected_ticker"] = ticker
+
+    at.run()
+
+    assert not at.exception, [e.value for e in at.exception]
+    assert any("Company overview" in s.value for s in at.subheader)
+    assert any("Announced cash dividend" in m.value for m in at.markdown)
+
+    at.checkbox(key="detail_show_ex").check().run()
+    assert not at.exception, [e.value for e in at.exception]
+
+
+def test_the_security_page_shows_related_listings_for_a_multi_listing_issuer(without_token):
+    with engine.connect() as conn:
+        ticker = conn.execute(
+            text(
+                "SELECT s.ticker FROM reference.securities s "
+                "JOIN clean.company_profile cp ON cp.reference_security_id = s.security_id "
+                "WHERE s.active AND s.cik IS NOT NULL AND s.cik IN ( "
+                "  SELECT cik FROM clean.company_profile "
+                "  WHERE cik IS NOT NULL GROUP BY cik HAVING count(*) > 1) "
+                "ORDER BY s.ticker LIMIT 1"
+            )
+        ).scalar()
+    assert ticker, "expected at least one multi-listing issuer"
+    at = AppTest.from_function(page_script, args=("security",), default_timeout=TIMEOUT)
+    at.session_state["selected_ticker"] = ticker
+
+    at.run()
+
+    assert not at.exception, [e.value for e in at.exception]
+    assert any("Issuer & related listings" in s.value for s in at.subheader)
+    assert any("Primary listing" in m.value for m in at.markdown)
+    assert len(at.button) >= 1, "a multi-listing issuer must offer sibling navigation"
+    labels = {b.label for b in at.button}
+    assert ticker not in labels, "the current listing is not a navigation button"
+
+
+def test_related_listings_yield_is_a_fraction_of_price_not_percent_points(without_token):
+    # A child whose provider-native dividend_yield is in percent points (e.g. 13.68)
+    # must be recomputed as rate/price and rendered as 13.68%, never 1368%.
+    with engine.connect() as conn:
+        row = (
+            conn.execute(
+                text(
+                    "SELECT h.primary_symbol AS ticker, "
+                    "       j->>'symbol' AS symbol, "
+                    "       (j->>'dividend_rate')::numeric AS dividend_rate, "
+                    "       (j->>'current_price')::numeric AS current_price "
+                    "FROM clean.v_company_hierarchy h "
+                    "CROSS JOIN LATERAL jsonb_array_elements(h.children) AS j "
+                    "WHERE (j->>'dividend_rate')::numeric > 0 "
+                    "  AND (j->>'current_price')::numeric > 0 "
+                    "  AND (j->>'dividend_yield')::numeric > 1 "
+                    "  AND h.primary_symbol IN (SELECT ticker FROM reference.securities "
+                    "                           WHERE active) "
+                    "ORDER BY h.primary_symbol, j->>'symbol' LIMIT 1"
+                )
+            )
+            .mappings()
+            .first()
+        )
+    assert row, "expected a listing whose provider yield is in percent points"
+
+    at = _open_the_security_page(row["ticker"])
+
+    assert not at.exception, [e.value for e in at.exception]
+    frame = next(
+        (
+            proto.value
+            for proto in at.get("dataframe")
+            if isinstance(proto.value, pd.DataFrame)
+            and {"Yield", "Ex-date"} <= set(proto.value.columns)
+        ),
+        None,
+    )
+    assert frame is not None, "expected the related-listings table"
+
+    cell = frame.loc[frame["Symbol"] == row["symbol"], "Yield"].iloc[0]
+    rendered = float(str(cell).strip("%"))
+    expected = float(row["dividend_rate"] / row["current_price"] * 100)
+    assert rendered <= 100, f"yield rendered as {cell!r} — percent points leaked through"
+    assert rendered == pytest.approx(expected, abs=0.01), (cell, expected)
+
+
+def test_the_related_listings_stack_a_corporate_action_under_the_ex_date(without_token):
+    with engine.connect() as conn:
+        row = (
+            conn.execute(
+                text(
+                    "SELECT h.primary_symbol AS ticker, "
+                    "       COALESCE(j->'corporate_actions'->0->>'header', "
+                    "                j->'corporate_actions'->0->>'event_type') AS action_label "
+                    "FROM clean.v_company_hierarchy h "
+                    "CROSS JOIN LATERAL jsonb_array_elements(h.children) AS j "
+                    "WHERE (j->>'corporate_action_count')::int >= 1 "
+                    "  AND h.primary_symbol IN (SELECT ticker FROM reference.securities "
+                    "                           WHERE active) "
+                    "ORDER BY h.primary_symbol, j->>'symbol' LIMIT 1"
+                )
+            )
+            .mappings()
+            .first()
+        )
+    assert row, "expected a listing with a stored corporate action"
+
+    at = _open_the_security_page(row["ticker"])
+
+    assert not at.exception, [e.value for e in at.exception]
+    frame = next(
+        (
+            proto.value
+            for proto in at.get("dataframe")
+            if isinstance(proto.value, pd.DataFrame) and "Ex-date" in proto.value.columns
+        ),
+        None,
+    )
+    assert frame is not None, "expected the related-listings table"
+    assert any("\n" in cell and row["action_label"] in cell for cell in frame["Ex-date"]), list(
+        frame["Ex-date"]
+    )
+
+
+# --- the dividends tab -----------------------------------------------------------
+
+
+def _dividend_tables(at: AppTest):
+    return [
+        proto.value
+        for proto in at.get("dataframe")
+        if isinstance(proto.value, pd.DataFrame) and "ex_dividend_date" in proto.value.columns
+    ]
+
+
+def _column_values(table, name: str):
+    return list(table[name].dropna())
+
+
+def _both_provider_ticker():
+    with engine.connect() as conn:
+        return conn.execute(
+            text(
+                "SELECT s.ticker FROM reference.securities s "
+                "WHERE s.active AND s.security_id IN ("
+                "  SELECT security_id FROM raw.dividend_data WHERE provider = 'OPENBB' "
+                "  INTERSECT SELECT security_id FROM raw.dividend_data WHERE provider = 'SEC_XBRL') "
+                "ORDER BY s.ticker LIMIT 1"
+            )
+        ).scalar()
+
+
+def _open_the_security_page(ticker: str) -> AppTest:
+    at = AppTest.from_function(page_script, args=("security",), default_timeout=TIMEOUT)
+    at.session_state["selected_ticker"] = ticker
+    return at.run()
+
+
+def test_the_dividend_tab_lists_events_and_named_cadence(without_token):
+    ticker = _both_provider_ticker()
+    assert ticker, "expected a security carrying both dividend providers"
+    at = _open_the_security_page(ticker)
+
+    assert not at.exception, [e.value for e in at.exception]
+    assert any("Dividends" in s.value for s in at.subheader)
+    assert any("SEC XBRL dates are fiscal period-ends" in c.value for c in at.caption)
+    tables = _dividend_tables(at)
+    assert tables, "expected the dividend dataframe"
+    assert "frequency" in tables[0], "the table must show its cadence"
+    assert "payment_date" not in tables[0], "payment_date is NULL/dup for most rows"
+    labels = set(_column_values(tables[0], "frequency"))
+    assert labels <= {"Monthly", "Quarterly", "Semi-annual", "Annual", "Irregular"}
+    assert labels, "the cadence labels must actually be populated"
+
+
+def test_the_dividend_tab_filters_by_provider(without_token):
+    ticker = _both_provider_ticker()
+    assert ticker, "expected a security carrying both dividend providers"
+    at = _open_the_security_page(ticker)
+    at.selectbox(key="detail_dividend_provider").set_value("OPENBB").run()
+
+    assert not at.exception, [e.value for e in at.exception]
+    assert not any("SEC XBRL dates are fiscal period-ends" in c.value for c in at.caption)
+    tables = _dividend_tables(at)
+    assert tables, "expected the dividend dataframe"
+    assert set(_column_values(tables[0], "provider")) == {"OPENBB"}
+
+
+def test_the_dividend_tab_says_when_nothing_is_stored(without_token):
+    with engine.connect() as conn:
+        ticker = conn.execute(
+            text(
+                "SELECT s.ticker FROM reference.securities s "
+                "WHERE s.active AND NOT EXISTS (SELECT 1 FROM raw.dividend_data d "
+                "  WHERE d.security_id = s.security_id) "
+                "ORDER BY s.ticker LIMIT 1"
+            )
+        ).scalar()
+    if not ticker:
+        pytest.skip("no active security without stored dividend events")
+    at = _open_the_security_page(ticker)
+
+    assert not at.exception, [e.value for e in at.exception]
+    assert any("No dividend events stored" in c.value for c in at.caption)
+
+
+# --- the financials tab ----------------------------------------------------------
+
+
+def test_the_security_financials_tab_renders_the_point_in_time_ratios(without_token):
+    with engine.connect() as conn:
+        ticker = conn.execute(
+            text(
+                "SELECT s.ticker FROM reference.securities s "
+                "JOIN model.features f USING (security_id) "
+                "WHERE s.active AND f.net_margin IS NOT NULL AND f.gross_margin IS NOT NULL "
+                "ORDER BY s.ticker LIMIT 1"
+            )
+        ).scalar()
+    assert ticker, "expected a security carrying the V0068 ratios"
+    at = _open_the_security_page(ticker)
+
+    assert not at.exception, [e.value for e in at.exception]
+    assert any("Financial metrics" in s.value for s in at.subheader)
+    assert any("Point-in-time ratios as of" in c.value for c in at.caption)
+    labels = {m.label for m in at.metric}
+    assert {"Gross margin", "Net margin", "FCF yield", "Price/book", "Net debt"} <= labels, labels
 
 
 # --- the data explorer -----------------------------------------------------------

@@ -10,18 +10,25 @@ WEIGHTS = {
     "valuation_score": 0.05,
 }
 
-#: Components computed from data. The other two are constants: legal rights are
-#: imputed to a flat 0.5 for every security and valuation is a hardcoded 0.5,
-#: together 0.30 of the weight. They are excluded from the coverage denominator
-#: because coverage is meant to answer "how much of this score is evidence", and
-#: a placeholder is never evidence. Counting them would put a floor of 0.30
-#: under every single row, so a security with nothing measured would still
-#: report 30% covered and the published number would say almost nothing.
+#: Components computed from data. One component is still a constant:
+#: ``legal_rights_score`` is imputed to a flat 0.5 for every security and is
+#: 0.25 of the weight. It is excluded from the coverage denominator because
+#: coverage is meant to answer "how much of this score is evidence", and an
+#: imputation is never evidence. Counting it would put a floor of 0.25 under
+#: every row, so a security with nothing measured would still report 25%
+#: covered and the published number would say almost nothing.
+#:
+#: ``valuation_score`` used to be the second constant -- a hardcoded 0.5,
+#: excluded for the same reason. It is now a real cross-sectional percentile
+#: blend of the point-in-time valuation ratios (see :data:`VALUATION_PARTS`), so
+#: it counts as evidence; a row with no valuation input simply loses that 0.05
+#: rather than carrying a free placeholder reading.
 MEASURABLE = (
     "dividend_income_score",
     "sustainability_score",
     "appreciation_score",
     "risk_score",
+    "valuation_score",
 )
 
 #: Share of the total composite weight that must be present before a composite
@@ -30,13 +37,13 @@ MEASURABLE = (
 #: about the peers who happened to report, not about the company.
 #:
 #: Measured against the *total* weight, not the measurable subtotal, and the
-#: distinction is worth 2,295 securities. The two constant components are
-#: always present, so this bar sits at 0.50 - 0.30 = 0.20 of the 0.70
-#: measurable weight, i.e. 28.6% coverage. Requiring 0.50 of the *measurable*
-#: weight instead would be a stricter rule wearing the same label: it scores
-#: 2,868 of 5,443 rather than 5,163, which is a different policy from the one
-#: approved. The stated threshold therefore stays on the total, where the round
-#: number means what a reader expects it to mean.
+#: distinction is a policy choice rather than a rounding one. The one constant
+#: component (``legal_rights_score``, 0.25) is always present, so this bar sits
+#: at 0.50 - 0.25 = 0.25 of the 0.75 measurable weight, i.e. 33.3% coverage.
+#: Requiring 0.50 of the *measurable* weight instead would be a stricter rule
+#: wearing the same label and would drop names that clear the total-weight bar.
+#: The stated threshold therefore stays on the total, where the round number
+#: means what a reader expects it to mean.
 MIN_PRESENT_WEIGHT = 0.50
 
 #: Section 7.2 regime weight matrix, keyed by the stored column names rather
@@ -66,6 +73,18 @@ APPRECIATION_PARTS = {
     "momentum_252d": (0.6, True),
     "momentum_63d": (0.4, True),
 }
+#: Valuation: cheaper is better, blended over whichever ratios a filer reports.
+#: Earnings yield and FCF yield are higher-is-better cash-flow signals;
+#: price-to-book is lower-is-better. P/E is deliberately not a fourth part --
+#: it is the reciprocal of earnings yield, so including both would weight the
+#: same earnings fact twice. Each ratio is NULL upstream when its denominator is
+#: absent or non-positive, so the blend renormalises over what exists and
+#: returns NaN when none of the three is present.
+VALUATION_PARTS = {
+    "earnings_yield": (0.4, True),
+    "fcf_yield": (0.4, True),
+    "price_to_book": (0.2, False),
+}
 
 
 def pct(s, high=True):
@@ -91,6 +110,12 @@ def _blend(x, parts):
     value = pd.Series(0.0, index=x.index, dtype=float)
     present = pd.Series(0.0, index=x.index, dtype=float)
     for column, (weight, high) in parts.items():
+        # A column the caller did not carry at all is treated the same as one
+        # that is present-but-null: the part simply does not count. This lets a
+        # frame built before a part existed keep scoring on the parts it has,
+        # rather than raising on the new column name.
+        if column not in x:
+            continue
         series = pct(x[column], high)
         available = series.notna()
         value = value + series.where(available, 0.0) * weight
@@ -131,8 +156,8 @@ def score(df, regime=None):
     which is the floor the policy was set with. ``score_coverage`` reports the
     share of the *measurable* weight, so it answers "how much of this is a
     measurement" and bottoms out at 0 for a security with nothing measured --
-    which a total-weight figure cannot do, because the two constant components
-    guarantee every row a reading of at least 0.30.
+    which a total-weight figure cannot do, because the one constant component
+    (``legal_rights_score``) guarantees every row a reading of at least 0.25.
 
     That trade is deliberate. The previous plain sum left 4,127 of 5,443
     securities unscored -- 75.8% -- so the score was unusable for the portfolio,
@@ -165,7 +190,7 @@ def score(df, regime=None):
     x["legal_rights_score"] = x.legal_rights_score.fillna(0.5)
     x["appreciation_score"] = _blend(x, APPRECIATION_PARTS)[0]
     x["risk_score"] = pct(x.volatility_252d, False)
-    x["valuation_score"] = 0.5
+    x["valuation_score"] = _blend(x, VALUATION_PARTS)[0]
 
     # Baseline weights decide who gets published and how much of it was
     # measured; regime weights decide only how the published number is composed.
