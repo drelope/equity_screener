@@ -221,6 +221,8 @@ Environment read by Compose (put it in `.env` or export it):
 | --- | --- | --- |
 | `POSTGRES_PASSWORD` | `dividend` | Database password. The default is for a loopback-only laptop; change it before the container is reachable by anyone else. If you change it, update `DATABASE_URL` for host-side scripts to match. |
 | `API_KEY` | none (required) | Shared key for the API's `X-API-Key` header. Export it in the shell for every Compose command, not just `api` (steps above). |
+| `API_RATE_LIMIT_PER_MINUTE` | `120` | Per-client request ceiling on authenticated routes, counted before the key is checked so a wrong-key flood is throttled too. `0` disables it. |
+| `API_ENABLE_DOCS` | off | Expose the interactive docs (`/docs`, `/redoc`, `/openapi.json`). Off by default; set to `1` on a trusted network only. |
 | `OPS_ADMIN_TOKEN` | empty | Operator sign-in for the web app (12+ characters). Empty = read-only. |
 | `SEC_USER_AGENT` | placeholder | Real contact string for SEC requests; the worker's SEC tasks fail while it is the placeholder. |
 

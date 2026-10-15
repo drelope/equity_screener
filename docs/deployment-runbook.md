@@ -11,7 +11,7 @@ until the local MVP is reproducible and walk-forward evaluation is passing.
 | PostgreSQL 17.11 | Docker Compose service `postgres` (image pinned by digest) | `docker-compose.yml` |
 | Migrations | Compose service `migrate` / `python -m scripts.migrate` | `sql/migrations/` + `scripts/init_db.py` |
 | ETL | `python -m scripts.run_full_etl` (stages 0-9; stage 10 labels opt-in) | `.env` |
-| API | Compose service `api` / `uvicorn api.main:app --port 8000` | `API_KEY` (required by every Compose command), `DATABASE_URL` |
+| API | Compose service `api` / `uvicorn api.main:app --port 8000` | `API_KEY` (required by every Compose command), `DATABASE_URL`; optional `API_RATE_LIMIT_PER_MINUTE` (default 120), `API_ENABLE_DOCS` (docs off unless set) |
 | UI | Compose service `streamlit` (`127.0.0.1:8501`) | `DATABASE_URL`, `OPS_ADMIN_TOKEN` |
 | Task worker | Compose service `worker` (`scripts.ops_worker`) | `DATABASE_URL`, `SEC_USER_AGENT` |
 
