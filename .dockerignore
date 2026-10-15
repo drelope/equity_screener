@@ -1,0 +1,45 @@
+# Keep secrets, history and local state out of the build context. Without this,
+# `COPY . .` bakes .env, the .git history and the multi-GB .venv into image
+# layers, and every build re-uploads them to the daemon.
+
+# Local environment and secrets
+.env
+.env.*
+*.pem
+*.key
+
+# Version control, CI and tooling config
+.git
+.gitignore
+.github
+.vscode
+.idea
+.DS_Store
+
+# Virtual environments and Python caches
+.venv
+.venv-win
+venv
+env
+__pycache__
+*.py[cod]
+*.egg-info
+.eggs
+build
+dist
+.pytest_cache
+.ruff_cache
+.mypy_cache
+.ipynb_checkpoints
+
+# Generated data, reports and session scratch
+data
+sec_dividend_analysis.csv
+*.out
+_*.py
+_*.sh
+
+# Documentation and tests are not needed at runtime
+docs
+tests
+*.md

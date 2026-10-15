@@ -122,12 +122,26 @@ already match this host's checkout, so no editing is needed here:
 
 ```bash
 sudo cp ops/systemd/dividend-etl.service ops/systemd/dividend-etl.timer /etc/systemd/system/
+sudo chmod 644 /etc/systemd/system/dividend-etl.{service,timer}
 sudo systemctl daemon-reload
 sudo systemctl enable --now dividend-etl.timer
 systemctl list-timers dividend-etl.timer    # confirm a NEXT time
 ```
 
-Three things in the unit that are not obvious, each of which silently breaks a
+The unit runs as `User=drelo` (not root) and applies systemd hardening: a
+read-only system hierarchy except the checkout, a private `/tmp`, dropped
+namespaces, and a restricted address-family set. Two consequences:
+
+- **Protect the `.env`.** It holds `POSTGRES_PASSWORD`, `API_KEY` and
+  `SEC_USER_AGENT`, and the unit reads it as the service user. Tighten it once:
+  `chmod 600 .env`. The file is gitignored; never commit it.
+- **If the checkout is on a WSL2 `/mnt/<drive>` 9p mount, file modes are
+  cosmetic.** That mount reports every file as `0777` and ignores `chmod`, so
+  `sudo systemctl` may warn the unit files are executable/world-writable. The
+  warning is harmless for a local checkout, but a real host should carry the
+  `chmod 644` above and a metadata-enabled mount (or a native filesystem).
+
+Four things in the unit that are not obvious, each of which silently breaks a
 nightly rather than failing loudly:
 
 - **`TimeoutStartSec=12h` is mandatory.** The systemd default for a `oneshot`
@@ -144,6 +158,12 @@ nightly rather than failing loudly:
 - **Journal output.** `StandardOutput=journal` with
   `SyslogIdentifier=dividend-etl`; read it with
   `journalctl -u dividend-etl -f`.
+- **Runs unprivileged.** `User=drelo` plus `NoNewPrivileges`, `ProtectSystem=strict`
+  and the rest of the hardening block. The only writable path is the checkout
+  (`ReadWritePaths`), which the ETL needs for `data/` archives. If the checkout
+  moves, update `WorkingDirectory`, `EnvironmentFile`, `ExecStartPre`,
+  `ExecStart` and `ReadWritePaths` together — a stale `ReadWritePaths` turns a
+  data/ write into a failed nightly.
 
 **WSL2 caveat (this host).** The timer only fires while the WSL2 VM is running.
 A laptop that is asleep or shut down at 03:00 does not run the ETL then;

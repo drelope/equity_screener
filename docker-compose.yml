@@ -81,6 +81,15 @@ services:
       postgres:
         condition: service_healthy
     restart: "no"
+    # The migration job only reads sql/ and writes to Postgres, so it needs no
+    # Linux capabilities and no writable filesystem beyond a scratch /tmp.
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    read_only: true
+    tmpfs:
+      - /tmp
 
   streamlit:
     build: .
@@ -120,6 +129,10 @@ services:
     restart: unless-stopped
     security_opt:
       - no-new-privileges:true
+    # A Streamlit process needs no capabilities; drop the lot. It keeps a
+    # writable rootfs because it caches config under the app user's home.
+    cap_drop:
+      - ALL
 
   api:
     build: .
@@ -149,6 +162,13 @@ services:
     restart: unless-stopped
     security_opt:
       - no-new-privileges:true
+    # The API only serves reads from Postgres and the SEC: no caps, and a
+    # read-only rootfs with a scratch /tmp is enough.
+    cap_drop:
+      - ALL
+    read_only: true
+    tmpfs:
+      - /tmp
 
   # Runs the tasks queued from the web app's Operations page, and queues its schedules.
   # It executes only the commands in src/crispdm/ops/catalog.py. The nightly ETL is NOT
@@ -170,6 +190,10 @@ services:
     restart: unless-stopped
     security_opt:
       - no-new-privileges:true
+    # Tasks it runs are plain Python; drop all capabilities. The rootfs stays
+    # writable because some catalog tasks archive files under data/.
+    cap_drop:
+      - ALL
 
 volumes:
   pgdata:

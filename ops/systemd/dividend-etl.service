@@ -1,8 +1,12 @@
 # systemd unit + timer for the nightly dividend-equity ETL.
 # Install:
+#   chmod 600 .env                      # holds the DB password and API key
 #   sudo cp ops/systemd/dividend-etl.{service,timer} /etc/systemd/system/
+#   sudo chmod 644 /etc/systemd/system/dividend-etl.{service,timer}
 #   sudo systemctl daemon-reload
 #   sudo systemctl enable --now dividend-etl.timer
+# The unit runs as User=drelo (the checkout owner). Change User=/Group= to an
+# existing unprivileged account on a different host.
 # See docs/deployment-runbook.md section 5 (Option B).
 #
 # WSL2 caveat: this timer only fires while the WSL2 VM is running. A host that is
@@ -21,6 +25,35 @@ After=docker.service
 Type=oneshot
 WorkingDirectory=/mnt/d/dividend_equity_crispdm_implementation/dividend_equity_crispdm
 EnvironmentFile=/mnt/d/dividend_equity_crispdm_implementation/dividend_equity_crispdm/.env
+
+# Run as the unprivileged owner of the checkout, not root. The pipeline only
+# talks to Postgres over TCP and the SEC over HTTPS; it shells out to nothing
+# that needs privilege.
+User=drelo
+Group=drelo
+
+# Hardening. ProtectSystem=strict makes the whole hierarchy read-only, so the
+# one path the ETL writes (data/ archives and Python bytecode caches under the
+# checkout) is re-opened explicitly. PrivateTmp gives it a private /tmp.
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/mnt/d/dividend_equity_crispdm_implementation/dividend_equity_crispdm
+ProtectHome=read-only
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+ProtectProc=invisible
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+RestrictNamespaces=true
+LockPersonality=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+RemoveIPC=true
+SystemCallArchitectures=native
 
 # The default for a oneshot is DefaultTimeoutStartSec=90s, which would kill the
 # ETL mid-run and record a failed nightly 90 seconds in. Budget a full cycle of
