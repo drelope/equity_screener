@@ -456,4 +456,89 @@ deploy-time gate run deliberately:
 python -m scripts.check_schema_drift     # exit 0 = matches the repository, 1 = does not
 ```
 
+---
+
+# Raw/Clean Schema Audit
+
+**Audit date:** 2026-10-15
+**Scope:** Every `raw.*` and `clean.*` relation — catalog shape, comment coverage, FK
+index coverage, data-quality probes, and the query patterns that read them. Method:
+read-only catalog and data queries against the live `dividend` database, plus
+`scripts/check_schema_drift.py` (a build of the repository diffed against live).
+
+## Verified state
+
+| Check | Result |
+|---|---|
+| Repository vs live | `check_schema_drift` exits 0; one accepted difference (`reference.securities_security_id_key`, unchanged from the 2026-10-02 audit) |
+| Table comments | All 16 raw/clean base tables carry a comment; only the two clean views (`v_company_hierarchy`, `v_corporate_action_reference_exceptions`) have uncommented columns, which is why they carry a view-level comment instead |
+| Column comments | Zero uncommented columns on every raw/clean base table |
+| FK index coverage | All 11 raw/clean foreign keys have a leading child index; nulls-and-partial cases covered as before |
+| Data quality | `raw.market_data`: 0 negative prices, 0 `high < low`, 0 negative volume, 0 future dates, 304/9.70M NULL closes. `raw.dividend_data`: 0 negative amounts, 0 future ex-dates. `clean.ticker_profile`: 0 coupon rates outside 0–100, 0 negative liquidation preferences. `clean.company_profile`: 0 negative market cap/employees/price |
+| Orphans | 0 `security_id` orphans (unchanged) |
+
+## Finding: `raw.market_data` had no index for date-only predicates — fixed (V0071)
+
+`raw.market_data` is keyed `(security_id, observation_date, provider)`. Every access
+that keys on the date rather than on a security therefore cannot be served by the
+primary-key btree: PostgreSQL 17 has no skip scan (that arrives in 18), so the planner
+reads the whole 836 MB PK index or sequential-scans the 3 GB table. Two such accesses
+run on every feature build:
+
+- `src/crispdm/features.py` runs `SELECT DISTINCT security_id, observation_date FROM
+  raw.market_data WHERE close IS NOT NULL AND observation_date >= <start> AND
+  observation_date < <end>` once per window, four times per build.
+- `scripts/build_features.py` sizes each window with
+  `SELECT min(observation_date), max(observation_date) FROM raw.market_data WHERE
+  close IS NOT NULL`.
+
+V0071 adds a **partial, covering** index so the DISTINCT probe is answered by an
+index-only scan and min/max become index endpoints:
+
+```
+CREATE INDEX idx_market_data_observation_date
+  ON raw.market_data (observation_date) INCLUDE (security_id)
+  WHERE close IS NOT NULL;
+```
+
+| probe (live) | before | after |
+|---|---|---|
+| 1-day DISTINCT | 423 ms, 109,275 buffers | 3.5 ms, 43 buffers |
+| 365-day DISTINCT | 2301 ms, 287,370 buffers (seq) | 1618 ms, 9,676 buffers |
+| min/max window sizer | full scan | 0.2 ms (index endpoints) |
+
+Index size 375 MB against a 3.08 GB table. Plain `CREATE INDEX` (not `CONCURRENTLY`),
+because `migrate.py` runs one transaction per file; it is a single `ACCESS EXCLUSIVE`
+pass over the largest raw table. Declared in `sql/schema.sql` as well, so a fresh build
+and the migration converge.
+
+## Finding: `schema.sql` declared an index twice — fixed
+
+`ix_contract_documents_security` was declared twice in `schema.sql` (once under its
+explanatory comment and again just below). The second was a leftover and a no-op
+(`IF NOT EXISTS`), but two identical declarations invite a future edit to only one of
+them. Removed.
+
+## Reviewed and deliberately left in place
+
+- **No CHECK constraints on `raw.market_data` / `raw.dividend_data` for OHLC shape or
+  non-negative amounts.** The data would pass every candidate today, but on a raw
+  landing table a single bad provider row would abort the whole issuer's ingestion —
+  the same reasoning that kept a future-date CHECK off `reference.securities` in the
+  2026-10-02 audit.
+- **`clean.company_officer` carries two foreign keys into `clean.company_profile`**
+  (`(symbol, parent_name)` and `profile_id`), both `ON DELETE CASCADE`. Redundant but
+  harmless; the surrogate `profile_id` path is the one the loader actually rebuilds on.
+- **`clean.company_profile.cik`** has a supporting index but no format CHECK or FK;
+  `clean.corporate_action.security_id` intentionally has no FK (nullable, and the row
+  must survive reference churn).
+- **CIK width is inconsistent across raw tables** (`VARCHAR(10)` on `company_ticker`
+  and `clean.ticker_profile`, `VARCHAR(20)` elsewhere). Cosmetic; all values are short.
+- **`raw.ticker_profile` column order is jumbled** (`field_sources` last, `sector`
+  mid-table) from successive `ALTER TABLE ... ADD COLUMN`. Cosmetic; not worth a
+  table rewrite.
+
+Gate for this audit: `migrate --check` and `check_schema_drift` clean, ruff clean,
+1066 tests pass, working tree clean.
+
 
