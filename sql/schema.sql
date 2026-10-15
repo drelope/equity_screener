@@ -823,9 +823,6 @@ COMMENT ON TABLE raw.contract_documents IS
   'Certificate of Designation exhibits (Form 8-K Exhibit 3.1/3.2) and '
   'prospectus supplements (424B5/424B3, S-1/S-3)';
 
-CREATE INDEX IF NOT EXISTS ix_contract_documents_security
-ON raw.contract_documents(security_id);
-
 CREATE INDEX IF NOT EXISTS ix_contract_documents_cik
 ON raw.contract_documents(cik);
 
