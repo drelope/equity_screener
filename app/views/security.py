@@ -84,12 +84,23 @@ IDENTITY_FACTS = [
 ]
 # (label, relation, column). Liquidation and call terms come from the shared
 # preferred.v_security_terms view, the same source the Screener reads, so the two
-# pages cannot disagree; coupon and currency stay on reference.securities.
+# pages cannot disagree; coupon and currency stay on reference.securities. The rate
+# structure (coupon_type, fixed_period_end, floating_spread) is consensus-parsed from
+# the security title and lives only on clean.ticker_profile, so it is read from there
+# and shows N/A when the title carried no structure. The conversion date is the end of
+# a fixed-rate period; US fixed-to-floating preferred titles rarely state one, so it is
+# presented as N/A rather than derived. Yield is the latest engineered feature, and the
+# ex-date is the selected dividend event from the same terms view.
 TERMS_FACTS = [
     ("Coupon rate", "reference.securities", "coupon_rate"),
+    ("Rate type", "clean.ticker_profile", "coupon_type"),
+    ("Rate converts on", "clean.ticker_profile", "fixed_period_end"),
+    ("Floating spread", "clean.ticker_profile", "floating_spread"),
     ("Liquidation preference", "preferred.v_security_terms", "liquidation_preference"),
     ("First call date", "preferred.v_security_terms", "first_call_date"),
     ("Call price", "preferred.v_security_terms", "call_price"),
+    ("Yield", "model.features", "dividend_yield"),
+    ("Last ex-date", "preferred.v_security_terms", "ex_date"),
     ("Currency", "reference.securities", "currency"),
 ]
 # The related-listings table is rebuilt from the hierarchy's children JSON, so its labels
@@ -185,6 +196,20 @@ def _liquidation_text(value) -> str:
     return f"${value:,.2f}"
 
 
+def _spread_text(value) -> str:
+    """Floating-rate spread, a percentage added to the reference rate."""
+    if value is None or pd.isna(value):
+        return "N/A"
+    return f"{value:,.3f}%"
+
+
+def _yield_text(value) -> str:
+    """Annualized dividend divided by price, as a decimal fraction."""
+    if value is None or pd.isna(value):
+        return "N/A"
+    return f"{float(value):.2%}"
+
+
 def _present(value) -> bool:
     """True when a value is worth rendering (not None, NaN, NaT or blank text)."""
     if value is None or pd.isna(value):
@@ -224,15 +249,40 @@ def _link(url) -> str:
 
 
 def profile(ticker: str) -> pd.DataFrame:
+    """One active security's identity, terms and latest yield for the header.
+
+    The rate structure comes from ``clean.ticker_profile`` and the yield from the
+    latest ``model.features`` row, both through a ``LATERAL ... LIMIT 1``: neither
+    relation is guaranteed unique on ``security_id`` (the clean profile is keyed on
+    (cik, ticker), features are one row per as-of date), so a plain join would fan
+    the header out to several rows.
+    """
     return ui.query(
         """
         SELECT CAST(s.security_id AS text) AS security_id, s.ticker, s.security_name,
                s.security_type, s.cik, s.exchange_id, s.currency, s.coupon_rate,
                v.liquidation_preference, v.liquidation_source,
                v.first_call_date, v.call_price, v.call_source,
+               v.ex_date,
+               tp.coupon_type, tp.fixed_period_end, tp.floating_spread,
+               f.dividend_yield,
                s.dividend_last_paid, s.sec_data_status
         FROM reference.securities s
         LEFT JOIN preferred.v_security_terms v ON v.security_id = s.security_id
+        LEFT JOIN LATERAL (
+            SELECT p.coupon_type, p.fixed_period_end, p.floating_spread
+            FROM clean.ticker_profile p
+            WHERE p.security_id = s.security_id
+            ORDER BY p.cleaned_at DESC NULLS LAST
+            LIMIT 1
+        ) tp ON TRUE
+        LEFT JOIN LATERAL (
+            SELECT x.dividend_yield
+            FROM model.features x
+            WHERE x.security_id = s.security_id
+            ORDER BY x.as_of_date DESC
+            LIMIT 1
+        ) f ON TRUE
         WHERE s.ticker = :t AND s.active ORDER BY s.security_id LIMIT 1
         """,
         {"t": ticker},
@@ -788,6 +838,8 @@ def render() -> None:
         "coupon_rate": _coupon_text,
         "liquidation_preference": _liquidation_text,
         "call_price": _liquidation_text,
+        "floating_spread": _spread_text,
+        "dividend_yield": _yield_text,
     }
     _fact_cells(
         [

@@ -541,7 +541,7 @@ and the worker use the same database as everything else.
 | Page | What it does |
 | --- | --- |
 | Screener | The scored universe as a sortable table with filters (yield, type, score, ticker, minimum gross margin, maximum price/book), selectable point-in-time financial-metric columns (margins, cash-flow quality, balance sheet, valuation), headline medians for net margin and FCF yield, charts and CSV download. Selecting a row carries the ticker to Security detail. |
-| Security detail | Price history, dividend events by provider, score history, latest features, a Financials tab grouping the point-in-time ratios (margins, cash-flow quality, balance sheet, valuation) and the reported fundamentals for one ticker. |
+| Security detail | A header of identity and preferred terms (coupon rate, rate type `fixed`/`floating`/`fixed-to-floating`, fixed-period end, floating spread, liquidation preference, first call date, call price, yield and last ex-date), price history, dividend events by provider, score history, latest features, a Financials tab grouping the point-in-time ratios (margins, cash-flow quality, balance sheet, valuation) and the reported fundamentals for one ticker. |
 | Data explorer | Browse an allowlisted set of tables with column choice, up to 8 filters, sorting, a row limit, CSV download and a quick chart. |
 | Health | The same checks as `scripts.verify_nightly_run` (freshness against each source's SLA, data quality, dividend coverage, security consistency, walk-forward gate) plus recent nightly runs and their stages. |
 | Operations | Queue a task, follow its live log, cancel it, run it again, and create, pause or delete schedules (once, every N minutes, daily in a chosen time zone). |

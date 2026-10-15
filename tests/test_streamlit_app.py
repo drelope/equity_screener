@@ -197,6 +197,40 @@ def test_the_security_header_shows_overview_and_ex_date_toggle(without_token):
     assert not at.exception, [e.value for e in at.exception]
 
 
+def test_the_security_detail_shows_rate_structure_yield_and_ex_date(without_token):
+    # A preferred with a parsed rate structure and a yield exercises every new term
+    # fact at once; the values themselves are asserted, not just the labels.
+    with engine.connect() as conn:
+        row = (
+            conn.execute(
+                text(
+                    "SELECT s.ticker, p.coupon_type "
+                    "FROM reference.securities s "
+                    "JOIN clean.ticker_profile p ON p.security_id = s.security_id "
+                    "JOIN LATERAL (SELECT dividend_yield FROM model.features x "
+                    "             WHERE x.security_id = s.security_id "
+                    "             ORDER BY as_of_date DESC LIMIT 1) f ON TRUE "
+                    "WHERE s.active AND s.security_type = 'preferred stock' "
+                    "  AND p.coupon_type IS NOT NULL AND f.dividend_yield IS NOT NULL "
+                    "ORDER BY s.ticker LIMIT 1"
+                )
+            )
+            .mappings()
+            .first()
+        )
+    assert row, "expected an active preferred with a parsed rate type and a yield"
+
+    at = _open_the_security_page(row["ticker"])
+
+    assert not at.exception, [e.value for e in at.exception]
+    markdown = [m.value for m in at.markdown]
+    assert any("**Rate type**" in m and row["coupon_type"] in m for m in markdown), markdown
+    assert any("**Rate converts on**" in m for m in markdown), markdown
+    assert any("**Floating spread**" in m for m in markdown), markdown
+    assert any("**Yield**" in m for m in markdown), markdown
+    assert any("**Last ex-date**" in m for m in markdown), markdown
+
+
 def test_the_security_page_shows_related_listings_for_a_multi_listing_issuer(without_token):
     with engine.connect() as conn:
         ticker = conn.execute(
