@@ -516,3 +516,65 @@ def test_liquidation_preference_ignores_nominal_par_value():
         )
         == 25.0
     )
+
+
+def test_parse_date_accepts_numeric_and_month_name_dates():
+    assert parse_date("2028-07-30") == date(2028, 7, 30)
+    assert parse_date("7/30/2028") == date(2028, 7, 30)
+    assert parse_date("October 30, 2028") == date(2028, 10, 30)
+    assert parse_date("Oct 30, 2028") == date(2028, 10, 30)
+    assert parse_date("October 30 2028") == date(2028, 10, 30)
+
+
+def test_parse_fixed_period_end_reads_the_conversion_date_when_the_title_carries_one():
+    from scripts.populate_dividend_data import parse_fixed_period_end
+
+    assert parse_fixed_period_end(
+        "6.00% Fixed-to-Floating Rate Non-Cumulative Perpetual Preferred Stock "
+        "with a fixed rate period through 7/30/2028"
+    ) == date(2028, 7, 30)
+    assert parse_fixed_period_end("Fixed Rate Notes until 2028-07-30") == date(2028, 7, 30)
+    assert parse_fixed_period_end("Fixed-to-Floating Rate Notes due October 30, 2028") == date(
+        2028, 10, 30
+    )
+
+
+def test_parse_fixed_period_end_is_none_without_an_explicit_date():
+    from scripts.populate_dividend_data import parse_fixed_period_end
+
+    # The real corpus titles name the structure but carry no date, so the field
+    # must stay NULL rather than derive one.
+    assert (
+        parse_fixed_period_end(
+            "8.625% Fixed-to-Floating Series C Cumulative Redeemable Preferred Stock"
+        )
+        is None
+    )
+    assert (
+        parse_fixed_period_end("Series A Floating-Rate Non-Cumulative Perpetual Preferred Stock")
+        is None
+    )
+    # A month-and-year token has no day, so it is not a stored date.
+    assert parse_fixed_period_end("Fixed Rate Notes due Apr 2028") is None
+
+
+def test_parse_floating_spread_reads_the_reference_rate_margin():
+    from scripts.populate_dividend_data import parse_floating_spread
+
+    assert parse_floating_spread("... Term SOFR + 5.592% ...") == 5.592
+    assert parse_floating_spread("plus 4.15% per annum") == 4.15
+    assert parse_floating_spread("a spread of 3.00% over the benchmark") == 3.0
+    assert parse_floating_spread("LIBOR + 2.375%") == 2.375
+
+
+def test_parse_floating_spread_ignores_structure_without_a_margin():
+    from scripts.populate_dividend_data import parse_floating_spread
+
+    # "Fixed-to-Floating" and a hyphen in "Non-Cumulative" are not a spread.
+    assert (
+        parse_floating_spread(
+            "Fixed-to-Floating Rate Non-Cumulative Perpetual Preferred Stock, Series A"
+        )
+        is None
+    )
+    assert parse_floating_spread("6.625% Fixed-to-Floating Rate Non-Cumulative Series I") is None

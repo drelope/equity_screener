@@ -120,7 +120,16 @@ def parse_date(value):
             return None
         if "T" in value:
             value = value.split("T", 1)[0]
-        for fmt in ("%Y-%m-%d", "%Y/%m/%d", "%m/%d/%Y", "%m/%d/%y"):
+        for fmt in (
+            "%Y-%m-%d",
+            "%Y/%m/%d",
+            "%m/%d/%Y",
+            "%m/%d/%y",
+            "%B %d, %Y",
+            "%B %d %Y",
+            "%b %d, %Y",
+            "%b %d %Y",
+        ):
             try:
                 return datetime.strptime(value, fmt).date()
             except ValueError:
@@ -642,13 +651,30 @@ FIXED_TO_FLOATING_RE = re.compile(r"fixed[- ]to[- ]floating|\bfixed/floating\b",
 COUPON_FLOATING_RE = re.compile(
     r"\bfloating\b|\bfloat(?:ing)? rate\b|\bvariable\b|\badjustable\b", re.IGNORECASE
 )
+#: A spread over a reference rate: ``SOFR + 5.375%``, ``plus 4.15%``,
+#: ``spread of 3.00%``. The ``+`` sign must sit against the number, so a hyphen
+#: in ``Non-Cumulative`` or a series label cannot be mistaken for a spread.
 FLOATING_SPREAD_RE = re.compile(
-    r"(?:\+|plus)\s*([\d,]+(?:\.\d+)?)\s*%",
+    r"(?:\+|plus|over|above|sofr|libor|spread(?:\s+of)?)\s*([\d,]+(?:\.\d+)?)\s*%",
     re.IGNORECASE,
 )
+#: A date token inside a title: numeric (``2028-07-30``, ``7/30/2028``) or a
+#: full month-name date (``October 30, 2028``). A month-and-year-only token
+#: (``Apr 2028``) is deliberately excluded: it carries no day, and inventing one
+#: would store a fabricated date.
+_DATE_PATTERN = (
+    r"(?:\d{1,2}[/-]\d{1,2}[/-]\d{2,4}"
+    r"|\d{4}-\d{1,2}-\d{1,2}"
+    r"|(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\.?\s+\d{1,2},?\s+\d{4})"
+)
+#: The end of a fixed-rate period, phrased ``initial/fixed ... ending|expires|
+#: through|until|due <date>``. US fixed-to-floating titles rarely carry this, so
+#: the field is usually NULL; the pattern exists for the titles that do.
 FIXED_PERIOD_END_RE = re.compile(
-    r"(?:initial|fixed)[^\n]*?(?:period\s+)?(?:ending|expir(?:ies|ing)|through|until)\s+"
-    r"((?:\d{1,2}[/-]\d{1,2}[/-]\d{2,4})|(?:\d{4}-\d{1,2}-\d{1,2}))",
+    r"(?:initial|fixed)[^\n]*?(?:period\s+)?"
+    r"(?:ending|expir(?:ies|ing)|through|until|due|redeemable(?:\s+on\s+or\s+after)?|"
+    r"callable(?:\s+on\s+or\s+after)?)\s+"
+    rf"({_DATE_PATTERN})",
     re.IGNORECASE,
 )
 TAX_EXEMPT_RE = re.compile(r"tax[- ]exempt|tax[- ]advantaged|qualified municipal", re.IGNORECASE)

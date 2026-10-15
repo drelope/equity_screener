@@ -428,8 +428,8 @@ preferred-stock screen:
 - **Security Type**, e.g. `Series C Preferred Stock (8.625% Fixed-to-Floating)`
 - **Coupon Type**, one of `fixed`, `floating`, `fixed-to-floating`
 - **Coupon Rate**, e.g. `8.625` (% per annum, first percentage in the name)
-- **Fixed Period End**, e.g. `2028-07-30` (parsed from the security name)
-- **Floating Spread**, e.g. `5.592` (`...Term SOFR + 5.592%`)
+- **Fixed Period End**, e.g. `2028-07-30` (parsed from the security name; US titles that say *fixed-to-floating* almost never include the date, so this is usually `NULL`)
+- **Floating Spread**, e.g. `5.592` (`...Term SOFR + 5.592%`; likewise usually `NULL`, since titles name the structure but not the margin)
 - **Tax Status**, one of `qualified`, `non-qualified`, `tax-exempt`
 - **Call Date**, e.g. `7/30/2024 (post-call)` (parsed from the security name)
 - **Liquidation Preference / Par**, e.g. `$25` (parsed from the security name)
