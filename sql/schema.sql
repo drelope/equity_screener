@@ -164,6 +164,15 @@ CREATE TABLE IF NOT EXISTS raw.market_data (
   PRIMARY KEY(security_id, observation_date, provider)
 );
 
+-- Date-window scans (the feature build's DISTINCT and min/max probes) filter on
+-- observation_date alone, which the (security_id, observation_date, provider)
+-- primary key cannot serve on PostgreSQL 17 (no skip scan). This partial,
+-- covering index answers them with an index-only scan. Mirrors V0071.
+CREATE INDEX IF NOT EXISTS idx_market_data_observation_date
+  ON raw.market_data (observation_date)
+  INCLUDE (security_id)
+  WHERE close IS NOT NULL;
+
 CREATE TABLE IF NOT EXISTS raw.ticker_profile (
   security_id UUID PRIMARY KEY REFERENCES reference.securities(security_id),
   ticker VARCHAR(32) NOT NULL,
