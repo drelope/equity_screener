@@ -455,7 +455,19 @@ belongs to. The companyfacts API omits dimensional (per-series) facts, and
 name parse is per security and therefore more trustworthy in exactly the
 multi-series case, and less trustworthy when the cover-page title is unusual —
 which is why SEC terms are still worth keeping as a fallback rather than
-dropping them.
+dropping them. When the CIK has exactly one active preferred the fact *is*
+unambiguous, and `scripts.repair_ticker_profile_sec_terms` allocates it to that
+lone series (filling a blank, never overwriting a name parse).
+
+Some preferred terms are simply absent from the sources we hold, so a blank is
+the correct value rather than a gap to force-fill. Measured over the active
+preferred universe: the security titles name the rate *structure*
+(`fixed`, `floating`, `fixed-to-floating`) but never a conversion date or a
+spread (0 of 513 carry one), and contract mining of the stored EDGAR documents
+recovers liquidation/call terms for a security only when its filing actually
+contains the clause ("`populate_contract_terms --discover`" reports the planned
+sources without fetching). Separately, preferreds with no `raw.market_data`
+price row cannot produce a feature or a yield at all.
 
 Stage 0 resolves both sources in one pass and only falls back to the SEC value
 when the name parse produced nothing
