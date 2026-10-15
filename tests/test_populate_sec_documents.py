@@ -144,3 +144,6 @@ def test_populate_concept_groups_upserts_every_row_from_the_paged_loader():
     assert (
         "CommonStockDividendsPerShareDeclared" in conn.params[insert_indexes[0]]["concept_groups"]
     )
+    upsert_sql = conn.statements[insert_indexes[0]]
+    assert "raw.sec_documents.content_hash IS DISTINCT FROM EXCLUDED.content_hash" in upsert_sql
+    assert "ELSE raw.sec_documents.concept_groups END" in upsert_sql

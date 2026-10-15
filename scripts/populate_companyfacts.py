@@ -307,7 +307,9 @@ def upsert_submissions(conn, cik, title, submissions):
                 :content_hash, 'SEC_SUBMISSIONS', :retrieved_at)
         ON CONFLICT (cik) DO UPDATE SET
             company_name = EXCLUDED.company_name,
-            raw_payload = EXCLUDED.raw_payload,
+            raw_payload = CASE
+                WHEN raw.sec_submissions.content_hash IS DISTINCT FROM EXCLUDED.content_hash
+                THEN EXCLUDED.raw_payload ELSE raw.sec_submissions.raw_payload END,
             content_hash = EXCLUDED.content_hash,
             provider = EXCLUDED.provider,
             retrieved_at = EXCLUDED.retrieved_at
@@ -333,8 +335,12 @@ def upsert_companyfacts(conn, cik, companyfacts):
                 CAST(:raw_payload AS jsonb), :content_hash, 'SEC_XBRL', :retrieved_at)
         ON CONFLICT (cik) DO UPDATE SET
             company_name = EXCLUDED.company_name,
-            concept_groups = EXCLUDED.concept_groups,
-            raw_payload = EXCLUDED.raw_payload,
+            concept_groups = CASE
+                WHEN raw.companyfacts.content_hash IS DISTINCT FROM EXCLUDED.content_hash
+                THEN EXCLUDED.concept_groups ELSE raw.companyfacts.concept_groups END,
+            raw_payload = CASE
+                WHEN raw.companyfacts.content_hash IS DISTINCT FROM EXCLUDED.content_hash
+                THEN EXCLUDED.raw_payload ELSE raw.companyfacts.raw_payload END,
             content_hash = EXCLUDED.content_hash,
             provider = EXCLUDED.provider,
             retrieved_at = EXCLUDED.retrieved_at
@@ -376,9 +382,15 @@ def upsert_company_taxonomy(conn, cik, company_name, taxonomy_payload):
                 :content_hash, 'SEC_XBRL', :retrieved_at)
         ON CONFLICT (cik) DO UPDATE SET
             company_name = EXCLUDED.company_name,
-            taxonomies = EXCLUDED.taxonomies,
-            concept_groups = EXCLUDED.concept_groups,
-            raw_payload = EXCLUDED.raw_payload,
+            taxonomies = CASE
+                WHEN raw.company_taxonomy.content_hash IS DISTINCT FROM EXCLUDED.content_hash
+                THEN EXCLUDED.taxonomies ELSE raw.company_taxonomy.taxonomies END,
+            concept_groups = CASE
+                WHEN raw.company_taxonomy.content_hash IS DISTINCT FROM EXCLUDED.content_hash
+                THEN EXCLUDED.concept_groups ELSE raw.company_taxonomy.concept_groups END,
+            raw_payload = CASE
+                WHEN raw.company_taxonomy.content_hash IS DISTINCT FROM EXCLUDED.content_hash
+                THEN EXCLUDED.raw_payload ELSE raw.company_taxonomy.raw_payload END,
             content_hash = EXCLUDED.content_hash,
             provider = EXCLUDED.provider,
             retrieved_at = EXCLUDED.retrieved_at
@@ -405,8 +417,11 @@ def stored_facts_retrieved_at(conn):
     ``retrieved_at`` records the last time the payload was *fetched*, not the
     first time this CIK was seen. The upsert advances it on every re-fetch,
     whether or not the content changed (``ON CONFLICT (cik) DO UPDATE SET ...
-    retrieved_at = now()``), which is what makes it usable as a refresh clock --
-    and what ``audit``'s freshness check reads.
+    retrieved_at = EXCLUDED.retrieved_at``), which is what makes it usable as a
+    refresh clock -- and what ``audit``'s freshness check reads. The
+    ``raw_payload``/``concept_groups`` columns, though, are rewritten only when
+    ``content_hash`` actually changes, so a re-fetch of an unchanged payload
+    advances the clock without churning the multi-megabyte JSON in TOAST.
     """
     return {
         row[0]: row[1]

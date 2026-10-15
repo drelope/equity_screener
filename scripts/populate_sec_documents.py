@@ -178,7 +178,9 @@ def populate_concept_groups(tickers=None, dividend_only=True):
                             :content_hash, now())
                     ON CONFLICT (security_id) WHERE security_id IS NOT NULL DO UPDATE SET
                         cik = EXCLUDED.cik,
-                        concept_groups = EXCLUDED.concept_groups,
+                        concept_groups = CASE
+                            WHEN raw.sec_documents.content_hash IS DISTINCT FROM EXCLUDED.content_hash
+                            THEN EXCLUDED.concept_groups ELSE raw.sec_documents.concept_groups END,
                         content_hash = EXCLUDED.content_hash,
                         retrieved_at = now()
                 """),

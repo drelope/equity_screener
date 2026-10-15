@@ -7,6 +7,9 @@ from scripts.populate_companyfacts import (
     PREFERRED_TAXONOMY_CONCEPTS,
     _ingest_taxonomy_cik,
     resolve_taxonomy_concepts,
+    upsert_company_taxonomy,
+    upsert_companyfacts,
+    upsert_submissions,
 )
 from src.crispdm.sec_client import SECDataUnavailableError, get_companyfacts
 
@@ -123,3 +126,45 @@ def test_ingest_taxonomy_cik_does_not_store_partial_payload_after_error():
     assert stats["failed_ciks"] == 1
     assert stats["stored_taxonomy"] == 0
     assert conn.executed == []
+
+
+def _companyfacts_payload(tag):
+    return {
+        "company": "Test Co",
+        "full_facts": {"facts": {"x": tag}},
+        "concept_groups": {"preferred_stock": [tag]},
+    }
+
+
+def test_upsert_companyfacts_guards_payload_rewrite_on_unchanged_hash():
+    conn = _QueueConn()
+
+    upsert_companyfacts(conn, "0000000001", _companyfacts_payload("A"))
+
+    sql, _ = conn.executed[0]
+    assert sql.strip().startswith("INSERT INTO raw.companyfacts")
+    assert "raw.companyfacts.content_hash IS DISTINCT FROM EXCLUDED.content_hash" in sql
+    assert "ELSE raw.companyfacts.raw_payload END" in sql
+    assert "ELSE raw.companyfacts.concept_groups END" in sql
+
+
+def test_upsert_submissions_guards_payload_rewrite_on_unchanged_hash():
+    conn = _QueueConn()
+
+    upsert_submissions(conn, "0000000001", "Test Co", {"name": "Test Co"})
+
+    sql, _ = conn.executed[0]
+    assert sql.strip().startswith("INSERT INTO raw.sec_submissions")
+    assert "raw.sec_submissions.content_hash IS DISTINCT FROM EXCLUDED.content_hash" in sql
+    assert "ELSE raw.sec_submissions.raw_payload END" in sql
+
+
+def test_upsert_company_taxonomy_guards_payload_rewrite_on_unchanged_hash():
+    conn = _QueueConn()
+
+    upsert_company_taxonomy(conn, "0000000001", "Test Co", {"us-gaap": {}})
+
+    sql, _ = conn.executed[0]
+    assert sql.strip().startswith("INSERT INTO raw.company_taxonomy")
+    assert "raw.company_taxonomy.content_hash IS DISTINCT FROM EXCLUDED.content_hash" in sql
+    assert "ELSE raw.company_taxonomy.raw_payload END" in sql
