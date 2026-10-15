@@ -541,4 +541,59 @@ them. Removed.
 Gate for this audit: `migrate --check` and `check_schema_drift` clean, ruff clean,
 1066 tests pass, working tree clean.
 
+---
+
+# Market/Reference Data Storage Efficiency Audit (2026-10-15)
+
+Follow-up pass on the size and write-cost of the raw market-data and reference-data
+structures.
+
+## Finding: nightly re-fetch rewrote unchanged JSONB payloads — fixed
+
+`raw.companyfacts`, `raw.sec_submissions`, `raw.company_taxonomy` and
+`raw.sec_documents` advance `retrieved_at` on every re-fetch (it is the freshness
+clock the audit reads) but also unconditionally rewrote the full JSONB payload,
+even when `content_hash` proved it had not changed. For `raw.companyfacts` that
+copied a ~1.8 MB payload into fresh TOAST chunks on every run, leaving the previous
+copy dead: a **4.5 GB TOAST relation for 2.2 GB of live payloads**.
+
+Fixed by guarding the payload columns with `CASE WHEN <table>.content_hash IS
+DISTINCT FROM EXCLUDED.content_hash THEN EXCLUDED.<col> ELSE <table>.<col> END`, so
+`retrieved_at` still advances but the stored payload (and its TOAST chunks) is
+reused when identical. Verified on a scratch table: repeated identical upserts grow
+the TOAST relation 0.2 MB → 1.7 MB unguarded and hold flat at 0.2 MB guarded.
+
+`raw.company_classification` is left unguarded on purpose: its `content_hash` covers
+only `dividend_facts`, so a guard keyed on it would skip legitimate changes to the
+other columns.
+
+Commit: `perf(raw): avoid rewriting unchanged JSONB payloads on upsert`.
+
+## Reclaimed existing bloat
+
+`VACUUM (FULL, ANALYZE) raw.companyfacts` reclaimed **2.24 GB** (4.59 GB → 2.36 GB,
+−49%) in 15 s; the TOAST relation now equals the live payload size. Database total:
+**14 GB → 12 GB**.
+
+## Reviewed and deliberately left in place
+
+- **`raw.market_data.adjusted_close` is 100% NULL** on all 9.7M rows — the only
+  provider is `OPENBB`, which never supplies it. A dead column, but NULLs occupy
+  only the null bitmap, so dropping it frees no meaningful space while risking a
+  break if another provider starts populating it. Recorded, not changed.
+- **`raw.market_data` price columns are unbounded `NUMERIC`** (split-adjusted values
+  carry up to 20 decimal places). `NUMERIC` stores by actual digits, so a typmod
+  would not shrink storage; `double precision`/`real` would, at the cost of exact
+  decimal semantics on a raw landing table. Left as `NUMERIC`.
+- **`model.features.idx_features_price_quality`** (221 MB, 3 scans) and
+  `idx_features_as_of` (351 MB, 1129 scans). Not dropped: too little uptime to call
+  either unused with confidence, and dropping the wrong one costs a table-sized
+  reindex.
+- **`reference.securities.securities_security_id_key`** (2.3 MB, 0 scans) is the
+  redundant UNIQUE already tracked in `check_schema_drift.ACCEPTED_DIFFERENCES`;
+  `raw.market_data`'s foreign key is built against it, so dropping it means
+  re-validating that FK across 9.7M rows. Left.
+
+Gate for this pass: ruff clean, 1073 tests pass, working tree clean.
+
 
