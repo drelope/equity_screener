@@ -26,6 +26,11 @@ This job, which is DB-only and idempotent:
    to the re-parsed value where the current value equals the issuer-level SEC
    value (or is a sub-$1 nominal par) and is not backed by the name parse or (for liquidation preference)
    by ``preferred.contract_terms``.
+3. Allocates the issuer-level SEC XBRL ``coupon_rate`` to a preferred whose CIK
+   has exactly one active preferred. The fact is filed once per CIK with no
+   series dimension, so it is ambiguous when an issuer has several preferreds
+   but unambiguous when it has only one; the name parse still wins, so this
+   only fills a blank.
 
 Usage:
     python -m scripts.repair_ticker_profile_sec_terms --dry-run
@@ -49,9 +54,25 @@ from src.crispdm.ticker_profile_store import NAME_PARSE_COLUMNS, upsert_ticker_p
 LOADER = "repair_ticker_profile_sec_terms"
 SEC_TERM_COLUMNS = ("coupon_rate", "liquidation_preference")
 
+
+def _get_singleton_ciks(conn):
+    rows = conn.execute(
+        text(
+            """
+            SELECT s.cik
+            FROM reference.securities s
+            WHERE s.active AND s.security_type = 'preferred stock'
+            GROUP BY s.cik
+            HAVING count(*) = 1
+            """
+        )
+    ).fetchall()
+    return {r[0] for r in rows if r[0]}
+
+
 LOAD_ROWS_SQL = """
 SELECT tp.security_id, tp.ticker, tp.provider,
-       s.security_name, s.security_type AS reference_security_type,
+       s.security_name, s.security_type AS reference_security_type, s.cik, s.active,
        tp.raw_payload -> 'openbb' AS openbb,
        tp.raw_payload -> 'sec_xbrl' AS sec_xbrl,
        {columns}
@@ -133,16 +154,25 @@ def _sec_value(row, column):
     )
 
 
-def changed_columns(row, parsed):
-    """Return the columns whose stored value is the issuer-level SEC leak."""
-    changed = [
-        column
-        for column in SEC_TERM_COLUMNS
-        if row.get(column) is not None
-        and _sec_value(row, column) is not None
-        and _same(row.get(column), _sec_value(row, column))
-        and not _same(row.get(column), parsed[column])
-    ]
+def changed_columns(row, parsed, lone_preferred=False):
+    """Return the columns whose stored value is the issuer-level SEC leak.
+
+    A lone preferred (its CIK has exactly one active preferred) legitimately
+    owns its issuer's single coupon fact, so a ``coupon_rate`` equal to that
+    fact is an allocation, not a leak, and is left alone. Liquidation
+    preferences are never allocated, so their check always applies.
+    """
+    changed = []
+    for column in SEC_TERM_COLUMNS:
+        if column == "coupon_rate" and lone_preferred:
+            continue
+        if (
+            row.get(column) is not None
+            and _sec_value(row, column) is not None
+            and _same(row.get(column), _sec_value(row, column))
+            and not _same(row.get(column), parsed[column])
+        ):
+            changed.append(column)
     # A sub-$1 "liquidation preference" is a nominal par value, whichever
     # source (SEC fact or the old title parser) put it there.
     stored = row.get("liquidation_preference")
@@ -158,6 +188,29 @@ def changed_columns(row, parsed):
     return changed
 
 
+def allocation_columns(row, singleton):
+    """Return the issuer-level SEC terms safe to assign to a lone preferred.
+
+    Only ``coupon_rate`` (and the ``coupon_type`` it implies) is allocated. The
+    SEC XBRL coupon is filed once per CIK without a series dimension, so it can
+    only be attributed when the CIK has exactly one active preferred; a value
+    parsed from the title always wins, so this fills a blank, never overwrites.
+    """
+    if not singleton or row.get("reference_security_type") != "preferred stock":
+        return {}
+    if not row.get("active"):
+        return {}
+    if row.get("coupon_rate") is not None:
+        return {}
+    parsed = reparse_row(row)
+    if parsed["coupon_rate"] is not None:
+        return {}
+    sec_coupon = _sec_value(row, "coupon_rate")
+    if sec_coupon is None:
+        return {}
+    return {"coupon_rate": sec_coupon, "coupon_type": parsed["coupon_type"] or "fixed"}
+
+
 def repair(conn):
     rows = (
         conn.execute(
@@ -167,10 +220,11 @@ def repair(conn):
         .all()
     )
     column_changes = dict.fromkeys((*SEC_TERM_COLUMNS, "coupon_type"), 0)
+    singleton_ciks = _get_singleton_ciks(conn)
     repaired = 0
     for row in rows:
         parsed = reparse_row(row)
-        changed = changed_columns(row, parsed)
+        changed = changed_columns(row, parsed, lone_preferred=row.get("cik") in singleton_ciks)
         if not changed:
             continue
         repaired += 1
@@ -196,10 +250,48 @@ def repair(conn):
         .one()
     )
     conn.execute(text(REFERENCE_REPAIR_SQL.format(action=REFERENCE_UPDATE_ACTION)))
+
+    # Allocation runs last: it must not be undone by the leak repair, which
+    # would see the freshly written coupon as an unrebacked SEC value.
+    allocated = 0
+    allocated_columns = dict.fromkeys(("coupon_rate", "coupon_type"), 0)
+    reference_allocated = 0
+    for row in rows:
+        allocation = allocation_columns(row, row.get("cik") in singleton_ciks)
+        if not allocation:
+            continue
+        allocated += 1
+        for column in allocation:
+            allocated_columns[column] += 1
+        upsert_ticker_profile(
+            conn,
+            {
+                "security_id": row["security_id"],
+                "ticker": row["ticker"],
+                "provider": row["provider"],
+                "raw_payload": {},
+                **allocation,
+            },
+            loader=LOADER,
+            owned_columns=tuple(allocation),
+            refreshed=False,
+        )
+        reference_allocated += conn.execute(
+            text("""
+                UPDATE reference.securities
+                SET coupon_rate = COALESCE(coupon_rate, :coupon_rate), updated_at = now()
+                WHERE security_id = :security_id AND security_type = 'preferred stock'
+            """),
+            {"coupon_rate": allocation["coupon_rate"], "security_id": row["security_id"]},
+        ).rowcount
+
     return {
         "profiles_scanned": len(rows),
         "profiles_repaired": repaired,
         "column_changes": column_changes,
+        "profiles_allocated": allocated,
+        "allocated_columns": allocated_columns,
+        "reference_allocated_rows": reference_allocated,
         "reference_coupon_rows": counts["coupon_rows"],
         "reference_liquidation_rows": counts["liquidation_rows"],
     }
@@ -231,10 +323,17 @@ def main(argv=None):
         if count:
             print(f"    {column}: {count}")
     print(
+        f"  lone-preferred profiles allocated an issuer-level SEC coupon: {result['profiles_allocated']}"
+    )
+    for column, count in result["allocated_columns"].items():
+        if count:
+            print(f"    {column}: {count}")
+    print(
         "  reference.securities SEC-contaminated rows: "
         f"coupon_rate={result['reference_coupon_rows']}, "
         f"liquidation_preference={result['reference_liquidation_rows']}"
     )
+    print(f"  reference.securities rows given a coupon: {result['reference_allocated_rows']}")
     return 0
 
 

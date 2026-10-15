@@ -9,6 +9,7 @@ def _stored(**overrides):
         "security_name": "ACRES Commercial Realty Corp. 7.875% Series D Preferred Stock",
         "reference_security_type": "preferred stock",
         "openbb": {"short_name": "ACRES Commercial Realty Corp."},
+        "active": True,
         "security_type": None,
         "coupon_type": None,
         "coupon_rate": None,
@@ -103,3 +104,86 @@ def test_nominal_par_value_is_repaired_even_without_a_sec_fact():
 
     assert parsed["liquidation_preference"] is None
     assert repair.changed_columns(row, parsed) == ["liquidation_preference"]
+
+
+def test_a_lone_preferred_allocates_its_issuer_level_coupon():
+    # The name is the issuer, so the title parse finds no coupon; with only one
+    # active preferred for the CIK the SEC fact is unambiguous.
+    row = _stored(
+        security_name="FEDERAL REALTY INVESTMENT TRUST",
+        openbb={},
+        coupon_rate=None,
+        sec_xbrl={"coupon_rate": 5.0},
+    )
+
+    assert repair.allocation_columns(row, singleton=True) == {
+        "coupon_rate": 5.0,
+        "coupon_type": "fixed",
+    }
+
+
+def test_allocation_needs_a_singleton_preferred():
+    row = _stored(
+        security_name="FEDERAL REALTY INVESTMENT TRUST",
+        openbb={},
+        coupon_rate=None,
+        sec_xbrl={"coupon_rate": 5.0},
+    )
+
+    assert repair.allocation_columns(row, singleton=False) == {}
+
+
+def test_allocation_never_overwrites_a_parsed_coupon():
+    row = _stored(
+        security_name="ACRES Commercial Realty Corp. 7.875% Series D Preferred Stock",
+        openbb={},
+        coupon_rate=7.875,
+        sec_xbrl={"coupon_rate": 7.875},
+    )
+
+    assert repair.allocation_columns(row, singleton=True) == {}
+
+
+def test_allocation_skips_common_stock_and_missing_facts():
+    base = {"openbb": {}, "coupon_rate": None, "sec_xbrl": {"coupon_rate": 5.0}}
+    common = _stored(security_name="Acme Corp", reference_security_type="common stock", **base)
+    no_fact = _stored(
+        security_name="Acme Corp",
+        reference_security_type="preferred stock",
+        openbb={},
+        coupon_rate=None,
+        sec_xbrl={},
+    )
+
+    assert repair.allocation_columns(common, singleton=True) == {}
+    assert repair.allocation_columns(no_fact, singleton=True) == {}
+
+
+def test_allocation_never_touches_an_inactive_preferred():
+    row = _stored(
+        security_name="FEDERAL REALTY INVESTMENT TRUST",
+        openbb={},
+        coupon_rate=None,
+        active=False,
+        sec_xbrl={"coupon_rate": 5.0},
+    )
+
+    assert repair.allocation_columns(row, singleton=True) == {}
+
+
+def test_a_lone_preferred_coupon_is_not_treated_as_a_leak():
+    # After allocation the coupon equals the SEC fact with no title-parse
+    # backing; the leak repair must leave it, or it clears and re-allocates
+    # on every run.
+    row = _stored(
+        security_name="FEDERAL REALTY INVESTMENT TRUST",
+        openbb={},
+        coupon_rate=5.0,
+        sec_xbrl={"coupon_rate": 5.0},
+    )
+    parsed = repair.reparse_row(row)
+
+    assert parsed["coupon_rate"] is None
+    assert "coupon_rate" not in repair.changed_columns(row, parsed, lone_preferred=True)
+    # ... but a multi-preferred issuer's leaked coupon is still cleared.
+    assert "coupon_rate" in repair.changed_columns(row, parsed, lone_preferred=False)
