@@ -2,7 +2,7 @@
 
 Run it deliberately:
 
-    python check_opencode_models.py
+    python -m scripts.dev.check_opencode_models
 
 It is a manual connectivity check, not an import. It previously ran its HTTP
 request and could raise SystemExit at module scope, so anything that imported it

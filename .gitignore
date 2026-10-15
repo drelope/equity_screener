@@ -25,6 +25,7 @@ env/
 # Generated artifacts
 data/*
 !data/.gitkeep
+sec_dividend_analysis.csv
 
 # IDE / OS
 .vscode/
