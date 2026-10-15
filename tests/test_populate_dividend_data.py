@@ -28,7 +28,9 @@ def test_infer_frequency_buckets_by_median_interval():
     assert infer_frequency([35]) == "Monthly"
     assert infer_frequency([60, 90]) == "Quarterly"
     assert infer_frequency([90, 100]) == "Quarterly"
-    assert infer_frequency([95, 106]) == "Semi-annual", "median 100.5 sits past the quarterly border"
+    assert infer_frequency([95, 106]) == "Semi-annual", (
+        "median 100.5 sits past the quarterly border"
+    )
     assert infer_frequency([177]) == "Semi-annual"
     assert infer_frequency([365]) == "Annual"
     assert infer_frequency([400]) == "Annual"

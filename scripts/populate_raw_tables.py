@@ -804,9 +804,7 @@ def populate_ticker_profiles(limit=None, reuse_max_age_days=DEFAULT_REUSE_MAX_AG
                     # column, so they never overwrite an online observation.
                     owned_columns = ()
                 else:
-                    summary["provider"] = (
-                        "SEC_XBRL+OPENBB_YFINANCE" if openbb else "SEC_XBRL"
-                    )
+                    summary["provider"] = "SEC_XBRL+OPENBB_YFINANCE" if openbb else "SEC_XBRL"
                     # Name-parse terms are deterministic for the title, so
                     # they own their columns (NULL clears a stale value).
                     # OpenBB columns are owned only when OpenBB answered, so a

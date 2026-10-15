@@ -16,6 +16,7 @@ from scripts import repair_security_classification as repair
 
 # --- SQL shape: safety rails that must not silently disappear -----------------
 
+
 def test_only_active_preferred_rows_are_candidates():
     sql = repair.RECLASSIFY_SQL
     assert "s.active AND s.security_type = 'preferred stock'" in sql
@@ -52,6 +53,7 @@ def test_absurd_rate_bounds_are_exclusive():
 
 # --- live behaviour: seeded rows in a rolled-back transaction -----------------
 
+
 def _live_engine():
     try:
         from src.crispdm.db import engine
@@ -74,8 +76,9 @@ def _insert_company_ticker(conn, ticker, cik):
     )
 
 
-def _insert_security(conn, ticker, cik, security_type, *, dividend=False,
-                     coupon=None, liquidation=None):
+def _insert_security(
+    conn, ticker, cik, security_type, *, dividend=False, coupon=None, liquidation=None
+):
     _insert_company_ticker(conn, ticker, cik)
     return conn.execute(
         text("""
@@ -87,9 +90,13 @@ def _insert_security(conn, ticker, cik, security_type, *, dividend=False,
         RETURNING security_id
         """),
         {
-            "ticker": ticker, "cik": cik, "name": f"{ticker} test instrument",
-            "type": security_type, "dividend": dividend,
-            "coupon": coupon, "liquidation": liquidation,
+            "ticker": ticker,
+            "cik": cik,
+            "name": f"{ticker} test instrument",
+            "type": security_type,
+            "dividend": dividend,
+            "coupon": coupon,
+            "liquidation": liquidation,
         },
     ).scalar_one()
 
@@ -133,9 +140,7 @@ def test_seeded_reclassification_and_clearing_round_trip():
             _insert_security(conn, "ZQCZ", "9000000003", "preferred stock")
 
             # CIK 4: a common row carrying issuer-name-parse preferred terms.
-            _insert_security(
-                conn, "ZQL", "9000000004", "common_stock", coupon=8.5, liquidation=25
-            )
+            _insert_security(conn, "ZQL", "9000000004", "common_stock", coupon=8.5, liquidation=25)
             # CIK 4: an implausible preferred rate and a plausible one.
             bad = _insert_security(conn, "ZQP", "9000000004", "preferred stock")
             good = _insert_security(conn, "ZQQ", "9000000004", "preferred stock")

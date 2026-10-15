@@ -489,14 +489,10 @@ def main():
         #   - the ticker-profile repair resets issuer-level SEC terms the writers
         #     copied onto common and preferred rows.
         # Both are DB-only and idempotent, so a re-run reports zero changes.
-        if all_ok and not stage(
-            "scripts.repair_security_classification", [], args.skip_repairs
-        ):
+        if all_ok and not stage("scripts.repair_security_classification", [], args.skip_repairs):
             all_ok = False
 
-        if all_ok and not stage(
-            "scripts.repair_ticker_profile_sec_terms", [], args.skip_repairs
-        ):
+        if all_ok and not stage("scripts.repair_ticker_profile_sec_terms", [], args.skip_repairs):
             all_ok = False
 
         # raw.companyfacts holds three populations, all refreshed here.

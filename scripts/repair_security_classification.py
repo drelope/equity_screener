@@ -128,6 +128,7 @@ WHERE dividend_rate IS NOT NULL
 RETURNING security_id
 """
 
+
 def repair(conn):
     """Apply every repair; return the reclassified rows and a counts summary.
 

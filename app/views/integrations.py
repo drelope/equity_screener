@@ -26,7 +26,11 @@ DB_TABLES_HELP = {
     "approx_rows": (None, None, "The planner's row estimate, not an exact count."),
 }
 SETTINGS_HELP = {
-    "setting": (None, None, "Configuration setting or secret; secrets are reported as set / not set."),
+    "setting": (
+        None,
+        None,
+        "Configuration setting or secret; secrets are reported as set / not set.",
+    ),
     "value": (None, None, "Configured value; a secret's value is never shown."),
 }
 

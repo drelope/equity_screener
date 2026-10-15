@@ -403,7 +403,9 @@ def test_classify_instrument_primary_symbol_is_common_despite_preferred_dividend
 def test_classify_instrument_non_primary_symbol_keeps_preferred_dividend_reading():
     classification = _classification(dividend_facts=["PreferredStockDividendsPerShare"])
     submissions = {"order": ["CHSCP", "CHSCL"], "exchange_by_symbol": {}}
-    decided = _instrument("CHSCL", "CHS Inc", classification=classification, submissions=submissions)
+    decided = _instrument(
+        "CHSCL", "CHS Inc", classification=classification, submissions=submissions
+    )
     assert decided.security_type == "preferred stock"
     assert decided.source == "dividend_facts"
 

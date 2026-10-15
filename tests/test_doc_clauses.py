@@ -261,9 +261,7 @@ def test_depositary_ratio_from_security_name():
     assert depositary_ratio("Common Stock, par value $0.001") is None
     # Rights/warrants are also written as fractions but are not depositaries.
     assert (
-        depositary_ratio(
-            "Rights, each entitling the holder to receive one-tenth (1/10) of a share"
-        )
+        depositary_ratio("Rights, each entitling the holder to receive one-tenth (1/10) of a share")
         is None
     )
 

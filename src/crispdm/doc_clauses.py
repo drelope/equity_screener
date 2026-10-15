@@ -384,10 +384,7 @@ _STATED_VALUE_RE = re.compile(r"(?:stated|par|initial)\s+value", re.IGNORECASE)
 
 def _in_spac_narrative(text, position):
     """True when ``position`` sits inside blank-check (SPAC) trust language."""
-    return (
-        _SPAC_NARRATIVE_RE.search(text[max(0, position - 200) : position + 200])
-        is not None
-    )
+    return _SPAC_NARRATIVE_RE.search(text[max(0, position - 200) : position + 200]) is not None
 
 
 def _clause_prefix(window, offset, back=EVENT_CONTEXT_CHARS):
@@ -436,10 +433,7 @@ _ISSUANCE_CONTEXT_RE = re.compile(
 
 def _looks_like_issuance_price(window, offset):
     clause = _clause_prefix(window, offset)
-    return (
-        "purchase price" in clause.lower()
-        and _ISSUANCE_CONTEXT_RE.search(clause) is not None
-    )
+    return "purchase price" in clause.lower() and _ISSUANCE_CONTEXT_RE.search(clause) is not None
 
 
 #: A warrant/right figure ("exercise price that is $6.36 per share", "we may
@@ -447,9 +441,7 @@ def _looks_like_issuance_price(window, offset):
 #: trigger for warrant redemption) is neither a preferred call nor a liquidation
 #: preference. SPAC warrants are routinely mis-classified as preferred stock, so
 #: this also neutralises those.
-_WARRANT_CLAUSE_RE = re.compile(
-    r"\bwarrants?\b|exercise\s+price|\bper\s+warrant\b", re.IGNORECASE
-)
+_WARRANT_CLAUSE_RE = re.compile(r"\bwarrants?\b|exercise\s+price|\bper\s+warrant\b", re.IGNORECASE)
 #: "an aggregate Liquidation Preference in excess of $1,000,000" is a funding
 #: threshold, not the per-unit preference.
 _IN_EXCESS_OF_RE = re.compile(r"in\s+excess\s+of", re.IGNORECASE)
@@ -486,15 +478,14 @@ def _looks_like_aggregate_amount(window, offset, match, per_share):
     # either side of the figure.
     after = window[match.end() : match.end() + 16]
     before = window[max(0, offset - 16) : offset]
-    return re.match(r"\s*(?:and\s+)?\$", after) is not None or re.search(
-        r"\$\s*[0-9][0-9,]*\s*(?:and\s+)?$", before
-    ) is not None
+    return (
+        re.match(r"\s*(?:and\s+)?\$", after) is not None
+        or re.search(r"\$\s*[0-9][0-9,]*\s*(?:and\s+)?$", before) is not None
+    )
 
 
 def _negates_liquidation_rights(window, offset):
-    return (
-        _NEGATED_PREFERENCE_RE.search(window[max(0, offset - 40) : offset + 240]) is not None
-    )
+    return _NEGATED_PREFERENCE_RE.search(window[max(0, offset - 40) : offset + 240]) is not None
 
 
 def _extract_redemption(text, depositary_ratio=None):
@@ -555,9 +546,7 @@ def _extract_redemption(text, depositary_ratio=None):
             after = window[step.end() : step.end() + 260]
             picked = None
             for offset, price, _m in _dollar_values(after):
-                if MIN_PER_SHARE <= price <= MAX_PER_SHARE and not _in_event_clause(
-                    after, offset
-                ):
+                if MIN_PER_SHARE <= price <= MAX_PER_SHARE and not _in_event_clause(after, offset):
                     picked = (offset, price)
                     break
             if picked is None:

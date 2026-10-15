@@ -344,7 +344,12 @@ def test_harmonize_skips_single_listing_issuers():
 
     clean_profiles.harmonize_issuer_attributes(rows)
 
-    assert rows[0] == {"symbol": "BRK-B", "cik": "0000000005", "sector": "Financials", "city": "Omaha"}
+    assert rows[0] == {
+        "symbol": "BRK-B",
+        "cik": "0000000005",
+        "sector": "Financials",
+        "city": "Omaha",
+    }
 
 
 def test_view_issuer_keys_are_a_subset_of_the_etl_fill_list():
@@ -362,9 +367,7 @@ def test_view_issuer_keys_are_a_subset_of_the_etl_fill_list():
     declaring = []
     for path in repo.glob("sql/migrations/V*.sql"):
         text = path.read_text()
-        match = re.search(
-            r"ARRAY\[\s*([^\]]*?)\]::\w+\[\]\s+AS\s+issuer_keys", text, flags=re.S
-        )
+        match = re.search(r"ARRAY\[\s*([^\]]*?)\]::\w+\[\]\s+AS\s+issuer_keys", text, flags=re.S)
         if match:
             declaring.append((path.stem, match.group(1)))
     assert declaring, "no migration declares issuer_keys"
@@ -373,9 +376,7 @@ def test_view_issuer_keys_are_a_subset_of_the_etl_fill_list():
     view_keys = set(re.findall(r"'([^']*)'", array_literal))
     assert view_keys, f"issuer_keys array in {latest_stem} is empty"
 
-    assert view_keys - {"cik", "issuer_id"} <= set(
-        clean_profiles.ISSUER_ATTRIBUTE_COLUMNS
-    ), (
+    assert view_keys - {"cik", "issuer_id"} <= set(clean_profiles.ISSUER_ATTRIBUTE_COLUMNS), (
         f"{latest_stem} flags an issuer key the cleaner cannot harmonize; add it to "
         "ISSUER_ATTRIBUTE_COLUMNS or remove it from the view"
     )

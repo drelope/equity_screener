@@ -149,9 +149,7 @@ def upsert_preferred_profile(conn, candidate):
     # Owns no typed column: per-series terms are not derivable from issuer-level
     # SEC facts, and security_type is owned by the name-parse writers. Typed
     # values here only seed a brand-new row; the SEC evidence is refreshed.
-    return upsert_ticker_profile(
-        conn, row, loader="populate_preferred_profiles", owned_columns=()
-    )
+    return upsert_ticker_profile(conn, row, loader="populate_preferred_profiles", owned_columns=())
 
 
 def populate_preferred_profiles(tickers=None, limit=None):
