@@ -641,3 +641,30 @@ defect had no way to surface before.
 
 Gate for this pass: `migrate --check` and `check_schema_drift` clean, ruff clean,
 `tests/test_market_schema.py` green (17 new).
+---
+
+# Dropped the Unused Feature Index (2026-10-15)
+
+The prior pass recorded `model.idx_features_price_quality` as "not dropped: too
+little uptime to call either index unused with confidence". Revisited after the
+`model.features` VACUUM FULL, which shrank it **221 MB → 64 MB** and made the scan
+evidence decisive:
+
+| index | size | idx_scan (cumulative) |
+|---|---|---|
+| `model.idx_features_as_of` | 65 MB | 1151 |
+| `model.idx_features_price_quality` | 64 MB | 3 |
+
+V0007 justified the index with "the feature query filters on price quality every
+run". No query does: nothing in `src/`, `scripts/`, `sql/` views or the Streamlit UI
+filters on `price_quality`; the classifier only writes the column, and the sole
+other reference is the `ON CONFLICT ... DO UPDATE SET` assignment, which never reads
+the index. The 3 scans are the planner's index-validity probes during the writes
+that built the table. V0073 drops it.
+
+The regime-flag indexes (`ix_scores_override_flag`, `ix_scores_market_regime`, ~0.5
+MB each) are still left in place: those encode a consumer intent V0015 added
+deliberately, where this one was justified by a filter that does not exist.
+
+Gate for this pass: `migrate --check` and `check_schema_drift` clean, ruff clean,
+full suite green.

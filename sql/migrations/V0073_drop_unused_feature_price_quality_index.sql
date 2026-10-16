@@ -1,0 +1,36 @@
+-- =====================================================================
+-- V0073: drop the unused model.idx_features_price_quality.
+--
+-- V0007 created model.features(price_quality) with the note "the feature
+-- query filters on price quality every run, so index it". That has not
+-- held: no query in src/, scripts/, sql/views or the Streamlit UI filters
+-- on price_quality. The classifier writes the column (features.py), and
+-- the only other reference to it is the ON CONFLICT ... DO UPDATE SET
+-- assignment, which never reads the index.
+--
+-- Measured on the live database (2026-10-15), since the last stats reset:
+--
+--   index                        size     idx_scan
+--   model.idx_features_as_of     65 MB    1151
+--   model.idx_features_price_quality  64 MB  3
+--
+-- The scan counters are cumulative (stats_reset is NULL), so 3 scans over
+-- the table's whole lifetime is a strong unused signal, and the 3 are fully
+-- explained by the planner's index-validity probes during the writes that
+-- built the table. The sibling it is compared against is scanned 1151 times.
+-- A 64 MB btree on a hot table is also a write-amplification cost on every
+-- feature upsert, not only a disk cost.
+--
+-- Dropped, not left in place: unlike the regime-flag indexes V0015 added
+-- (which encode a consumer intent that may return), this one was justified
+-- by a filter that does not exist. Re-adding it is one CREATE INDEX if the
+-- filter is ever introduced.
+--
+-- Plain DROP INDEX, not CONCURRENTLY: migrations run one transaction per
+-- file, so CONCURRENTLY is unavailable. The lock is a brief ACCESS
+-- EXCLUSIVE on the index, on a table already reindexed in this pass.
+-- The index is migration-only (V0007), never declared in sql/schema.sql,
+-- so there is no mirror to update and a fresh build drops it the same way.
+-- =====================================================================
+
+DROP INDEX IF EXISTS model.idx_features_price_quality;
