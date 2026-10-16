@@ -525,6 +525,23 @@ def test_dividend_growth_annual_fallback_divides_latest_by_prior(monkeypatch):
     assert "ann.current > 0 AND ann.prior > 0" in sql, "both sides need a positive base"
 
 
+def test_dividend_growth_annual_fallback_requires_a_year_between_the_facts(monkeypatch):
+    """The two newest XBRL facts are a quarter apart for a quarterly declarer.
+
+    Dividing those reads a quarter-over-quarter rate as annual growth; on the
+    latest date the branch produced 1,249x and 1,006x from a stub prior. The
+    fallback now applies only when the two facts' own ex-dividend dates are
+    about a year apart, which is what makes it a year-over-year rate.
+    """
+    sql = _feature_sql(monkeypatch)
+
+    assert "ann.current_ex - ann.prior_ex BETWEEN 330 AND 430" in sql
+    # The gap is between the two facts, so both dates have to be carried.
+    ann = sql.split("ann AS (")[1].split("),")[0]
+    assert "MAX(ex_dividend_date) FILTER (WHERE rn = 1) AS current_ex" in ann
+    assert "MAX(ex_dividend_date) FILTER (WHERE rn = 2) AS prior_ex" in ann
+
+
 def test_dividend_growth_never_keys_on_the_cadence_column(monkeypatch):
     """raw.dividend_data.frequency is an informational cadence label.
 

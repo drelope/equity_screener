@@ -804,19 +804,28 @@ def build_features(date_from=None, date_to=None):
       -- informational cadence label, not a fact row attribute, so it must not
       -- filter this build; the build keys only on provider, concept and date.
       --
-      -- This adjacency comparison is accepted only because it is a documented
-      -- lower-fidelity fallback, not because it is a true year-over-year
-      -- rate. For a quarterly declarer the two newest period-ends are usually
-      -- consecutive quarters, so "current/prior" is a quarter-over-quarter
-      -- reading; for a cumulative-to-date filer (T, KO) it compares two
-      -- running totals. That was validated alongside annual_dividend: summing
-      -- a 365-day window instead (mirroring d_paid/d_prior_paid, MAX-deduped
-      -- per period-end) reaches a 2.4x median against the OpenBB trailing
-      -- comparison because it mixes per-quarter amounts with full-year
-      -- totals -- worse, in the wrong direction, than an explicit quarter
-      -- measurement. The OpenBB branches above are preferred for exactly this
-      -- reason, and extending OpenBB history coverage shrinks how often a
-      -- security lands here.
+      -- rn=1 and rn=2 are the two newest facts, which for a quarterly
+      -- declarer are consecutive quarters (~91 days apart). Dividing those
+      -- reads a quarter-over-quarter rate as annual growth, and on the latest
+      -- date that produced 1,249x and 1,006x "growth" from a stub base. The
+      -- branch is therefore gated, in the growth CASE below, on the gap
+      -- between the two facts: only a roughly annual spacing (about 11 to 14
+      -- months) is a year-over-year rate. The stored gaps are bimodal -- 88%
+      -- sit at 91 days and the rest at 363-366 -- so the band separates the
+      -- two cleanly and also rejects the sparse filers whose two newest facts
+      -- are years apart.
+      --
+      -- Summing a 365-day window instead (mirroring d_paid/d_prior_paid,
+      -- MAX-deduped per period-end) was tried and rejected: it reaches a 2.4x
+      -- median against the OpenBB trailing comparison because it mixes
+      -- per-quarter amounts with full-year totals, so for a cumulative-to-date
+      -- filer (T, KO) it compares two running totals. An explicit quarter
+      -- measurement is wrong in a smaller, better-understood way, and the
+      -- gap gate now suppresses it when it would not be annual. The OpenBB
+      -- branches above are preferred for exactly this reason: they compare
+      -- two trailing 365-day windows, so they are annual by construction, and
+      -- extending OpenBB history coverage shrinks how often a security lands
+      -- here at all.
       SELECT p.security_id, p.observation_date, d.ex_dividend_date, d.amount,
              ROW_NUMBER() OVER (PARTITION BY p.security_id, p.observation_date
                                 ORDER BY d.ex_dividend_date DESC) rn
@@ -829,9 +838,15 @@ def build_features(date_from=None, date_to=None):
        AND d.ex_dividend_date <= p.observation_date
     ),
     ann AS (
+      -- The current and prior facts' own ex-dividend dates are carried so the
+      -- growth CASE can require them to be about a year apart. rn=1/rn=2 pick
+      -- the dates; MAX is just the aggregate that carries them alongside the
+      -- amounts.
       SELECT security_id, observation_date,
              MAX(amount) FILTER (WHERE rn = 1) AS current,
-             MAX(amount) FILTER (WHERE rn = 2) AS prior
+             MAX(amount) FILTER (WHERE rn = 2) AS prior,
+             MAX(ex_dividend_date) FILTER (WHERE rn = 1) AS current_ex,
+             MAX(ex_dividend_date) FILTER (WHERE rn = 2) AS prior_ex
       FROM d_annual
       GROUP BY 1, 2
     ),
@@ -1075,7 +1090,16 @@ def build_features(date_from=None, date_to=None):
                 AND d_first.first_ex <= p.observation_date - INTERVAL '730 days'
            THEN d_paid_prior_window.current_dividend
                 / d_prior_paid.prior_dividend - 1
+           -- The XBRL fallback compares two single facts, so it is a
+           -- year-over-year rate only when they are about a year apart.
+           -- Without this the two newest facts of a quarterly declarer are a
+           -- quarter apart and the division is a quarter-over-quarter rate
+           -- (the 1,249x reading above). 330-430 days is roughly 11 to 14
+           -- months: it keeps the annual 363-366 cluster, drops the 91-day
+           -- quarterly pairs, and drops the sparse filers whose two newest
+           -- facts are years apart. Both amounts stay positive-checked.
            WHEN ann.current > 0 AND ann.prior > 0
+                AND ann.current_ex - ann.prior_ex BETWEEN 330 AND 430
            THEN ann.current / ann.prior - 1
       END dividend_growth,
       -- TTM basis, preferring four summed quarters and falling back to the
