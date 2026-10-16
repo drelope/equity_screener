@@ -690,7 +690,15 @@ pgstattuple showed ~50% free space on several high-update tables.
 
 **Total saved:** ~1.87 GB. **Database total:** 11 GB → 9.03 GB.
 
-To prevent recurrence, a follow-up could set a modest `fillfactor` (e.g. 85-90) on
-update-heavy tables (`raw.market_data`, `fundamentals.periodic_financials`, `raw.dividend_data`,
-`reference.securities`). The reserved intraday tables have `fillfactor` unset (default 100);
-a fillfactor of 80-85 is recommended if they become write-heavy in the future.
+**Prevent recurrence — fillfactor 85 (V0074).** The fragmentation is not dead rows:
+these tables are upserted heavily (`raw.market_data` has seen 34M updates over 9.7M
+rows) and were created at the default `fillfactor` of 100, so every HOT update that
+did not fit on its page spilled to a new one and the drained pages were never
+refilled. V0074 sets `fillfactor = 85` on `raw.market_data`,
+`fundamentals.periodic_financials`, `raw.dividend_data` and `reference.securities`,
+leaving ~15% of each page for HOT updates to reuse. A `VACUUM (FULL, ANALYZE)` then
+repacks each to 85%, which raises total size slightly now (+256 MB, DB 9032 → 9288 MB)
+but holds free space at the reserved ~16% instead of 46-50%. The reserved intraday
+tables keep the default (they are empty); set a fillfactor there if they become
+write-heavy.
+

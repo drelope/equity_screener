@@ -66,7 +66,7 @@ CREATE TABLE IF NOT EXISTS reference.securities (
     )),
   CONSTRAINT chk_securities_currency
     CHECK (currency ~ '^[A-Z]{3}$')
-);
+) WITH (fillfactor = 85);
 CREATE INDEX IF NOT EXISTS ix_securities_issuer_id
   ON reference.securities (issuer_id);
 CREATE INDEX IF NOT EXISTS ix_securities_exchange_id
@@ -162,7 +162,7 @@ CREATE TABLE IF NOT EXISTS raw.market_data (
   adjusted_close NUMERIC, volume BIGINT, provider VARCHAR(64) NOT NULL,
   retrieved_at TIMESTAMPTZ DEFAULT now(),
   PRIMARY KEY(security_id, observation_date, provider)
-);
+) WITH (fillfactor = 85);
 
 -- Date-window scans (the feature build's DISTINCT and min/max probes) filter on
 -- observation_date alone, which the (security_id, observation_date, provider)
@@ -614,7 +614,7 @@ CREATE TABLE IF NOT EXISTS raw.dividend_data (
   frequency VARCHAR(32), currency VARCHAR(8), provider VARCHAR(64) NOT NULL,
   retrieved_at TIMESTAMPTZ DEFAULT now(),
   PRIMARY KEY(security_id, ex_dividend_date, provider)
-);
+) WITH (fillfactor = 85);
 
 COMMENT ON COLUMN raw.dividend_data.amount IS
   'Per-share dividend amount. XBRL: us-gaap:CommonStockDividendsPerShareDeclared / '
@@ -1005,7 +1005,7 @@ CREATE TABLE IF NOT EXISTS fundamentals.periodic_financials (
   shares_outstanding NUMERIC,
   source VARCHAR(64), retrieved_at TIMESTAMPTZ DEFAULT now(),
   PRIMARY KEY(security_id, period_end, fiscal_period, filed)
-);
+) WITH (fillfactor = 85);
 
 CREATE TABLE IF NOT EXISTS model.features (
   security_id UUID REFERENCES reference.securities(security_id),
