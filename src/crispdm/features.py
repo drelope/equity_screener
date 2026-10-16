@@ -112,7 +112,7 @@ RETIRED_FEATURES = {
 
 
 INSERT_FEATURE = text("""
-INSERT INTO model.features
+INSERT INTO model.features AS current_features
     (security_id,as_of_date,current_price,annualized_dividend,dividend_yield,
      dividend_growth,earnings_payout,fcf_payout,dividend_coverage,
      eps_ttm_growth,debt,debt_to_ebitda,interest_coverage,quick_liquidity,
@@ -173,6 +173,7 @@ ON CONFLICT(security_id,as_of_date) DO UPDATE SET
     raw_current_price=EXCLUDED.raw_current_price,
     raw_annual_dividend=EXCLUDED.raw_annual_dividend,
     raw_dividend_yield=EXCLUDED.raw_dividend_yield
+WHERE current_features IS DISTINCT FROM EXCLUDED
 """)
 
 #: Rows per INSERT. The universe is millions of feature rows, and a per-row

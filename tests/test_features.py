@@ -731,7 +731,9 @@ def test_feature_payload_keys_match_the_insert_bind_names():
     stmt = INSERT_FEATURE.text
     insert_cols = [
         c.strip()
-        for c in re.search(r"INSERT INTO model\.features\s*\(([^)]*?)\)\s*VALUES", stmt, re.S)
+        for c in re.search(
+            r"INSERT INTO model\.features(?:\s+AS\s+\w+)?\s*\(([^)]*?)\)\s*VALUES", stmt, re.S
+        )
         .group(1)
         .replace("\n", " ")
         .split(",")
@@ -1056,6 +1058,20 @@ def test_new_financial_columns_are_declared_and_persisted():
         assert column in features.FEATURE_COLUMNS
         assert f":{column}" in sql
         assert f"{column}=EXCLUDED.{column}" in sql
+
+
+def test_insert_feature_skips_an_unchanged_row():
+    """A no-op re-upsert must not rewrite the row.
+
+    ``model.features`` is upserted on every window rebuild; without a guard the
+    whole row is rewritten even when every feature value is identical, which is
+    what left ~1.4M dead tuples on a 9.7M-row table. The ``WHERE`` clause makes
+    the write a no-op when the stored row already equals the proposed one, so a
+    re-run of the same window costs no heap or index churn.
+    """
+    sql = str(features.INSERT_FEATURE)
+    assert "INSERT INTO model.features AS current_features" in sql
+    assert sql.rstrip().endswith("WHERE current_features IS DISTINCT FROM EXCLUDED")
 
 
 def test_new_financial_inputs_ride_the_vintage_chains(monkeypatch):
