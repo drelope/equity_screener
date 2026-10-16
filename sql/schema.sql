@@ -1007,32 +1007,36 @@ CREATE TABLE IF NOT EXISTS fundamentals.periodic_financials (
   PRIMARY KEY(security_id, period_end, fiscal_period, filed)
 ) WITH (fillfactor = 85);
 
+-- V0075: the computed metrics are double precision, not NUMERIC. They are
+-- derived analytics (ratios, margins, yields) computed in float arithmetic and
+-- fed to a model, not a source of record; raw.market_data and
+-- fundamentals.periodic_financials keep NUMERIC for that. See V0075.
 CREATE TABLE IF NOT EXISTS model.features (
   security_id UUID REFERENCES reference.securities(security_id),
-  as_of_date DATE NOT NULL, current_price NUMERIC, annualized_dividend NUMERIC,
-  dividend_yield NUMERIC, dividend_growth NUMERIC, earnings_payout NUMERIC,
-  fcf_payout NUMERIC, dividend_coverage NUMERIC, debt_to_ebitda NUMERIC,
-  interest_coverage NUMERIC, volatility_252d NUMERIC, momentum_252d NUMERIC,
-  momentum_63d NUMERIC, liquidation_discount NUMERIC, legal_rights_score NUMERIC,
-  data_quality_score NUMERIC, target_sustainable_dividend INT,
+  as_of_date DATE NOT NULL, current_price DOUBLE PRECISION, annualized_dividend DOUBLE PRECISION,
+  dividend_yield DOUBLE PRECISION, dividend_growth DOUBLE PRECISION, earnings_payout DOUBLE PRECISION,
+  fcf_payout DOUBLE PRECISION, dividend_coverage DOUBLE PRECISION, debt_to_ebitda DOUBLE PRECISION,
+  interest_coverage DOUBLE PRECISION, volatility_252d DOUBLE PRECISION, momentum_252d DOUBLE PRECISION,
+  momentum_63d DOUBLE PRECISION, liquidation_discount DOUBLE PRECISION, legal_rights_score DOUBLE PRECISION,
+  data_quality_score DOUBLE PRECISION, target_sustainable_dividend INT,
   -- V0016: quick_liquidity = cash / current_liabilities, from the current-basis
   -- columns V0016 adds above. Consumed by the CVS (regime.py CVS_WEIGHTS); not
   -- a declared ML feature, for the same reason debt_to_ebitda is not until V0012.
-  quick_liquidity NUMERIC,
+  quick_liquidity DOUBLE PRECISION,
   -- V0018: maturity cliff over cash. Feeds circuit breaker C4 and the CVS.
-  refinancing_wall NUMERIC,
+  refinancing_wall DOUBLE PRECISION,
   -- V0068: point-in-time financial metrics -- margins, cash-flow quality,
   -- balance-sheet and valuation ratios -- all derived from the vintaged
   -- periodic_financials rows keyed by `filed`, never from the current
   -- clean.company_profile snapshot (which would leak look-ahead). See
   -- V0068_financial_metrics.sql and features.py financial_metrics().
-  gross_margin NUMERIC, operating_margin NUMERIC, net_margin NUMERIC,
-  fcf_margin NUMERIC, ocf_margin NUMERIC,
-  cash_conversion NUMERIC, capex_intensity NUMERIC, fcf_growth NUMERIC,
-  net_debt NUMERIC, net_debt_to_ebitda NUMERIC, current_ratio NUMERIC,
-  debt_to_equity NUMERIC,
-  pe_ratio NUMERIC, earnings_yield NUMERIC, fcf_yield NUMERIC,
-  price_to_book NUMERIC,
+  gross_margin DOUBLE PRECISION, operating_margin DOUBLE PRECISION, net_margin DOUBLE PRECISION,
+  fcf_margin DOUBLE PRECISION, ocf_margin DOUBLE PRECISION,
+  cash_conversion DOUBLE PRECISION, capex_intensity DOUBLE PRECISION, fcf_growth DOUBLE PRECISION,
+  net_debt DOUBLE PRECISION, net_debt_to_ebitda DOUBLE PRECISION, current_ratio DOUBLE PRECISION,
+  debt_to_equity DOUBLE PRECISION,
+  pe_ratio DOUBLE PRECISION, earnings_yield DOUBLE PRECISION, fcf_yield DOUBLE PRECISION,
+  price_to_book DOUBLE PRECISION,
   PRIMARY KEY(security_id, as_of_date)
 );
 

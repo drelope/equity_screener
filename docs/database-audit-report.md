@@ -702,3 +702,27 @@ but holds free space at the reserved ~16% instead of 46-50%. The reserved intrad
 tables keep the default (they are empty); set a fillfactor there if they become
 write-heavy.
 
+---
+
+# model.features Metrics Converted to double precision (V0075)
+
+`model.features` was the widest relation in the database: 9.7M rows at ~270 bytes
+each (2.62 GB of live tuples), almost all of it ~35 populated `NUMERIC` metrics at
+~10-12 bytes apiece. They are derived analytics — ratios, margins, yields — computed
+in float arithmetic and fed to a model, not a source of record, so the exact decimal
+storage the raw/fundamentals tables keep buys nothing here. V0075 converts all 38
+`NUMERIC` columns to `double precision` (fixed 8 bytes).
+
+`float8` carries ~15-16 significant digits; the largest genuine magnitude is a share
+price near $809,000 (11 digits to hold cents) and the smallest a yield near 1e-06, so
+precision is ample. Values were already floats inserted from numpy/pandas; `float8`
+round-trips them exactly where the `NUMERIC` path went float → str → Decimal.
+
+Measured effect: avg row 270 → 219 bytes; `model.features` total 3060 → 2549 MB
+(heap 2619 → 2109 MB); database 9288 → 8778 MB. The saving (~51 bytes/row) is smaller
+than the ~120 bytes/row the column widths alone imply, because `double precision` is
+8-byte aligned where `NUMERIC` is 4-byte aligned and the alignment padding absorbs
+part of the difference. The three RETIRED columns (NULL everywhere) were converted
+for consistency. `target_sustainable_dividend` stays an integer label.
+
+Gate: ruff clean, `migrate --check` and `check_schema_drift` clean, 1092 tests pass.
