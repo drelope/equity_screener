@@ -82,17 +82,18 @@ class TestReport:
 
 class TestAcceptedDifferences:
     def test_one_entry_covers_a_constraint_and_its_backing_index(self):
-        """Both keys name the same object, so one reason should apply to both."""
+        """Both keys name the same object, so one reason should apply to both.
+
+        Exercises the name-matching mechanism with a synthetic entry: the live
+        ``ACCEPTED_DIFFERENCES`` is deliberately empty since V0077 closed the last
+        one, and the mechanism has to keep working for the next accepted
+        difference.
+        """
         problems = [
-            (
-                "missing_from_reference",
-                "constraint reference.securities_security_id_key",
-                "X",
-                None,
-            ),
-            ("missing_from_reference", "index reference.securities_security_id_key", "X", None),
+            ("missing_from_reference", "constraint example.thing_unique", "X", None),
+            ("missing_from_reference", "index example.thing_unique", "X", None),
         ]
-        unexplained, accepted = partition(problems)
+        unexplained, accepted = partition(problems, accepted={"example.thing_unique": "reason"})
         assert unexplained == []
         assert len(accepted) == 2
 

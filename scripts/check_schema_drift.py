@@ -48,17 +48,10 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 # printed, so the count of accepted drift is visible; it just does not fail the
 # check. Adding an entry means accepting the difference permanently, so each one
 # carries the reason and what it would cost to close.
-ACCEPTED_DIFFERENCES = {
-    "reference.securities_security_id_key": (
-        "Redundant UNIQUE(security_id) alongside the primary key, on an 11,660-row "
-        "table. It cannot simply be dropped: raw.market_data's foreign key was "
-        "created against this index rather than securities_pkey, so removing it "
-        "means dropping and re-validating that FK against 9.27M rows. Not worth an "
-        "ACCESS EXCLUSIVE lock pair on the largest raw table to remove a duplicate "
-        "index on a small one. Close it in a maintenance window by re-pointing "
-        "market_data_security_id_fkey at the primary key first, then dropping this."
-    ),
-}
+# Empty: the one long-standing entry, reference.securities_security_id_key, was
+# closed by V0077, which re-pointed every FK at the primary key and dropped the
+# redundant UNIQUE. Kept as the hook for the next understood-but-unfixed one.
+ACCEPTED_DIFFERENCES = {}
 
 
 def partition(problems, accepted=ACCEPTED_DIFFERENCES):
