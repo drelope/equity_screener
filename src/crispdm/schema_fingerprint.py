@@ -94,6 +94,7 @@ def fingerprint(conn, *, ignore=IGNORED_OBJECTS) -> dict[str, str]:
             JOIN pg_class cls ON cls.oid = i.indexrelid
             JOIN pg_namespace ns ON ns.oid = cls.relnamespace
             WHERE {_NOT_OURS}
+              AND NOT cls.relispartition
             ORDER BY 1,2
             """
         )
@@ -103,6 +104,12 @@ def fingerprint(conn, *, ignore=IGNORED_OBJECTS) -> dict[str, str]:
     # Keyed by constraint name, not table: a table has a primary key, foreign keys
     # and checks at once, so keying on the table collapses them onto one key and
     # whichever row the scan happened to return last wins.
+    #
+    # Partition-local constraints are excluded for the same reason: a partitioned
+    # table's foreign key is copied onto every partition under the *same* name, so
+    # the parent's and each child's row collide on one key and the winner depends
+    # on physical order. Only the parent constraint is the project's definition;
+    # the children are PostgreSQL's copies of it.
     for schema, name, table, definition in conn.execute(
         text(
             f"""
@@ -111,6 +118,7 @@ def fingerprint(conn, *, ignore=IGNORED_OBJECTS) -> dict[str, str]:
             JOIN pg_class tbl ON tbl.oid = con.conrelid
             JOIN pg_namespace ns ON ns.oid = con.connamespace
             WHERE {_NOT_OURS}
+              AND NOT tbl.relispartition
             ORDER BY 1,2
             """
         )
