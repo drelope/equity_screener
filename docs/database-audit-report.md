@@ -668,3 +668,29 @@ deliberately, where this one was justified by a filter that does not exist.
 
 Gate for this pass: `migrate --check` and `check_schema_drift` clean, ruff clean,
 full suite green.
+---
+
+# Deeper Efficiency Pass: VACUUM FULL to Reclaim Fragmentation (2026-10-15)
+
+Additional pass on bloat caused by heavy update churn (33M updates on 9.7M rows).
+pgstattuple showed ~50% free space on several high-update tables.
+
+**One-time compaction (VACUUM FULL, ANALYZE):**
+
+| table | total before | total after | saved |
+|---|---|---|---|
+| `raw.market_data` | 3457.0 MB | 2032.4 MB | 1424.6 MB |
+| `fundamentals.periodic_financials` | 554.0 MB | 284.5 MB | 269.5 MB |
+| `raw.dividend_data` | 109.6 MB | 52.4 MB | 57.1 MB |
+| `reference.securities` | 43.9 MB | 16.9 MB | 26.9 MB |
+| `clean.company_officer` | 46.4 MB | 22.7 MB | 23.7 MB |
+| `raw.company_classification` | 35.1 MB | 15.4 MB | 19.7 MB |
+| `clean.company_profile` | 78.3 MB | 38.8 MB | 39.5 MB |
+| `clean.ticker_profile` | 14.2 MB | 6.0 MB | 8.1 MB |
+
+**Total saved:** ~1.87 GB. **Database total:** 11 GB → 9.03 GB.
+
+To prevent recurrence, a follow-up could set a modest `fillfactor` (e.g. 85-90) on
+update-heavy tables (`raw.market_data`, `fundamentals.periodic_financials`, `raw.dividend_data`,
+`reference.securities`). The reserved intraday tables have `fillfactor` unset (default 100);
+a fillfactor of 80-85 is recommended if they become write-heavy in the future.
