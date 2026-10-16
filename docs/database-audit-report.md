@@ -782,3 +782,14 @@ classification already holds the same (empty) `security_titles`, so the fallback
 could never add a title and the read was a dead ~1.8 MB detoast per ticker per run
 (the per-series titles come from `raw.sec_instrument_titles`, a separate path). The
 read and its now-unused import were removed; output is unchanged.
+
+## `raw.market_data.adjusted_close`: re-examined, kept
+
+The sweep prompted a second look at the 100%-NULL `adjusted_close` column. It is not
+dead code: `scripts/populate_market_data.py` and `src/crispdm/etl.py` both map a
+provider's `adjusted_close` / `adj_close` into it, `app/views/security.py` plots it
+when present, and `tests/test_populate_market_data.py` asserts the mapping. It is NULL
+only because the current provider (`OPENBB`) does not return adjusted close. Dropping
+it would free no meaningful space (a NULL costs one null-bitmap bit, and the column is
+not removed from the heap without a rewrite) while deleting the hook for any provider
+that does. Kept, as first recorded.
