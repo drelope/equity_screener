@@ -302,6 +302,7 @@ def financials(
                FROM fundamentals.periodic_financials f
                JOIN reference.securities s ON s.security_id = f.security_id
                WHERE upper(s.ticker) = :ticker AND s.active = TRUE
+                 AND f.period_end <= CURRENT_DATE
                ORDER BY f.period_end DESC, f.filed DESC LIMIT :limit""",
             {"ticker": ticker, "limit": limit},
         )
@@ -312,6 +313,7 @@ def financials(
                JOIN reference.securities s ON s.security_id = f.security_id
                WHERE upper(s.ticker) = :ticker AND s.active = TRUE
                  AND f.filed <= CAST(:as_of AS date)
+                 AND f.period_end <= CAST(:as_of AS date)
                ORDER BY f.period_end DESC, f.filed DESC LIMIT :limit""",
             {"ticker": ticker, "as_of": as_of, "limit": limit},
         )

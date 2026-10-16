@@ -24,6 +24,7 @@ Usage:
 import argparse
 import sys
 from dataclasses import dataclass
+from datetime import date
 from pathlib import Path
 
 from sqlalchemy import text
@@ -224,6 +225,10 @@ def populate_fundamentals(tickers=None, limit=None, batch_size=BATCH_SIZE):
     """Build fundamentals.periodic_financials from stored XBRL payloads."""
     periods = securities = errors = 0
     processed = 0
+    # The run date is the ceiling for a period_end: a period that has not ended
+    # cannot have been reported. Passed to the extractor so a forward-dated XBRL
+    # context never reaches the stored table.
+    run_date = date.today()
 
     with engine.connect() as conn:
         total = count_candidates(conn, tickers=tickers, limit=limit)
@@ -248,7 +253,7 @@ def populate_fundamentals(tickers=None, limit=None, batch_size=BATCH_SIZE):
                 try:
                     with conn.begin_nested():
                         payload = {"full_facts": {"facts": {"us-gaap": candidate["us_gaap"]}}}
-                        rows = extract_periodic_financials(payload)
+                        rows = extract_periodic_financials(payload, as_of=run_date)
                         if rows:
                             periods += upsert_periodic_financials(
                                 conn, candidate["security_id"], rows

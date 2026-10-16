@@ -1,5 +1,6 @@
 from unittest.mock import patch
 
+import pandas as pd
 from fastapi.testclient import TestClient
 
 import api.main as api_main
@@ -71,6 +72,33 @@ def test_interactive_docs_are_disabled_unless_opted_in():
     client = TestClient(app)
     assert client.get("/docs").status_code == 404
     assert client.get("/openapi.json").status_code == 404
+
+
+def test_financials_bounds_period_end_to_the_present(monkeypatch):
+    """A forward-dated period must never be served as the latest vintage.
+
+    The query orders by period_end, so without the bound a 2039 XBRL context
+    (V0078's anomaly) wins the sort and the endpoint reports it as current.
+    """
+    monkeypatch.setenv("API_KEY", "test-key")
+    captured = {}
+
+    def fake_read_df(sql, params):
+        captured["sql"] = sql
+        return pd.DataFrame()
+
+    monkeypatch.setattr(api_main, "read_df", fake_read_df)
+    client = TestClient(app)
+    headers = {"X-API-Key": "test-key"}
+
+    client.get("/financials/TEST", headers=headers)
+    assert "f.period_end <= CURRENT_DATE" in captured["sql"]
+
+    # The point-in-time reading is bounded on both legs, matching the feature
+    # build's GREATEST(filed, period_end) availability rule.
+    client.get("/financials/TEST?as_of=2024-01-01", headers=headers)
+    assert "f.period_end <= CAST(:as_of AS date)" in captured["sql"]
+    assert "f.filed <= CAST(:as_of AS date)" in captured["sql"]
 
 
 def test_a_client_over_the_rate_ceiling_gets_429_with_retry_after(monkeypatch):

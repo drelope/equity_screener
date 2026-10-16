@@ -576,6 +576,7 @@ def fundamentals_section(security_id: str) -> None:
                gross_profit, operating_income, net_income, free_cash_flow, cash, debt,
                equity, filed, source
         FROM fundamentals.periodic_financials WHERE security_id = CAST(:sid AS uuid)
+          AND period_end <= CURRENT_DATE
         ORDER BY period_end DESC, filed DESC NULLS LAST LIMIT 12
         """,
         {"sid": security_id},

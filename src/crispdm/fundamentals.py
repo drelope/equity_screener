@@ -101,8 +101,22 @@ def _visible_as_of(by_concept, as_of):
     return None
 
 
-def extract_periodic_financials(companyfacts, max_periods=DEFAULT_MAX_PERIODS):
+def extract_periodic_financials(companyfacts, max_periods=DEFAULT_MAX_PERIODS, as_of=None):
     """Extract normalised periodic financial statements from a companyfacts payload.
+
+    ``as_of`` is the run date, and it is the ceiling a period cannot exceed: a
+    period that has not ended cannot have been reported, so a fact whose
+    ``period_end`` is after the run date is discarded rather than stored. The
+    bound is optional (``None`` disables it) so the function stays a pure
+    payload transform for callers that want every period -- tests assert the
+    ``max_periods`` recency bound against synthetic payloads years in the
+    future. The writer (``scripts/populate_fundamentals``) passes the real run
+    date, which is what keeps the shared ``fundamentals.periodic_financials``
+    table free of forward-dated periods. Without it the feature build is still
+    safe -- ``features.py`` resolves availability as
+    ``GREATEST(filed, period_end)``, so a forward period waits until its own
+    date -- but readers that order by ``period_end`` alone (the financials API
+    and the Fundamentals tab) would show a 2039 period as the latest.
 
     The SEC companyfacts graph reports the same economic fact under several
     near-equivalent us-gaap concepts; the canonical tag order in
@@ -172,6 +186,10 @@ def extract_periodic_financials(companyfacts, max_periods=DEFAULT_MAX_PERIODS):
                 period_end = _period_end(record)
                 filed = _filed_date(record)
                 if period_end is None or filed is None:
+                    continue
+                # A period cannot be reported before it has ended, so a
+                # period_end after the run date is a bad date, not a fact.
+                if as_of is not None and period_end > as_of:
                     continue
                 key = (period_end, record.get("fy"), record.get("fp") or "")
                 by_concept = metric_periods[metric].setdefault(key, {})

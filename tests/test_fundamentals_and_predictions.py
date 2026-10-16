@@ -713,6 +713,50 @@ def test_facts_without_a_filing_date_are_dropped_rather_than_assumed_available()
     assert all(row.get("eps") != 99.0 for row in rows)
 
 
+def test_a_period_ending_after_the_run_date_is_dropped():
+    """A period that has not ended cannot have been reported.
+
+    Left unbounded, a forward-dated XBRL context reaches the stored table and a
+    reader ordering by period_end alone (the financials API, the Fundamentals
+    tab) shows a 2039 period as the latest. The extractor's ``as_of`` is the
+    ceiling; the writer passes the run date.
+    """
+    payload = _eps_facts(
+        [
+            {
+                "val": 1.0,
+                "start": "2023-01-01",
+                "end": "2023-12-31",
+                "fy": 2023,
+                "fp": "FY",
+                "filed": "2024-02-15",
+            },
+            {
+                # Impossible: period ends 2039, "filed" 2024.
+                "val": 9.0,
+                "start": "2039-01-01",
+                "end": "2039-12-31",
+                "fy": 2039,
+                "fp": "FY",
+                "filed": "2024-02-15",
+            },
+        ]
+    )
+
+    bounded = extract_periodic_financials(payload, as_of=date(2026, 10, 15))
+    assert [row["period_end"] for row in bounded] == [date(2023, 12, 31)]
+
+    # A period ending exactly on the run date is real (filed the same day), so
+    # the bound is strict-greater, not >=.
+    same_day = extract_periodic_financials(payload, as_of=date(2039, 12, 31))
+    assert date(2039, 12, 31) in {row["period_end"] for row in same_day}
+
+    # as_of=None stays a pure payload transform, which is what keeps the
+    # max_periods recency tests (periods years in the future) meaningful.
+    unbounded = extract_periodic_financials(payload)
+    assert date(2039, 12, 31) in {row["period_end"] for row in unbounded}
+
+
 def test_feature_sql_joins_on_filing_date_not_period_end():
     """Guard the join predicate itself against regressing to period alignment."""
     import inspect
@@ -745,6 +789,24 @@ def test_feature_sql_joins_on_filing_date_not_period_end():
         "each metric needs its own vintage chain so a label that does not "
         "report it cannot terminate the interval and read as NULL"
     )
+
+
+def test_financials_readers_bound_period_end_to_the_run_date():
+    """The two readers that order by period_end alone must not serve a future one.
+
+    features.py is safe via GREATEST(filed, period_end), but the API endpoint
+    and the Streamlit Fundamentals tab select straight out of the table ordered
+    by period_end, so a 2039 XBRL context wins the sort. V0078 removes the rows
+    and the extractor no longer writes them; these bounds are the backstop.
+    """
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parent.parent
+    api = (root / "api" / "main.py").read_text()
+    assert "f.period_end <= CURRENT_DATE" in api
+    assert "f.period_end <= CAST(:as_of AS date)" in api
+    view = (root / "app" / "views" / "security.py").read_text()
+    assert "period_end <= CURRENT_DATE" in view
 
 
 def _production_quarterly_ctes():
@@ -1344,7 +1406,7 @@ def test_a_failing_issuer_does_not_abort_the_remaining_ones(monkeypatch):
     ]
     survived = []
 
-    def fake_extract(payload):
+    def fake_extract(payload, **kwargs):
         return [{"period_end": date(2024, 12, 31), "fiscal_year": 2024, "eps": 1.0}]
 
     def fake_upsert(conn, security_id, rows):
@@ -1502,7 +1564,7 @@ def test_populate_fundamentals_paginates_in_batches(monkeypatch, capsys):
     monkeypatch.setattr(pf, "count_candidates", lambda *a, **k: len(universe))
     monkeypatch.setattr(pf, "load_candidates", fake_load)
     monkeypatch.setattr(
-        pf, "extract_periodic_financials", lambda payload: [{"period_end": None, "eps": 1.0}]
+        pf, "extract_periodic_financials", lambda payload, **kwargs: [{"period_end": None, "eps": 1.0}]
     )
     monkeypatch.setattr(
         pf,
@@ -1572,7 +1634,7 @@ def test_a_count_overestimate_terminates_instead_of_looping(monkeypatch):
     monkeypatch.setattr(pf, "engine", engine)
     monkeypatch.setattr(pf, "count_candidates", lambda *a, **k: 5)  # stale: universe has 2
     monkeypatch.setattr(pf, "load_candidates", fake_load)
-    monkeypatch.setattr(pf, "extract_periodic_financials", lambda payload: [{"eps": 1.0}])
+    monkeypatch.setattr(pf, "extract_periodic_financials", lambda payload, **kwargs: [{"eps": 1.0}])
     monkeypatch.setattr(pf, "upsert_periodic_financials", lambda *a: 1)
 
     result = pf.populate_fundamentals(batch_size=2)
