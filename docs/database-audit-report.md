@@ -434,17 +434,20 @@ a duplicate index rather than the one that exists. Corrected.
 - The `NOT VALID` marker is the only difference the FK had, which is why it surfaced
   at all: `pg_get_constraintdef` reports validation state, so the check compares it.
 
-### Accepted, not fixed
+### Closed (V0077): the redundant `reference.securities_security_id_key`
 
-`reference.securities_security_id_key` is a redundant `UNIQUE(security_id)`
-alongside the primary key, on an 11,660-row table. It looks free to drop and is
-not: `raw.market_data`'s foreign key was created against this index rather than
-`securities_pkey`, so removing it means dropping that FK and re-validating it against
-**9,274,415 rows** — a pair of `ACCESS EXCLUSIVE` locks on the largest raw table, to
-save a duplicate index on a small one. Declared in `ACCEPTED_DIFFERENCES` with that
-reason; the check prints accepted differences rather than hiding them, so the count
-stays visible. The fix, for a maintenance window: re-point
-`market_data_security_id_fkey` at the primary key, then drop this.
+`reference.securities_security_id_key` was a redundant `UNIQUE(security_id)`
+alongside the primary key, on an 11,660-row table. It looked free to drop and was
+not: every foreign key to `reference.securities` — not only `raw.market_data`'s, as
+first recorded, but all twenty — had been created against this index rather than
+`securities_pkey`, so dropping it meant dropping and re-validating every one of them.
+V0077 does exactly that behind a guard: it drops the twenty parent constraints, drops
+the duplicate, then adds the constraints back, and with only `securities_pkey` left
+each FK re-binds to the primary key. The re-validation of ~21M child rows took **11
+seconds** on this host — nowhere near the ACCESS EXCLUSIVE window the entry feared.
+`ACCEPTED_DIFFERENCES` is now empty, and the drift check builds 1074 objects on both
+sides with no differences. The migration is a no-op on a fresh build, which never
+created the duplicate in the first place.
 
 ### Not wired into the nightly
 
@@ -470,7 +473,7 @@ read-only catalog and data queries against the live `dividend` database, plus
 
 | Check | Result |
 |---|---|
-| Repository vs live | `check_schema_drift` exits 0; one accepted difference (`reference.securities_security_id_key`, unchanged from the 2026-10-02 audit) |
+| Repository vs live | `check_schema_drift` exits 0 with no accepted differences (the last one, `reference.securities_security_id_key`, was closed by V0077) |
 | Table comments | All 16 raw/clean base tables carry a comment; only the two clean views (`v_company_hierarchy`, `v_corporate_action_reference_exceptions`) have uncommented columns, which is why they carry a view-level comment instead |
 | Column comments | Zero uncommented columns on every raw/clean base table |
 | FK index coverage | All 11 raw/clean foreign keys have a leading child index; nulls-and-partial cases covered as before |
@@ -590,9 +593,9 @@ Commit: `perf(raw): avoid rewriting unchanged JSONB payloads on upsert`.
   either unused with confidence, and dropping the wrong one costs a table-sized
   reindex.
 - **`reference.securities.securities_security_id_key`** (2.3 MB, 0 scans) is the
-  redundant UNIQUE already tracked in `check_schema_drift.ACCEPTED_DIFFERENCES`;
-  `raw.market_data`'s foreign key is built against it, so dropping it means
-  re-validating that FK across 9.7M rows. Left.
+  redundant UNIQUE already tracked in `check_schema_drift.ACCEPTED_DIFFERENCES`.
+  Deferred here; later closed by V0077 (see the drift section above), which
+  re-pointed all twenty FKs at the primary key and dropped the duplicate.
 
 Gate for this pass: ruff clean, 1073 tests pass, working tree clean.
 
@@ -726,3 +729,56 @@ part of the difference. The three RETIRED columns (NULL everywhere) were convert
 for consistency. `target_sustainable_dividend` stays an integer label.
 
 Gate: ruff clean, `migrate --check` and `check_schema_drift` clean, 1092 tests pass.
+
+---
+
+# Autovacuum Tuning, Bloat Sweep, Drift Closure, and a Dead companyfacts Read (2026-10-15)
+
+## The fragmentation sweep is clean
+
+A `pgstattuple_approx` pass over every ordinary table (>5 MB free) found only the
+four tables V0074 gave `fillfactor = 85`: `raw.market_data` (15.8% free),
+`fundamentals.periodic_financials` (15.8%), `raw.dividend_data` (15.6%) and, at
+1.4%, `model.features` — all compact. The ~15.8% is exactly the reserved fillfactor
+headroom, not bloat; no other table holds more than 5 MB of free space. The
+fragmentation reclaim is complete and nothing else needs a `VACUUM FULL`.
+
+## fillfactor needs autovacuum to keep up — V0076
+
+Reserving 15% of every page only helps if the dead tuple versions a HOT update
+leaves behind are collected before the reserve fills. Autovacuum's default trigger
+is `20% + 50` rows; on a 9.7M-row table that is ~1.94M dead tuples, so a table
+updated a little every night never crosses it and the reserve silently fills. V0076
+sets `autovacuum_vacuum_scale_factor` / `autovacuum_analyze_scale_factor` to **0.02**
+on the two 9.7M-row tables (`raw.market_data`, `model.features`) and **0.05** on the
+smaller `fundamentals.periodic_financials` (1.28M) and `raw.dividend_data` (0.32M),
+so they vacuum after ~194k / ~64k / ~16k dead tuples instead of the default. The
+settings are mirrored in `sql/schema.sql`; reloptions are not part of the drift
+fingerprint, so no accepted difference is needed.
+
+`model.features` is tuned here but deliberately gets **no** fillfactor: the
+carry-forward guard means unchanged rows are not rewritten, and each run mostly
+appends new `(security_id, as_of_date)` rows that are never updated in place, so a
+write-time reserve would only waste space.
+
+## Drift closed — V0077
+
+See "Closed (V0077)" above. All twenty foreign keys to `reference.securities` were
+re-pointed at `securities_pkey` and the redundant `UNIQUE(security_id)` dropped in
+11 seconds. `ACCEPTED_DIFFERENCES` is now empty; the drift check builds 1074 objects
+on both sides with no differences.
+
+## A dead 1.8 MB read per ticker in the payer scan
+
+`pg_stat_statements` put two `SELECT raw_payload FROM raw.companyfacts ...` queries at
+the top by total time (~1.2M ms and ~0.45M ms, ~97k calls, 40-60% cache hit). One of
+them, `populate_raw_tables._identify_dividend_payers`, re-read the issuer's full
+companyfacts payload on **every ticker row** solely to feed a fallback
+`extract_security_titles(stored_payload)` for `security_titles`. But SEC's
+companyfacts JSON never carries the `dei:SecurityTitle` / `dei:Security12bTitle`
+concepts that function reads — a full scan confirmed **0 of the 7,115 stored
+payloads** contain either key — so it returns `[]` for every one of them. The
+classification already holds the same (empty) `security_titles`, so the fallback
+could never add a title and the read was a dead ~1.8 MB detoast per ticker per run
+(the per-series titles come from `raw.sec_instrument_titles`, a separate path). The
+read and its now-unused import were removed; output is unchanged.
