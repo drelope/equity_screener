@@ -162,7 +162,8 @@ CREATE TABLE IF NOT EXISTS raw.market_data (
   adjusted_close NUMERIC, volume BIGINT, provider VARCHAR(64) NOT NULL,
   retrieved_at TIMESTAMPTZ DEFAULT now(),
   PRIMARY KEY(security_id, observation_date, provider)
-) WITH (fillfactor = 85);
+) WITH (fillfactor = 85, autovacuum_vacuum_scale_factor = 0.02,
+        autovacuum_analyze_scale_factor = 0.02);
 
 -- Date-window scans (the feature build's DISTINCT and min/max probes) filter on
 -- observation_date alone, which the (security_id, observation_date, provider)
@@ -614,7 +615,8 @@ CREATE TABLE IF NOT EXISTS raw.dividend_data (
   frequency VARCHAR(32), currency VARCHAR(8), provider VARCHAR(64) NOT NULL,
   retrieved_at TIMESTAMPTZ DEFAULT now(),
   PRIMARY KEY(security_id, ex_dividend_date, provider)
-) WITH (fillfactor = 85);
+) WITH (fillfactor = 85, autovacuum_vacuum_scale_factor = 0.05,
+        autovacuum_analyze_scale_factor = 0.05);
 
 COMMENT ON COLUMN raw.dividend_data.amount IS
   'Per-share dividend amount. XBRL: us-gaap:CommonStockDividendsPerShareDeclared / '
@@ -1005,7 +1007,8 @@ CREATE TABLE IF NOT EXISTS fundamentals.periodic_financials (
   shares_outstanding NUMERIC,
   source VARCHAR(64), retrieved_at TIMESTAMPTZ DEFAULT now(),
   PRIMARY KEY(security_id, period_end, fiscal_period, filed)
-) WITH (fillfactor = 85);
+) WITH (fillfactor = 85, autovacuum_vacuum_scale_factor = 0.05,
+        autovacuum_analyze_scale_factor = 0.05);
 
 -- V0075: the computed metrics are double precision, not NUMERIC. They are
 -- derived analytics (ratios, margins, yields) computed in float arithmetic and
@@ -1038,7 +1041,8 @@ CREATE TABLE IF NOT EXISTS model.features (
   pe_ratio DOUBLE PRECISION, earnings_yield DOUBLE PRECISION, fcf_yield DOUBLE PRECISION,
   price_to_book DOUBLE PRECISION,
   PRIMARY KEY(security_id, as_of_date)
-);
+) WITH (autovacuum_vacuum_scale_factor = 0.02,
+        autovacuum_analyze_scale_factor = 0.02);
 
 CREATE TABLE IF NOT EXISTS model.scores (
   security_id UUID REFERENCES reference.securities(security_id),
