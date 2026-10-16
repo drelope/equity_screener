@@ -57,7 +57,6 @@ from src.crispdm.sec_client import (
     classify_companyfacts,
     configured_dividend_lookback,
     extract_preferred_terms_from_companyfacts,
-    extract_security_titles,
     get_company_tickers,
     get_companyfacts,
     match_security_title,
@@ -616,15 +615,20 @@ def _identify_dividend_payers(limit=None, reuse_max_age_days=None):
                 )
                 for security_type in security_types
             }
-            stored_payload = None if OFFLINE_ON else _stored_companyfacts(conn, cik)
             payers.append(
                 {
                     "ticker": row["ticker"],
                     "cik": cik,
                     "title": row["title"],
                     "classification": classification,
-                    "security_titles": classification.get("security_titles")
-                    or (extract_security_titles(stored_payload) if stored_payload else []),
+                    # SEC's companyfacts JSON never carries dei SecurityTitle/
+                    # Security12bTitle -- none of the 7,115 stored payloads do --
+                    # so extract_security_titles returns [] for every one of them
+                    # and a stored payload cannot add a title the classification
+                    # does not already hold. Re-reading it here was a dead 1.8MB
+                    # detoast per ticker row; the per-series titles come from the
+                    # filing instance (raw.sec_instrument_titles), not this payload.
+                    "security_titles": classification.get("security_titles") or [],
                     "security_types": security_types,
                     "security_ids": security_ids,
                 }
