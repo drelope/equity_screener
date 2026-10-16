@@ -173,6 +173,81 @@ CREATE INDEX IF NOT EXISTS idx_market_data_observation_date
   INCLUDE (security_id)
   WHERE close IS NOT NULL;
 
+-- Reserved intraday schema. The pipeline is nightly-batch and intraday data is
+-- out of scope for the MVP (docs/requirements.md section 6), so these tables are
+-- empty and unwired. They are declared now, month-partitioned on ts, so a later
+-- intraday source lands in a reviewed shape rather than a new design. Mirrors
+-- V0072, which carries the full rationale (double precision, DEFAULT partition
+-- bootstrap, key marks). Kept beside raw.market_data because both hold market data.
+CREATE TABLE IF NOT EXISTS market.trade (
+  trade_id BIGINT GENERATED ALWAYS AS IDENTITY,
+  security_id UUID NOT NULL REFERENCES reference.securities(security_id),
+  ts TIMESTAMPTZ NOT NULL,
+  price DOUBLE PRECISION NOT NULL,
+  size BIGINT,
+  exchange VARCHAR(16),
+  conditions TEXT[],
+  provider VARCHAR(64) NOT NULL,
+  ingested_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (trade_id, ts)
+) PARTITION BY RANGE (ts);
+
+CREATE TABLE IF NOT EXISTS market.quote (
+  security_id UUID NOT NULL REFERENCES reference.securities(security_id),
+  ts TIMESTAMPTZ NOT NULL,
+  bid DOUBLE PRECISION,
+  ask DOUBLE PRECISION,
+  bid_size BIGINT,
+  ask_size BIGINT,
+  exchange VARCHAR(16),
+  provider VARCHAR(64) NOT NULL,
+  ingested_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (security_id, ts, provider)
+) PARTITION BY RANGE (ts);
+
+CREATE TABLE IF NOT EXISTS market.bar (
+  security_id UUID NOT NULL REFERENCES reference.securities(security_id),
+  interval VARCHAR(16) NOT NULL,
+  ts TIMESTAMPTZ NOT NULL,
+  open DOUBLE PRECISION,
+  high DOUBLE PRECISION,
+  low DOUBLE PRECISION,
+  close DOUBLE PRECISION,
+  volume BIGINT,
+  provider VARCHAR(64) NOT NULL,
+  ingested_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (security_id, interval, ts, provider)
+) PARTITION BY RANGE (ts);
+
+CREATE TABLE IF NOT EXISTS market.trade_default PARTITION OF market.trade DEFAULT;
+CREATE TABLE IF NOT EXISTS market.quote_default PARTITION OF market.quote DEFAULT;
+CREATE TABLE IF NOT EXISTS market.bar_default PARTITION OF market.bar DEFAULT;
+
+CREATE INDEX IF NOT EXISTS ix_market_trade_security_ts
+  ON market.trade (security_id, ts);
+CREATE INDEX IF NOT EXISTS ix_market_trade_ts_brin
+  ON market.trade USING brin (ts);
+
+CREATE INDEX IF NOT EXISTS ix_market_quote_security_ts
+  ON market.quote (security_id, ts);
+CREATE INDEX IF NOT EXISTS ix_market_quote_ts_brin
+  ON market.quote USING brin (ts);
+
+CREATE INDEX IF NOT EXISTS ix_market_bar_security_interval_ts
+  ON market.bar (security_id, interval, ts);
+CREATE INDEX IF NOT EXISTS ix_market_bar_ts_brin
+  ON market.bar USING brin (ts);
+
+COMMENT ON TABLE market.trade IS
+  'RESERVED intraday trade prints, month-partitioned on ts. Empty: no acquisition '
+  'path exists (intraday data is out of scope for the MVP).';
+COMMENT ON TABLE market.quote IS
+  'RESERVED intraday top-of-book quotes, month-partitioned on ts. Empty: no '
+  'acquisition path exists (intraday data is out of scope for the MVP).';
+COMMENT ON TABLE market.bar IS
+  'RESERVED intraday OHLCV bars, month-partitioned on ts. Empty: no '
+  'acquisition path exists (intraday data is out of scope for the MVP).';
+
 CREATE TABLE IF NOT EXISTS raw.ticker_profile (
   security_id UUID PRIMARY KEY REFERENCES reference.securities(security_id),
   ticker VARCHAR(32) NOT NULL,

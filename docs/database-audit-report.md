@@ -597,3 +597,47 @@ Commit: `perf(raw): avoid rewriting unchanged JSONB payloads on upsert`.
 Gate for this pass: ruff clean, 1073 tests pass, working tree clean.
 
 
+---
+
+# Reserved Intraday Schema and Drift Fingerprint Fix (2026-10-15)
+
+## Reserved `market` schema — V0072
+
+The `market` schema has existed since the baseline but held no tables; the pipeline
+is nightly-batch and intraday data is out of scope for the MVP
+(`docs/requirements.md` section 6). V0072 declares the shapes an intraday source
+would land in, so a later addition is a wiring change rather than a design one:
+
+- `market.trade`, `market.quote`, `market.bar`, each **RANGE-partitioned by month
+  on `ts`** with a **DEFAULT partition**, so the tables are writable before any
+  month partition exists and retention is a `DROP` rather than a `DELETE`.
+- Intraday prices/sizes are `DOUBLE PRECISION`, not `NUMERIC`: the daily
+  `raw.market_data` keeps exact `NUMERIC` as the returns/dividend source of record,
+  but tick/quote/bar values are research/execution inputs where compact fixed-width
+  storage and scan speed matter and sub-cent exactness does not.
+- `security_id UUID REFERENCES reference.securities(security_id)` joins intraday to
+  the warehouse identity; a BRIN(ts) plus a btree `(security_id, ts)` index the
+  time and per-security access paths.
+- `market.trade` carries a `bigint` identity because real feeds print several trades
+  at the same microsecond, so `(security_id, ts)` is not unique there.
+
+The tables are empty and no acquisition path writes to them.
+
+## Finding: drift fingerprint collapsed partition-local objects — fixed
+
+Building the reference database for the new partitioned tables surfaced a latent
+defect in `src/crispdm/schema_fingerprint.py`. Declarative partitioning copies a
+table's foreign key onto every partition **under the same constraint name**, and
+each partition carries a copy of every index. The fingerprint keys constraints by
+name, so `market.quote`'s foreign key and the copy on `market.quote_default`
+collapsed onto one key and the winner depended on physical scan order — the check
+reported a database as drifting from itself, nondeterministically across runs.
+
+Fixed by excluding partition-local objects (`NOT relispartition`) from the index
+and constraint queries, matching the relation and column queries which already did.
+Only the parent definitions the project wrote are fingerprinted; the children are
+PostgreSQL's copies of them. This is the project's first partitioned table, so the
+defect had no way to surface before.
+
+Gate for this pass: `migrate --check` and `check_schema_drift` clean, ruff clean,
+`tests/test_market_schema.py` green (17 new).

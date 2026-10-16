@@ -77,7 +77,10 @@ scoring or the nightly depends on them.
 
 ## 6. Out of scope (for the local MVP)
 
-- Intraday/real-time data; the pipeline is nightly-batch.
+- Intraday/real-time data; the pipeline is nightly-batch. The `market` schema is
+  reserved for it — `market.trade`, `market.quote` and `market.bar`, each
+  month-partitioned on `ts` with a DEFAULT partition (V0072) — but the tables are
+  empty and no acquisition path writes to them.
 - Broker integration or live order execution.
 - Non-US / dual-listed universes beyond what SEC company tickers provide.
 - Multi-user SSO; access is single-key.
