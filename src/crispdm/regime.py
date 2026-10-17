@@ -51,22 +51,23 @@ CANONICAL_REGIMES = (
 #: Factor weights per regime (specification section 7.2), plus the production
 #: baseline currently in :data:`src.crispdm.scoring.WEIGHTS`.
 #:
-#: ``legal_rights_score`` is the only remaining constant, imputed to 0.5 for
-#: every security (``scoring.py`` / ``features.py``); ``valuation_score`` is now
-#: a real point-in-time percentile blend, so it counts as measurable. The weight
-#: not backed by evidence is the complement of :data:`MEASURABLE_REGIME_KEYS`.
-#: Recovery carries 25% appreciation, 25% sustainability, 15% income, 15% risk,
-#: 10% legal and 10% valuation: 90% measurable, 10% constant. The first
-#: revision of this table listed Recovery as 75%/25%, which contradicted its
-#: own columns; ``tests/test_regime.py`` recomputes both figures from the
-#: weights rather than trusting the summary row.
+#: ``legal_rights_score`` was retired from the composite: it was a flat 0.5
+#: imputation carrying 0.25 of the weight, so it contributed a constant 0.125 to
+#: every security regardless of evidence. Removing its column leaves each row
+#: summing to 0.75 (baseline) or 0.90 (elsewhere); ``scoring.regime_weights``
+#: renormalises each row over its own sum, so every blend is a weighted mean
+#: over 1.0 and ``Baseline`` reproduces ``scoring.WEIGHTS`` exactly. The table
+#: keeps the specification's remaining numbers rather than the renormalised
+#: fractions, so it stays readable against the published document -- the
+#: retired column and the one-line renormalisation are recorded here, not
+#: silently folded into opaque fractions. ``tests/test_regime.py`` asserts the
+#: sum via ``regime_weights``, the only view a caller can score through.
 REGIME_WEIGHTS = {
     "Baseline": {
         "income": 0.25,
         "sustainability": 0.20,
         "appreciation": 0.15,
         "risk": 0.10,
-        "legal_rights": 0.25,
         "valuation": 0.05,
     },
     "Expansion": {
@@ -74,7 +75,6 @@ REGIME_WEIGHTS = {
         "sustainability": 0.20,
         "appreciation": 0.25,
         "risk": 0.15,
-        "legal_rights": 0.10,
         "valuation": 0.15,
     },
     "Late Cycle": {
@@ -82,7 +82,6 @@ REGIME_WEIGHTS = {
         "sustainability": 0.25,
         "appreciation": 0.15,
         "risk": 0.25,
-        "legal_rights": 0.10,
         "valuation": 0.10,
     },
     "Transition": {
@@ -90,7 +89,6 @@ REGIME_WEIGHTS = {
         "sustainability": 0.25,
         "appreciation": 0.15,
         "risk": 0.20,
-        "legal_rights": 0.10,
         "valuation": 0.15,
     },
     "Slowdown": {
@@ -98,7 +96,6 @@ REGIME_WEIGHTS = {
         "sustainability": 0.30,
         "appreciation": 0.10,
         "risk": 0.25,
-        "legal_rights": 0.10,
         "valuation": 0.10,
     },
     "Recession": {
@@ -106,7 +103,6 @@ REGIME_WEIGHTS = {
         "sustainability": 0.35,
         "appreciation": 0.05,
         "risk": 0.30,
-        "legal_rights": 0.10,
         "valuation": 0.05,
     },
     "Recovery": {
@@ -114,14 +110,13 @@ REGIME_WEIGHTS = {
         "sustainability": 0.25,
         "appreciation": 0.25,
         "risk": 0.15,
-        "legal_rights": 0.10,
         "valuation": 0.10,
     },
 }
 
 #: The five factors with a real per-security measurement. Mirrors
-#: :data:`src.crispdm.scoring.MEASURABLE`; the one remaining key
-#: (``legal_rights``) is the imputed constant.
+#: :data:`src.crispdm.scoring.MEASURABLE`: every remaining weight row key is a
+#: measured component, so the whole composite is now evidence-backed.
 MEASURABLE_REGIME_KEYS = ("income", "sustainability", "appreciation", "risk", "valuation")
 
 #: Credit modifier by environment and vulnerability tier (specification

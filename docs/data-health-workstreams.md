@@ -17,7 +17,7 @@ fixing.
 | 7 | Quarterly TTM vintage chain | **Fixed**; API consumer repaired, build made memory-bounded |
 | 8 | Checkpoint contract versioning | **Fixed**; declared-feature and test-block validity enforced |
 | 9 | Run isolation / unpriced-symbol reporting | **Fixed**; pipeline-wide advisory lock, `errors` split from unpriceable instruments |
-| 10 | Unpriced reporting, run isolation, retired-feature audit | **Fixed**; see WS10 for the full account. `legal_rights_score` (25% weight) and `liquidation_discount` remain retired, and 30% of the composite weight is still constant -- a scoring-policy decision left open |
+| 10 | Unpriced reporting, run isolation, retired-feature audit | **Fixed**; see WS10 for the full account. `liquidation_discount` remains retired, and `legal_rights_score` was retired from the composite weight on 2026-10-15, so no share of the composite is constant |
 
 The dividend path is now correct and auditable, and the feature set is real
 rather than declared. WS5 added the label embargo, four defects it exposed, and
@@ -1369,7 +1369,12 @@ the point:
   securities, and carries 25% of the composite weight, which `scoring.score`
   neutralises with `fillna(0.5)`. *(Update, 2026-10-13: the miner now holds 212
   rows over 612 active preferreds, but no score is defined over the mined terms,
-  so the weight remains neutralised.)*
+  so the weight remains neutralised.)* *(Update, 2026-10-15: the weight itself is
+  now retired. `scoring.WEIGHTS` no longer carries `legal_rights_score` and the
+  `fillna(0.5)` is gone, so the composite is 100% evidence-backed. The five
+  remaining weights renormalise over the 0.75 they share; `score_rank` still
+  carries the raw column to `model.scores`, where it is NULL for every row. See
+  the floor section below for the coverage consequence.)*
 - `data_quality_score` is a two-date snapshot, not a series.
 
 `valuation_score` is separately hardcoded to 0.5 and carries 5%. So 30% of the
@@ -1379,7 +1384,9 @@ by `score_rank` and its tests, so changing it cannot move the WS5 GO verdict.
 *(Update, 2026-10-14: the WS13 Phase 2 work wired a real `valuation_score` from
 the V0068 ratios, so the constant share is now 25% and the measurable subtotal
 75%. The WS5 verdict is unaffected for the reason stated -- nothing here consumes
-the composite. See the WS13 section.)*
+the composite. See the WS13 section.)* *(Update, 2026-10-15: `legal_rights_score`
+is retired from the weight matrix too, so the constant share is now **zero** and
+the composite is entirely measured. See the scoring-policy note below.)*
 
 Neither restored feature is in the declared ML `FEATURES` list, so labels, the
 `features_v3` checkpoint and the walk-forward result are unaffected.
@@ -1498,6 +1505,16 @@ relationship (`composite_score IS NOT NULL` iff `score_coverage >= 0.2857`).
 *(Update, 2026-10-14: WS13 Phase 2 made valuation_score a real measurement, so
 the constant floor is now 0.25 and the relationship is
 `score_coverage >= 0.3333`; V0070 restates the live column comments. See WS13.)*
+*(Update, 2026-10-15: retiring `legal_rights_score` removes the last constant, so
+the measurable and total weights are both 1.0. The floor is still
+`MIN_PRESENT_WEIGHT = 0.50`, but "0.50 of the total" and "0.50 of the measurable"
+now name the same bar -- the two denominators are kept as separate concepts, not
+separate numbers. The relationship becomes `composite_score IS NOT NULL` iff
+`score_coverage >= 0.50`. Measured on the latest feature date (2026-10-14, 2,779
+scoreable rows), 2,727 clear the new bar and 52 fall below it -- a 1.9% reduction
+in the scored cohort, accepted as the cost of removing the free 0.125 of
+composite every security used to receive. `V0079` restates the live
+`model.scores` column comments to match, and the scoring tests were updated.)*
 
 Also fixed alongside it: `predicted_class` was `(composite >= threshold).astype(int)`,
 and `NaN >= threshold` is False, so every unscorable security was filed as a
@@ -1893,6 +1910,10 @@ marginal row that used to clear the bar on the placeholder can now fall below it
 `MEASURABLE_REGIME_KEYS` (regime.py) mirrors the split, and the per-regime
 measurable/constant figure moves from 70/30 to 75/25 at baseline and 80/20 to
 90/10 elsewhere (only `legal_rights` remains constant there).
+*(Update, 2026-10-15: `legal_rights_score` is now retired too, so the split is
+100/0 everywhere and the "only legal_rights remains constant" clause no longer
+applies. The five weights renormalise over the 0.75 they share and the floor
+sits at 0.50 of the full weight. See the floor update in WS10.)*
 
 Measured on the latest feature date (2026-10-14, 2,635 rows): `valuation_score`
 is populated for 2,169 (82%) and takes 2,168 distinct values with **no** row at

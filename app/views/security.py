@@ -15,7 +15,6 @@ RANGES = {"1 year": 365, "3 years": 3 * 365, "5 years": 5 * 365, "All": None}
 SCORE_PARTS = [
     "dividend_income_score",
     "sustainability_score",
-    "legal_rights_score",
     "appreciation_score",
     "risk_score",
     "valuation_score",

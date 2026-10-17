@@ -44,34 +44,24 @@ GRID = (-2.0, -1.0, -0.75, -0.5, -0.25, 0.0, 0.25, 0.5, 0.75, 1.0, 2.0)
 
 
 def test_regime_weights_sum_to_one():
-    for regime, weights in REGIME_WEIGHTS.items():
-        assert sum(weights.values()) == pytest.approx(1.0), regime
+    """Every blend a caller can score through renormalises to 1.0.
 
-
-def test_regime_weight_rows_match_the_specification_summary():
-    """The measurable/constant split in specification section 7.2.
-
-    Recovery was listed as 75% measurable against weights that sum to 80%. The
-    summary is recomputed from the weights rather than read, so the two cannot
-    disagree -- the one unrated leg (``legal_rights``) carries 10% of the weight
-    in every non-baseline regime, which also puts a floor under CVS, and both
-    facts are calibration, not rounding.
+    The stored matrix rows omit the retired ``legal_rights`` leg and sum to 0.75
+    (baseline) or 0.90 (elsewhere); ``scoring.regime_weights`` renormalises each
+    over its own sum, and that is the view the scorer consumes, so the assertion
+    is made there rather than against the raw table.
     """
-    expected = {
-        "Baseline": (0.75, 0.25),
-        "Expansion": (0.90, 0.10),
-        "Late Cycle": (0.90, 0.10),
-        "Transition": (0.90, 0.10),
-        "Slowdown": (0.90, 0.10),
-        "Recession": (0.90, 0.10),
-        "Recovery": (0.90, 0.10),
-    }
+    from src.crispdm.scoring import regime_weights
+
+    for regime in ("Baseline", *CANONICAL_REGIMES):
+        assert sum(regime_weights(regime).values()) == pytest.approx(1.0), regime
+
+
+def test_no_regime_weight_row_carries_the_retired_legal_rights_leg():
+    """The constant leg is gone from every row, not just mapped away."""
     for regime, weights in REGIME_WEIGHTS.items():
-        measurable = sum(weights[k] for k in MEASURABLE_REGIME_KEYS)
-        constant = sum(weights.values()) - measurable
-        want_measurable, want_constant = expected[regime]
-        assert measurable == pytest.approx(want_measurable), regime
-        assert constant == pytest.approx(want_constant), regime
+        assert "legal_rights" not in weights, regime
+        assert set(weights) == set(MEASURABLE_REGIME_KEYS), regime
 
 
 def test_every_canonical_regime_has_a_weight_row():

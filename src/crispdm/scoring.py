@@ -1,49 +1,51 @@
 import numpy as np
 import pandas as pd
 
+#: Section 7.1 factor weights, renormalised to 1.0.
+#:
+#: ``legal_rights_score`` is retired from the composite. It was a flat 0.5
+#: imputation over a column that is NULL for every row (``preferred.contract_terms``
+#: holds 212 terms against 612 active preferreds and no score is defined over
+#: them), carrying 0.25 of the weight -- so every security received the same
+#: 0.125 of composite regardless of evidence. That is not measurement, and a
+#: constant leg also put a 0.25 floor under ``score_coverage``, so a security
+#: with nothing measured still reported 25% covered. Retiring the weight makes
+#: the composite 100% evidence-backed and lets coverage bottom out at 0.
+#:
+#: The five remaining weights renormalise over the 0.75 they now share
+#: (0.25/0.20/0.15/0.10/0.05 divided by 0.75), so the composite is a weighted
+#: mean of measured components and a complete row's score is unchanged relative
+#: to its peers -- the removal of the constant is an affine rescaling that
+#: preserves the ranking among fully measured names.
 WEIGHTS = {
-    "dividend_income_score": 0.25,
-    "sustainability_score": 0.20,
-    "legal_rights_score": 0.25,
-    "appreciation_score": 0.15,
-    "risk_score": 0.10,
-    "valuation_score": 0.05,
+    "dividend_income_score": 0.25 / 0.75,
+    "sustainability_score": 0.20 / 0.75,
+    "appreciation_score": 0.15 / 0.75,
+    "risk_score": 0.10 / 0.75,
+    "valuation_score": 0.05 / 0.75,
 }
 
-#: Components computed from data. One component is still a constant:
-#: ``legal_rights_score`` is imputed to a flat 0.5 for every security and is
-#: 0.25 of the weight. It is excluded from the coverage denominator because
-#: coverage is meant to answer "how much of this score is evidence", and an
-#: imputation is never evidence. Counting it would put a floor of 0.25 under
-#: every row, so a security with nothing measured would still report 25%
-#: covered and the published number would say almost nothing.
+#: Components computed from data. Every component is now measured: the one
+#: constant, ``legal_rights_score`` (an imputed 0.5 worth 0.25 of the weight),
+#: has been retired from :data:`WEIGHTS`. Coverage is therefore the share of the
+#: total weight a filer actually disclosed, and it can reach 0 -- which a
+#: constant leg made impossible, since it guaranteed every row a 0.25 floor.
 #:
-#: ``valuation_score`` used to be the second constant -- a hardcoded 0.5,
-#: excluded for the same reason. It is now a real cross-sectional percentile
-#: blend of the point-in-time valuation ratios (see :data:`VALUATION_PARTS`), so
-#: it counts as evidence; a row with no valuation input simply loses that 0.05
-#: rather than carrying a free placeholder reading.
-MEASURABLE = (
-    "dividend_income_score",
-    "sustainability_score",
-    "appreciation_score",
-    "risk_score",
-    "valuation_score",
-)
+#: ``valuation_score`` used to be a second constant (a hardcoded 0.5) before it
+#: became a real cross-sectional percentile blend (:data:`VALUATION_PARTS`).
+MEASURABLE = tuple(WEIGHTS)
 
 #: Share of the total composite weight that must be present before a composite
 #: is published at all. Below this the score is mostly a rescaled fragment of a
 #: few percentiles, and a rank against a 5,443-name universe is a statement
 #: about the peers who happened to report, not about the company.
 #:
-#: Measured against the *total* weight, not the measurable subtotal, and the
-#: distinction is a policy choice rather than a rounding one. The one constant
-#: component (``legal_rights_score``, 0.25) is always present, so this bar sits
-#: at 0.50 - 0.25 = 0.25 of the 0.75 measurable weight, i.e. 33.3% coverage.
-#: Requiring 0.50 of the *measurable* weight instead would be a stricter rule
-#: wearing the same label and would drop names that clear the total-weight bar.
-#: The stated threshold therefore stays on the total, where the round number
-#: means what a reader expects it to mean.
+#: Measured against the *total* weight. With every component measurable, the
+#: total and the measurable weight are the same 1.0, so the floor is 0.50 of
+#: both. Before ``legal_rights_score`` was retired, 0.25 of the total was a
+#: constant, so the same 0.50 bar sat at only 0.333 of measurement -- and the
+#: change is stricter by that amount, which was measured at 52 of 2,779 scored
+#: names at the latest date (a 1.9% cohort reduction) before being kept.
 MIN_PRESENT_WEIGHT = 0.50
 
 #: Section 7.2 regime weight matrix, keyed by the stored column names rather
@@ -58,7 +60,6 @@ TRANSLATE = {
     "sustainability": "sustainability_score",
     "appreciation": "appreciation_score",
     "risk": "risk_score",
-    "legal_rights": "legal_rights_score",
     "valuation": "valuation_score",
 }
 
@@ -132,16 +133,28 @@ def regime_weights(regime):
     nobody approved, and ``None`` in particular is what arrives while the macro
     feed is absent.
 
+    Each matrix row is renormalised over its own sum. The specification still
+    writes the rows as they were transcribed -- the retired ``legal_rights`` leg
+    removed, leaving the remaining five summing to 0.75 (baseline) or 0.90
+    (elsewhere). Renormalising here rather than editing the table keeps the
+    published numbers readable as the spec's, while guaranteeing every blend is
+    a weighted mean over 1.0 and ``regime="Baseline"`` reproduces :data:`WEIGHTS`
+    exactly (the baseline row divided by its own 0.75 is the same arithmetic as
+    the renormalised :data:`WEIGHTS`).
+
     The keys differ from :data:`WEIGHTS` -- ``income`` versus
-    ``dividend_income_score``, ``legal_rights`` versus ``legal_rights_score`` --
-    because the regime matrix is written against the factor concepts while the
-    scorer's weights are written against the stored columns. TRANSLATE is the
-    only place that knows both.
+    ``dividend_income_score`` -- because the regime matrix is written against the
+    factor concepts while the scorer's weights are written against the stored
+    columns. TRANSLATE is the only place that knows both.
     """
     table = REGIME_WEIGHTS.get(regime)
     if table is None:
         return WEIGHTS
-    return {TRANSLATE[k]: w for k, w in table.items()}
+    weights = {TRANSLATE[k]: w for k, w in table.items()}
+    total = sum(weights.values())
+    if not total:
+        return weights
+    return {name: w / total for name, w in weights.items()}
 
 
 def score(df, regime=None):
@@ -155,9 +168,10 @@ def score(df, regime=None):
     published when ``MIN_PRESENT_WEIGHT`` of the *total* weight is present,
     which is the floor the policy was set with. ``score_coverage`` reports the
     share of the *measurable* weight, so it answers "how much of this is a
-    measurement" and bottoms out at 0 for a security with nothing measured --
-    which a total-weight figure cannot do, because the one constant component
-    (``legal_rights_score``) guarantees every row a reading of at least 0.25.
+    measurement". The two now coincide -- every component is measured, so the
+    measurable weight equals the total weight of 1.0 -- but they are kept as
+    separate concepts because they answer different questions and the coverage
+    denominator must stay fixed even if a constant leg ever returns.
 
     That trade is deliberate. The previous plain sum left 4,127 of 5,443
     securities unscored -- 75.8% -- so the score was unusable for the portfolio,
@@ -182,12 +196,15 @@ def score(df, regime=None):
 
     Only the blend moves. That is what makes the tilt safe to apply while the
     macro feed is still absent: with no regime, every row blends on baseline
-    weights and the output is byte-identical to the previous implementation.
+    weights, and ``regime=None`` is byte-identical to ``regime="Baseline"``.
     """
     x = df.copy()
     x["dividend_income_score"] = pct(x.dividend_yield)
     x["sustainability_score"] = _blend(x, SUSTAINABILITY_PARTS)[0]
-    x["legal_rights_score"] = x.legal_rights_score.fillna(0.5)
+    # ``legal_rights_score`` is deliberately not computed: it is retired from
+    # the composite (see WEIGHTS). score_rank still carries the raw column
+    # through to model.scores, where it stays NULL for every row -- the honest
+    # value for a metric with no defined measurement.
     x["appreciation_score"] = _blend(x, APPRECIATION_PARTS)[0]
     x["risk_score"] = pct(x.volatility_252d, False)
     x["valuation_score"] = _blend(x, VALUATION_PARTS)[0]
