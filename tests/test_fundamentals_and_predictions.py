@@ -1030,7 +1030,8 @@ def test_momentum_is_total_return_and_ignores_impossible_payments():
     DROP TABLE IF EXISTS tmp_mkt, tmp_div;
     CREATE TEMP TABLE tmp_mkt (security_id int, observation_date date, close numeric);
     CREATE TEMP TABLE tmp_div (security_id int, ex_dividend_date date, amount numeric,
-                               provider text, frequency text, concept text);
+                               provider text, frequency text, concept text,
+                               adjusted_amount numeric);
     -- 71 daily rows per security: price 100 through day 39, 98 from day 40.
     INSERT INTO tmp_mkt
     SELECT s, DATE '2021-01-01' + n, CASE WHEN n < 40 THEN 100 ELSE 98 END
@@ -1038,9 +1039,9 @@ def test_momentum_is_total_return_and_ignores_impossible_payments():
     -- Security 4 has no price row on the ex-date itself (a gap in the stored history).
     DELETE FROM tmp_mkt WHERE security_id = 4 AND observation_date = DATE '2021-01-01' + 40;
     INSERT INTO tmp_div VALUES
-      (1, DATE '2021-01-01' + 40, 2, 'OPENBB', 'Annual', NULL),
-      (4, DATE '2021-01-01' + 40, 2, 'OPENBB', 'Annual', NULL),
-      (3, DATE '2021-01-01' + 40, 1000000, 'OPENBB', 'Annual', NULL);
+      (1, DATE '2021-01-01' + 40, 2, 'OPENBB', 'Annual', NULL, NULL),
+      (4, DATE '2021-01-01' + 40, 2, 'OPENBB', 'Annual', NULL, NULL),
+      (3, DATE '2021-01-01' + 40, 1000000, 'OPENBB', 'Annual', NULL, NULL);
     UPDATE tmp_mkt SET close = 100 WHERE security_id = 3;
     """
     query = (
