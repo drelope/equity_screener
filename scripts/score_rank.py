@@ -1,5 +1,6 @@
 import sys
 import uuid
+from datetime import date
 
 import pandas as pd
 from sqlalchemy import text
@@ -64,6 +65,35 @@ def prune_stale_run_rows(c, as_of, scored_sids):
     return pruned
 
 
+def parse_as_of(argv):
+    """The ``--as-of`` date to re-score, or ``None`` for the nightly default.
+
+    A scoring-policy change has to recompute every historical date, not just the
+    latest one, so the run needs to pivot its feature window on a chosen past
+    date. Accepts ``--as-of 2026-09-29`` and ``--as-of=2026-09-29``. A malformed
+    value is a usage error rather than a silent fall-back to the nightly date:
+    running the wrong date would overwrite the right one's scores.
+
+    Kept separate from argparse because the rest of this script's switches are
+    plain ``in sys.argv`` membership tests; a test can therefore exercise the
+    parser without a live database.
+    """
+    for i, arg in enumerate(argv):
+        value = None
+        if arg == "--as-of":
+            if i + 1 >= len(argv):
+                raise SystemExit("--as-of needs a date (YYYY-MM-DD)")
+            value = argv[i + 1]
+        elif arg.startswith("--as-of="):
+            value = arg.split("=", 1)[1]
+        if value is not None:
+            try:
+                return date.fromisoformat(value)
+            except ValueError:
+                raise SystemExit(f"--as-of is not a date (YYYY-MM-DD): {value!r}") from None
+    return None
+
+
 def main():
     """Score the latest feature date into model.scores, predictions and rankings.
 
@@ -90,8 +120,12 @@ def main():
 
     # Each security's most recent feature row within the carry-forward window,
     # not one global as_of_date. See src.crispdm/feature_window.py for why.
+    #
+    # --as-of pivots the window on a past date so a scoring-policy change can be
+    # replayed over history; the nightly passes None and pivots on the newest row.
+    as_of_arg = parse_as_of(sys.argv)
     carry_days = carry_forward_days()
-    df = read_df(scoring_features_sql(), params={"carry_days": carry_days})
+    df = read_df(scoring_features_sql(), params={"carry_days": carry_days, "as_of": as_of_arg})
     if not df.empty:
         carried = int((df["as_of_date"] < df["as_of_date"].max()).sum())
         if carried:
@@ -173,6 +207,19 @@ def main():
     # constant across the frame, so iloc[0] would date the whole run to one
     # security's (possibly stale) row.
     as_of = x["as_of_date"].max()
+
+    # A requested --as-of must actually be the date the window resolved to.
+    # Anchoring on a date with no observation at it (a weekend, or a date past
+    # the newest feature) would leave the frame's newest row on some other day,
+    # and the prune below would then delete the requested date's scores while
+    # this run wrote nothing back to it. Refuse rather than score the wrong date.
+    if as_of_arg is not None and as_of != as_of_arg:
+        print(
+            f"--as-of {as_of_arg} requested but the newest feature row within the "
+            f"carry-forward window is {as_of}; refusing to re-score the wrong date.",
+            file=sys.stderr,
+        )
+        return 2
 
     # Security ids this run writes a score for, at the run date only.
     scored_sids = x.loc[x["as_of_date"] == as_of, "security_id"].tolist()

@@ -349,7 +349,9 @@ def render() -> None:
         "The ML model was evaluated and not adopted."
     )
     ui.refresh_button("screener_refresh")
-    df = ui.query(dashboard_features_sql(COLUMNS), {"carry_days": carry_forward_days()})
+    df = ui.query(
+        dashboard_features_sql(COLUMNS), {"carry_days": carry_forward_days(), "as_of": None}
+    )
     if df.empty:
         st.warning("No data. Run ETL, feature engineering, and scoring first.")
         return

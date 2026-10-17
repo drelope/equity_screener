@@ -60,12 +60,22 @@ class TestBothConsumersShareTheWindow:
         assert "WHERE g.as_of_date=(SELECT MAX(as_of_date) FROM model.features)" not in flat
 
     def test_window_is_bound_not_interpolated(self, sql_fn):
-        assert ":carry_days" in _flat(sql_fn())
-
-    def test_upper_bound_is_still_the_latest_feature_date(self, sql_fn):
-        """Carry forward from the past only; never admit a future-dated row."""
         flat = _flat(sql_fn())
-        assert "g.as_of_date<=(SELECT MAX(as_of_date) FROM model.features)" in flat
+        assert ":carry_days" in flat
+        assert ":as_of" in flat
+
+    def test_upper_bound_defaults_to_the_latest_feature_date(self, sql_fn):
+        """Carry forward from the past only; never admit a future-dated row.
+
+        The anchor is COALESCE(:as_of, MAX) so the nightly (unbound :as_of)
+        cannot pass the newest observation, while a re-scoring run can pivot on a
+        chosen past date.
+        """
+        flat = _flat(sql_fn())
+        assert (
+            "g.as_of_date<=COALESCE(CAST(:as_of AS date), (SELECT MAX(as_of_date)"
+            " FROM model.features))" in flat
+        )
 
     def test_lower_bound_is_the_tolerance(self, sql_fn):
         assert "- make_interval(days => :carry_days)" in _flat(sql_fn())
@@ -163,18 +173,21 @@ def _live_engine():
 class TestLiveWindow:
     """Runs the real query text, not a hand-copied approximation of it."""
 
-    def _run(self, sql, days=None):
-        """Substitute :carry_days inline.
+    def _run(self, sql, days=None, as_of=None):
+        """Substitute :carry_days and :as_of inline.
 
         exec_driver_sql hands the string to psycopg untouched, so SQLAlchemy's
         :name -> $n translation never happens and Postgres would see a literal
-        colon. The value is an int from config, so formatting it in is safe.
+        colon. The tolerance is an int from config and as_of is either None or a
+        date the test constructed, so formatting them in is safe.
         """
         engine = _live_engine()
         value = fw.carry_forward_days() if days is None else days
         assert isinstance(value, int), f"tolerance must interpolate as an int: {value!r}"
+        anchor = "NULL" if as_of is None else f"DATE '{as_of}'"
+        sql = sql.replace(":as_of", anchor).replace(":carry_days", str(value))
         with engine.connect() as conn:
-            return conn.exec_driver_sql(sql.replace(":carry_days", str(value))).all()
+            return conn.exec_driver_sql(sql).all()
 
     def test_scoring_sql_is_valid_and_returns_one_row_per_security(self):
         # Project two columns rather than *: the window is the subject here, and
@@ -226,6 +239,41 @@ class TestLiveWindow:
         )
         assert rows[0].n == 0
 
+    def _second_latest_date(self):
+        rows = self._run(
+            "SELECT DISTINCT as_of_date FROM model.features ORDER BY as_of_date DESC LIMIT 2"
+        )
+        if len(rows) < 2:
+            pytest.skip("need at least two distinct feature dates")
+        return rows[1].as_of_date
+
+    def test_explicit_as_of_never_reads_a_newer_row(self):
+        """Point-in-time: an anchor must not admit a feature dated after it."""
+        target = self._second_latest_date()
+        rows = self._run(
+            f"""SELECT count(*) AS n FROM ({fw.scoring_features_sql()}) t
+                WHERE t.as_of_date > DATE '{target}'""",
+            as_of=target,
+        )
+        assert rows[0].n == 0
+
+    def test_explicit_as_of_caps_the_frame_at_the_anchor(self):
+        target = self._second_latest_date()
+        rows = self._run(
+            f"SELECT max(as_of_date) AS m FROM ({fw.scoring_features_sql()}) t",
+            as_of=target,
+        )
+        assert rows[0].m <= target
+
+    def test_default_anchor_still_reads_the_latest_date(self):
+        """Binding :as_of to NULL must not change the nightly's behaviour."""
+        rows = self._run(
+            f"SELECT max(as_of_date) AS m FROM ({fw.scoring_features_sql()}) t",
+            as_of=None,
+        )
+        latest = self._run("SELECT max(as_of_date) AS m FROM model.features")[0].m
+        assert rows[0].m == latest
+
 
 class TestRunDateIsNotTakenFromTheFirstRow:
     """score_rank must date the run by the newest row, not by whichever is first.
@@ -244,3 +292,41 @@ class TestRunDateIsNotTakenFromTheFirstRow:
         source = inspect.getsource(score_rank)
         assert 'as_of = x["as_of_date"].iloc[0]' not in source
         assert "x['as_of_date'].iloc[0]" not in source
+
+
+class TestAsOfArgument:
+    """--as-of pivots the window on a past date for a scoring-policy replay."""
+
+    def test_absent_is_the_nightly_default(self):
+        assert score_rank.parse_as_of(["score_rank.py"]) is None
+        assert score_rank.parse_as_of(["score_rank.py", "--prune-superseded"]) is None
+
+    def test_parses_the_space_separated_form(self):
+        from datetime import date
+
+        assert score_rank.parse_as_of(["x", "--as-of", "2026-09-29"]) == date(2026, 9, 29)
+
+    def test_parses_the_equals_form(self):
+        from datetime import date
+
+        assert score_rank.parse_as_of(["x", "--as-of=2026-09-29"]) == date(2026, 9, 29)
+
+    def test_a_missing_value_is_a_usage_error(self):
+        with pytest.raises(SystemExit):
+            score_rank.parse_as_of(["x", "--as-of"])
+
+    def test_a_malformed_date_is_a_usage_error_not_a_fall_back(self):
+        """Silently running the nightly date would overwrite the wrong date's scores."""
+        with pytest.raises(SystemExit):
+            score_rank.parse_as_of(["x", "--as-of=not-a-date"])
+
+
+class TestExplicitAsOfBinds:
+    def test_score_rank_binds_as_of_into_the_query(self):
+        source = inspect.getsource(score_rank)
+        assert '"as_of": as_of_arg' in source
+
+    def test_score_rank_refuses_a_misresolved_date(self):
+        """An anchor with no observation must not silently score another date."""
+        source = inspect.getsource(score_rank)
+        assert "refusing to re-score the wrong date" in source

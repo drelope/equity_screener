@@ -21,13 +21,17 @@ because its present inputs fell below ``MIN_PRESENT_WEIGHT``, so this widened
 the read window without changing any score.
 """
 
-# The date window, relative to the latest observation in the table. Written out
-# rather than passed in so the SQL stays self-contained and no caller can drift
-# onto a different run date; it reads MAX(as_of_date) twice, which is an index
-# probe thanks to idx_features_as_of (V0037).
-_WINDOW = """
-      g.as_of_date <= (SELECT MAX(as_of_date) FROM model.features)
-      AND g.as_of_date >= (SELECT MAX(as_of_date) FROM model.features)
+# The anchor the window pivots on: the run date, bounded by the newest
+# observation in the table. The default is that newest observation -- the
+# nightly's behaviour -- but a re-scoring run (a scoring-policy change recomputes
+# every historical date, not just the latest) binds ``:as_of`` to pivot the whole
+# window on a chosen past date instead. Both are read from the bound parameter so
+# no caller can interpolate a different date in; it reads MAX(as_of_date) twice,
+# which is an index probe thanks to idx_features_as_of (V0037).
+_ANCHOR = "COALESCE(CAST(:as_of AS date), (SELECT MAX(as_of_date) FROM model.features))"
+_WINDOW = f"""
+      g.as_of_date <= {_ANCHOR}
+      AND g.as_of_date >= {_ANCHOR}
                            - make_interval(days => :carry_days)
 """
 
@@ -65,6 +69,12 @@ def scoring_features_sql() -> str:
     0.1ms each here. The window is a per-security lookup, so drive it from the
     security list and let features_pkey (security_id, as_of_date) serve each
     probe.
+
+    Callers bind two parameters: ``carry_days`` and ``as_of``. Bind ``as_of`` to
+    ``None`` for the nightly (the window pivots on the newest feature date); bind
+    a date to re-score that historical date point-in-time. The bound date can only
+    move the window *earlier* than the newest row, never later, so it cannot read
+    a future-dated feature.
     """
     return f"""
     SELECT f.*, s.ticker, s.security_type
