@@ -32,7 +32,8 @@ Options:
         DIVIDEND_LOOKBACK_START) so nightly runs acquire the 2025-01-01+
         window once and keep accruing.
     --end-date YYYY-MM-DD
-        Latest dividend date (OpenBB); default now.
+        Latest dividend date (OpenBB); default open-ended, so announced
+        upcoming ex-dates are kept.
     --full-history
         Total-historical provision for post-PoC: ignore the lookback bound and
         ask OpenBB for the full available history (from 1970-01-01). SEC XBRL
@@ -54,7 +55,7 @@ import argparse
 import json
 import re
 import sys
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 import pandas as pd
@@ -67,6 +68,7 @@ if __package__ in (None, ""):
 from scripts.populate_companyfacts import upsert_companyfacts
 from src.crispdm.config import settings
 from src.crispdm.db import engine
+from src.crispdm.doc_clauses import depositary_ratio
 from src.crispdm.sec_client import (
     build_companyfacts_concept_groups,
     get_company_tickers,
@@ -154,6 +156,24 @@ def normalize_currency(value):
 
 
 FULL_HISTORY_START = "1970-01-01"
+#: Feed recorded for an OPENBB frame that does not say which provider answered.
+DEFAULT_OPENBB_FEED = "yfinance"
+#: Days before a new OpenBB feed's first event in which the old feed's rows are
+#: still treated as the same payments dated differently.
+SUPERSEDE_TOLERANCE_DAYS = 7
+#: An upcoming ex-date further out than this is kept only when it carries a
+#: declaration date. FMP also lists scheduled coupons of exchange-traded notes out to
+#: maturity (GECCG through 2029) -- projections, not announced dividends.
+UNDECLARED_HORIZON_DAYS = 120
+
+
+def _is_projection(ex_date, declaration_date, today=None):
+    """True for an undeclared ex-date beyond the announcement horizon."""
+    if ex_date is None or declaration_date is not None:
+        return False
+    today = today or date.today()
+    return (ex_date - today).days > UNDECLARED_HORIZON_DAYS
+
 
 SEC_DIVIDEND_CONCEPTS = (
     "CommonStockDividendsPerShareDeclared",
@@ -326,11 +346,19 @@ def normalize_sec_dividend_rows(ticker, sec_rows):
     return normalized
 
 
+def _text(value):
+    """Stripped text, or '' for None/NaN (pandas fills missing feed fields with NaN)."""
+    if value is None or (isinstance(value, float) and value != value):
+        return ""
+    return str(value).strip()
+
+
 def normalize_openbb_dividend_rows(ticker, data_frame):
     normalized = []
     if data_frame is None:
         return normalized
 
+    feed = getattr(data_frame, "attrs", {}).get("feed") or DEFAULT_OPENBB_FEED
     df = data_frame.copy()
     if hasattr(df, "columns"):
         df.columns = [str(c).lower().replace(" ", "_") for c in df.columns]
@@ -345,30 +373,70 @@ def normalize_openbb_dividend_rows(ticker, data_frame):
         if amount is None or amount <= 0:
             continue
 
+        ex_dividend_date = parse_date(
+            row.get("ex_dividend_date") or row.get("date") or row.get("payment_date")
+        )
+        declaration_date = parse_date(row.get("declaration_date"))
+        if isinstance(ex_dividend_date, datetime):
+            ex_dividend_date = ex_dividend_date.date()
+        if _is_projection(ex_dividend_date, declaration_date):
+            continue
+
         normalized.append(
             {
                 "ticker": ticker,
                 "provider": "OPENBB",
+                "feed": feed,
                 "concept": "",
-                "ex_dividend_date": parse_date(
-                    row.get("ex_dividend_date") or row.get("date") or row.get("payment_date")
-                ),
-                "declaration_date": parse_date(row.get("declaration_date")),
+                "ex_dividend_date": ex_dividend_date,
+                "declaration_date": declaration_date,
                 "record_date": parse_date(row.get("record_date")),
                 "payment_date": parse_date(row.get("payment_date") or row.get("date")),
                 "amount": amount,
+                "amount_feed": _text(row.get("amount_feed")) or feed,
                 "adjusted_amount": (
                     safe_float(row.get("adjusted_amount"))
                     or safe_float(row.get("adj_amount"))
                     or safe_float(row.get("adjusted_dividend"))
                 ),
-                "frequency": (row.get("frequency") or row.get("period") or "Annual").strip()
-                or "Annual",
+                "frequency": _text(row.get("frequency")) or _text(row.get("period")) or "Annual",
                 "currency": normalize_currency(row.get("currency")),
             }
         )
 
-    return normalized
+    return _collapse_duplicate_payments(normalized)
+
+
+def _collapse_duplicate_payments(rows):
+    """Keep one row per payment when a feed lists it under two ex-dates.
+
+    FMP occasionally repeats a payment: same payment date, same amount (within 1%),
+    same or missing declaration date, a second ex-date days later (CAT 10-19 and
+    10-26 for the 11-19 payment; RYAAY's copy even falls after its record date).
+    Payments that merely share a pay date with different amounts -- a special next to
+    a regular dividend, Brazilian interest on capital -- are distinct and kept.
+    Preference: a declared row, then one whose ex-date is not after its record date,
+    then the earliest ex-date.
+    """
+
+    def rank(row):
+        record, ex = row.get("record_date"), row.get("ex_dividend_date")
+        impossible = record is not None and ex is not None and ex > record
+        return (row.get("declaration_date") is None, impossible, ex or date.max)
+
+    def same_payment(a, b):
+        if a.get("payment_date") is None or a.get("payment_date") != b.get("payment_date"):
+            return False
+        da, db = a.get("declaration_date"), b.get("declaration_date")
+        if da is not None and db is not None and da != db:
+            return False
+        return abs(a["amount"] - b["amount"]) <= 0.01 * max(a["amount"], b["amount"])
+
+    kept = []
+    for row in sorted(rows, key=rank):
+        if not any(same_payment(row, other) for other in kept):
+            kept.append(row)
+    return sorted(kept, key=lambda r: r.get("ex_dividend_date") or date.min)
 
 
 def merge_dividend_records(records):
@@ -554,6 +622,8 @@ def fetch_dividend_data(
     )
 
     records = []
+    amount_checks = _load_amount_checks() if "openbb" in chosen_sources else {}
+    new_checks = []
     for ticker in target_tickers:
         if "sec" in chosen_sources:
             cik = sec_ticker_map.get(ticker.upper())
@@ -568,14 +638,87 @@ def fetch_dividend_data(
                 openbb_start = FULL_HISTORY_START
             else:
                 openbb_start = start_date or settings.dividend_lookback_start.isoformat()
-            openbb_end = end_date or datetime.now(timezone.utc).strftime("%Y-%m-%d")
+            # No default end date: FMP publishes declared ex-dates that are still ahead,
+            # and capping at today would drop the announced next dividend.
             try:
-                frame = openbb_dividends(ticker, openbb_start, openbb_end)
+                frame = openbb_dividends(
+                    ticker,
+                    openbb_start,
+                    end_date,
+                    amount_checks=amount_checks.get(ticker.upper(), {}),
+                )
                 records.extend(normalize_openbb_dividend_rows(ticker, frame))
+                for check in getattr(frame, "attrs", {}).get("amount_checks") or []:
+                    new_checks.append({"ticker": ticker.upper(), **check})
             except Exception as exc:
                 print(f"OpenBB fetch failed for {ticker}: {exc}")
 
+    _save_amount_checks(new_checks)
     return merge_dividend_records(records)
+
+
+#: An unresolved FMP/Yahoo disagreement is asked of Polygon again after this long.
+RECHECK_UNRESOLVED_DAYS = 7
+
+
+def _load_amount_checks():
+    """Earlier FMP/Yahoo amount verdicts as {ticker: {ex_date: row}}.
+
+    Unresolved verdicts are checked again after ``RECHECK_UNRESOLVED_DAYS`` only when
+    Polygon gave no figure or a USD one; a local-currency-only figure (FORFF in CAD,
+    ASRMF in MXN) will not change, and FMP's USD conversion stays. A database
+    without the V0083 table just has no cache.
+    """
+    try:
+        with engine.connect() as conn:
+            rows = conn.execute(
+                text("""
+                SELECT ticker, ex_dividend_date, fmp_amount, yahoo_amount, chosen
+                FROM raw.dividend_amount_check
+                WHERE chosen <> 'unresolved'
+                   OR checked_at > now() - make_interval(days => :days)
+                   OR COALESCE(polygon_currency, 'USD') NOT IN ('USD', '')
+            """),
+                {"days": RECHECK_UNRESOLVED_DAYS},
+            ).mappings()
+            checks = {}
+            for row in rows:
+                checks.setdefault(row["ticker"], {})[row["ex_dividend_date"]] = dict(row)
+            return checks
+    except Exception as exc:  # noqa: BLE001 - the cache is an optimisation
+        print(f"Dividend amount verdict cache unavailable: {exc}")
+        return {}
+
+
+def _save_amount_checks(checks):
+    if not checks:
+        return
+    try:
+        with engine.begin() as conn:
+            conn.execute(
+                text("""
+                INSERT INTO raw.dividend_amount_check
+                (ticker, ex_dividend_date, fmp_amount, yahoo_amount, polygon_amount,
+                 polygon_currency, chosen, checked_at)
+                VALUES (:ticker, :ex_dividend_date, :fmp_amount, :yahoo_amount,
+                        :polygon_amount, :polygon_currency, :chosen, now())
+                ON CONFLICT (ticker, ex_dividend_date) DO UPDATE SET
+                    fmp_amount = EXCLUDED.fmp_amount,
+                    yahoo_amount = EXCLUDED.yahoo_amount,
+                    polygon_amount = EXCLUDED.polygon_amount,
+                    polygon_currency = EXCLUDED.polygon_currency,
+                    chosen = EXCLUDED.chosen,
+                    checked_at = EXCLUDED.checked_at
+            """),
+                checks,
+            )
+    except Exception as exc:  # noqa: BLE001 - verdicts are re-derived next run
+        print(f"Could not store dividend amount verdicts: {exc}")
+        return
+    chosen = {}
+    for check in checks:
+        chosen[check["chosen"]] = chosen.get(check["chosen"], 0) + 1
+    print(f"Settled FMP/Yahoo amount disagreements: {chosen}")
 
 
 def load_security_ids(conn):
@@ -682,11 +825,19 @@ NON_QUALIFIED_RE = re.compile(r"non[- ]qualified", re.IGNORECASE)
 QUALIFIED_RE = re.compile(r"\bqualified\b(?!\s+municipal)", re.IGNORECASE)
 
 
+MIXED_FRACTION_PERCENT_RE = re.compile(r"\b(\d+)\s+(\d)/(\d{1,2})\s*%")
+
+
 def parse_percent(text):
-    """Extract the first percentage (e.g. ``8.625%``) from a string."""
+    """Extract the first percentage (``8.625%``, or ``8 3/8%``) from a string."""
     if not text:
         return None
     m = PERCENT_RE.search(str(text))
+    fraction = MIXED_FRACTION_PERCENT_RE.search(str(text))
+    # "8 3/8%" would otherwise read as the "8%" ending the fraction.
+    if fraction and (m is None or fraction.start() <= m.start()) and int(fraction.group(3)):
+        whole, numerator, denominator = (int(part) for part in fraction.groups())
+        return whole + numerator / denominator
     return safe_float(m.group(1)) if m else None
 
 
@@ -817,7 +968,12 @@ def summarize_ticker_profile(ticker, security_name=None, security_type=None, dat
         "floating_spread": parse_floating_spread(text_source),
         "tax_status": parse_tax_status(text_source),
         "call_date": parse_call_date(security_name),
-        "liquidation_preference": parse_liquidation_preference(security_name),
+        # A depositary title quotes the underlying share's par ("1/1,000th
+        # interest in a share ... $1.00 par"), not the listed receipt's
+        # preference; only the contract miner establishes that equivalent.
+        "liquidation_preference": None
+        if depositary_ratio(security_name)
+        else parse_liquidation_preference(security_name),
         "raw_payload": json.dumps(data, default=str),
     }
 
@@ -1017,6 +1173,60 @@ def _populate_preferred_terms(conn, limit=None):
 populate_preferred_terms = _populate_preferred_terms
 
 
+def _drop_superseded_feed_rows(conn, insert_rows, window_start, window_end=None):
+    """Remove stored OPENBB rows that the incoming series no longer carries.
+
+    One security keeps one listing-level series, and the feed that answered is
+    authoritative over the range it covers: stored OPENBB rows there whose ex-date is
+    not among the incoming ones are deleted (rows with the same ex-date are
+    overwritten by the upsert). That removes
+      * another feed's copy of the same payment dated differently -- GFIOF is two
+        days apart between Yahoo and FMP on every event -- which would otherwise be
+        counted twice by every trailing-dividend feature, and
+      * this feed's own rows it has since corrected or dropped (an announced ex-date
+        moved, a duplicate collapsed by ``_collapse_duplicate_payments``).
+    The range starts at the incoming first event -- for another feed's rows
+    ``SUPERSEDE_TOLERANCE_DAYS`` earlier, so its copy of that first payment is caught
+    -- and never before ``window_start``; older history stays.
+    """
+    by_security = {}
+    for row in insert_rows:
+        if row["provider"] != "OPENBB" or not row.get("feed"):
+            continue
+        feeds, dates = by_security.setdefault(row["sec_id"], (set(), set()))
+        feeds.add(row["feed"])
+        dates.add(row["ex_date"])
+    removed = 0
+    for security_id, (feeds, dates) in by_security.items():
+        if len(feeds) != 1:
+            continue
+        first = min(dates)
+        first = first.date() if isinstance(first, datetime) else first
+        lower = str(window_start)[:10]
+        removed += conn.execute(
+            text("""
+            DELETE FROM raw.dividend_data
+            WHERE security_id = :sid AND provider = 'OPENBB'
+              AND ex_dividend_date >= CASE WHEN feed IS NOT DISTINCT FROM :feed
+                                           THEN CAST(:same_start AS date)
+                                           ELSE CAST(:other_start AS date) END
+              AND (CAST(:end AS date) IS NULL OR ex_dividend_date <= CAST(:end AS date))
+              AND NOT (ex_dividend_date = ANY(:dates))
+            """),
+            {
+                "sid": security_id,
+                "feed": next(iter(feeds)),
+                "same_start": max(lower, first.isoformat()),
+                "other_start": max(
+                    lower, (first - timedelta(days=SUPERSEDE_TOLERANCE_DAYS)).isoformat()
+                ),
+                "end": window_end,
+                "dates": sorted(dates),
+            },
+        ).rowcount
+    return removed
+
+
 def populate_dividend_data(
     limit=None,
     tickers=None,
@@ -1062,6 +1272,11 @@ def populate_dividend_data(
     inserted = 0
     skipped = 0
     errors = 0
+    replaced = 0
+    if full_history:
+        window_start = FULL_HISTORY_START
+    else:
+        window_start = start_date or settings.dividend_lookback_start.isoformat()
 
     with engine.begin() as conn:
         ticker_security_ids, cik_security_ids = load_security_ids(conn)
@@ -1094,10 +1309,18 @@ def populate_dividend_data(
                     "frequency": "Irregular",  # overwritten from the cadence pass below
                     "currency": normalize_currency(div.get("currency")),
                     "provider": provider,
+                    "feed": div.get("feed") if provider == "OPENBB" else None,
+                    "amount_feed": (
+                        (div.get("amount_feed") or div.get("feed"))
+                        if provider == "OPENBB"
+                        else None
+                    ),
                     "concept": (div.get("concept") or "")[:96],
                     "retrieved_at": datetime.now(timezone.utc),
                 }
             )
+
+        replaced = _drop_superseded_feed_rows(conn, insert_rows, window_start, end_date)
 
         # The cadence is a property of the security's payment series, not of a
         # single provider row: derive it once per security from the stored and
@@ -1113,10 +1336,10 @@ def populate_dividend_data(
                 INSERT INTO raw.dividend_data
                 (security_id, ex_dividend_date, declaration_date, record_date,
                  payment_date, amount, adjusted_amount, frequency, currency, provider,
-                 concept, retrieved_at)
+                 feed, amount_feed, concept, retrieved_at)
                 VALUES (:sec_id, :ex_date, :decl_date, :rec_date, :pay_date,
                         :amount, :adjusted_amount, :frequency, :currency, :provider,
-                        :concept, :retrieved_at)
+                        :feed, :amount_feed, :concept, :retrieved_at)
                 ON CONFLICT (security_id, ex_dividend_date, provider) DO UPDATE SET
                     declaration_date = EXCLUDED.declaration_date,
                     record_date = EXCLUDED.record_date,
@@ -1125,6 +1348,8 @@ def populate_dividend_data(
                     adjusted_amount = EXCLUDED.adjusted_amount,
                     frequency = EXCLUDED.frequency,
                     currency = EXCLUDED.currency,
+                    feed = EXCLUDED.feed,
+                    amount_feed = EXCLUDED.amount_feed,
                     concept = EXCLUDED.concept,
                     retrieved_at = EXCLUDED.retrieved_at
             """),
@@ -1134,6 +1359,7 @@ def populate_dividend_data(
 
     print("\n✓ Populated raw.dividend_data:")
     print(f"  Inserted: {inserted} records")
+    print(f"  Replaced: {replaced} superseded rows from another OpenBB feed")
     print(f"  Skipped: {skipped} records")
     print(f"  Errors: {errors} records")
 

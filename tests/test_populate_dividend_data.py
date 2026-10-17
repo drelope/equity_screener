@@ -479,6 +479,184 @@ def test_normalize_openbb_dividend_rows_tags_empty_concept():
     assert len(rows) == 1
     assert rows[0]["provider"] == "OPENBB"
     assert rows[0]["concept"] == ""
+    assert rows[0]["feed"] == "yfinance", "untagged frames are the yfinance feed"
+
+
+def test_normalize_openbb_dividend_rows_keeps_fmp_feed_and_both_amounts():
+    """FMP's amount is as declared; adjusted_amount restates it after splits."""
+    frame = pd.DataFrame(
+        [
+            {
+                "ex_dividend_date": "2025-11-03",
+                "amount": 0.40,
+                "adjusted_amount": 0.1333,
+                "payment_date": "2025-11-20",
+                "declaration_date": "2025-10-01",
+                "frequency": float("nan"),
+            }
+        ]
+    )
+    frame.attrs["feed"] = "fmp"
+
+    (row,) = normalize_openbb_dividend_rows("WLFC", frame)
+
+    assert row["feed"] == "fmp"
+    assert row["amount"] == 0.40
+    assert row["adjusted_amount"] == 0.1333
+    assert row["declaration_date"] == date(2025, 10, 1)
+    assert row["frequency"] == "Annual", "a NaN cadence must not break normalization"
+    assert row["amount_feed"] == "fmp", "without a reconciled amount the feed's own is used"
+
+
+def test_a_reconciled_amount_keeps_its_amount_feed():
+    """CHA: Polygon confirmed Yahoo's 0.92, so the fmp row carries Yahoo's amount."""
+    frame = pd.DataFrame(
+        [
+            {
+                "ex_dividend_date": "2025-12-08",
+                "amount": 0.92,
+                "adjusted_amount": 0.92,
+                "amount_feed": "yfinance",
+            }
+        ]
+    )
+    frame.attrs["feed"] = "fmp"
+
+    (row,) = normalize_openbb_dividend_rows("CHA", frame)
+
+    assert (row["feed"], row["amount_feed"], row["amount"]) == ("fmp", "yfinance", 0.92)
+
+
+def test_undeclared_far_future_coupons_are_projections_not_announcements():
+    """FMP lists GECCG note coupons out to 2029; only declared or near dates count."""
+    from datetime import timedelta
+
+    today = date.today()
+    frame = pd.DataFrame(
+        [
+            {"ex_dividend_date": today + timedelta(days=30), "amount": 0.48},
+            {"ex_dividend_date": today + timedelta(days=400), "amount": 0.48},
+            {
+                "ex_dividend_date": today + timedelta(days=300),
+                "amount": 0.36,
+                "declaration_date": today - timedelta(days=10),
+            },
+        ]
+    )
+    frame.attrs["feed"] = "fmp"
+
+    kept = sorted(r["ex_dividend_date"] for r in normalize_openbb_dividend_rows("X", frame))
+
+    assert kept == [today + timedelta(days=30), today + timedelta(days=300)]
+
+
+def test_the_incoming_feed_replaces_stale_rows_only_inside_its_own_range():
+    """GFIOF: FMP dates every event two days off Yahoo; both must not be kept."""
+    import pytest
+
+    pytest.importorskip("sqlalchemy")
+    from sqlalchemy import text
+
+    from src.crispdm.db import engine
+
+    try:
+        conn = engine.connect()
+    except Exception:  # noqa: BLE001
+        pytest.skip("no database available")
+    with conn:
+        trans = conn.begin()
+        try:
+            sid = conn.execute(
+                text("SELECT security_id FROM reference.securities ORDER BY ticker LIMIT 1")
+            ).scalar()
+            conn.execute(
+                text("DELETE FROM raw.dividend_data WHERE security_id = :sid"), {"sid": sid}
+            )
+            for ex_date, feed in [
+                ("2019-03-01", "yfinance"),  # before FMP's first event: kept
+                ("2024-02-20", "yfinance"),  # 12 days before it: a distinct payment, kept
+                ("2024-02-28", "fmp"),  # same feed, before its first event: kept
+                ("2024-03-01", "yfinance"),  # FMP's first payment dated 2 days off: dropped
+                ("2024-04-10", "fmp"),  # an ex-date FMP no longer lists: dropped
+                ("2024-06-01", "yfinance"),  # same date in FMP: overwritten by upsert
+            ]:
+                conn.execute(
+                    text(
+                        "INSERT INTO raw.dividend_data (security_id, ex_dividend_date, "
+                        "amount, provider, feed) VALUES (:sid, :d, 0.1, 'OPENBB', :f)"
+                    ),
+                    {"sid": sid, "d": ex_date, "f": feed},
+                )
+            incoming = [
+                {"sec_id": sid, "provider": "OPENBB", "feed": "fmp", "ex_date": d}
+                for d in (date(2024, 3, 3), date(2024, 6, 1))
+            ]
+
+            removed = dividend_data._drop_superseded_feed_rows(conn, incoming, "1900-01-01", None)
+            left = (
+                conn.execute(
+                    text(
+                        "SELECT ex_dividend_date FROM raw.dividend_data "
+                        "WHERE security_id = :sid ORDER BY 1"
+                    ),
+                    {"sid": sid},
+                )
+                .scalars()
+                .all()
+            )
+        finally:
+            trans.rollback()
+
+    assert removed == 2
+    assert left == [date(2019, 3, 1), date(2024, 2, 20), date(2024, 2, 28), date(2024, 6, 1)]
+
+
+def test_a_payment_listed_under_two_ex_dates_is_kept_once():
+    """CAT 11-19 payment at FMP: 10-19 (declared 10-14) and 10-26 (undeclared)."""
+    frame = pd.DataFrame(
+        [
+            {
+                "ex_dividend_date": "2026-10-26",
+                "amount": 1.63,
+                "record_date": "2026-10-26",
+                "payment_date": "2026-11-19",
+            },
+            {
+                "ex_dividend_date": "2026-10-19",
+                "amount": 1.63,
+                "payment_date": "2026-11-19",
+                "declaration_date": "2026-10-14",
+            },
+            # RYAAY: the copy's ex-date falls after the shared record date.
+            {
+                "ex_dividend_date": "2026-09-11",
+                "amount": 0.4453,
+                "record_date": "2026-08-07",
+                "payment_date": "2026-09-28",
+                "declaration_date": "2026-07-23",
+            },
+            {
+                "ex_dividend_date": "2026-08-07",
+                "amount": 0.44343,
+                "record_date": "2026-08-07",
+                "payment_date": "2026-09-28",
+                "declaration_date": "2026-07-23",
+            },
+            # BCIC: a special and a regular paid together are two payments.
+            {"ex_dividend_date": "2026-05-15", "amount": 0.09, "payment_date": "2026-05-29"},
+            {"ex_dividend_date": "2026-05-18", "amount": 0.03, "payment_date": "2026-05-29"},
+        ]
+    )
+    frame.attrs["feed"] = "fmp"
+
+    kept = [r["ex_dividend_date"] for r in normalize_openbb_dividend_rows("X", frame)]
+
+    assert kept == [
+        date(2026, 5, 15),
+        date(2026, 5, 18),
+        date(2026, 8, 7),
+        date(2026, 10, 19),
+    ]
 
 
 def test_normalize_sec_dividend_rows_drops_aggregate_amounts_in_per_share_concepts():
@@ -578,3 +756,24 @@ def test_parse_floating_spread_ignores_structure_without_a_margin():
         is None
     )
     assert parse_floating_spread("6.625% Fixed-to-Floating Rate Non-Cumulative Series I") is None
+
+
+def test_a_depositary_title_gives_no_liquidation_preference():
+    """USB-PP's title quotes the underlying share's $1.00 par, not the receipt's $25."""
+    from scripts.populate_dividend_data import summarize_ticker_profile
+
+    title = (
+        "Depositary Shares (each representing 1/1,000th interest in a share of Series K "
+        "Non-Cumulative Perpetual Preferred Stock, par value $1.00)"
+    )
+
+    assert (
+        summarize_ticker_profile("USB-PP", title, "preferred stock")["liquidation_preference"]
+        is None
+    )
+    assert (
+        summarize_ticker_profile("X-PA", "Preferred Stock, par value $25 per share")[
+            "liquidation_preference"
+        ]
+        == 25.0
+    )

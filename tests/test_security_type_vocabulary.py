@@ -181,6 +181,53 @@ def test_classify_security_symbol_decodes_class_suffix():
         assert classify_security_symbol(symbol) == expected, symbol
 
 
+def test_exact_cover_title_overrides_preferred_looking_debt_symbol():
+    result = classify_instrument(
+        "WRB-PE",
+        _classification(),
+        exact_dei_title="5.700% Subordinated Debentures due 2058",
+    )
+    assert result.security_type == "corporate bond"
+    assert result.source == "dei_title"
+    assert result.confidence == "high"
+    assert result.conflicts == ["suffix:preferred stock overruled by exact title:corporate bond"]
+
+
+def test_abbreviated_filed_preferred_title_is_recognized():
+    title = (
+        "Depositary Shrs, each representing 1/40th intrst in a shr "
+        "of 5.875% Non-Cum. Perp Pref Stock, Srs E"
+    )
+    assert classify_security_type(title) == "preferred stock"
+    assert (
+        classify_security_type("Depository Shrs representing preferred equity") == "preferred stock"
+    )
+    assert classify_security_type("Series A Preference Units") == "preferred stock"
+    assert classify_security_type("9% Series A Preferred Units") == "preferred stock"
+    assert (
+        classify_security_type(
+            "Dep Shs, represent 1/1,000th interest in a share of 6.250% Noncum Pref Stk, Ser II"
+        )
+        == "preferred stock"
+    )
+
+
+def test_exact_common_title_beats_issuer_preferred_concept_bag():
+    result = classify_instrument(
+        "CMII",
+        _classification(bag=["preferred stock"]),
+        exact_dei_title="Class A Ordinary Shares, par value $0.0001 per share",
+    )
+    assert result.security_type == "common_stock"
+    assert result.matched_title == "Class A Ordinary Shares, par value $0.0001 per share"
+
+
+def test_unrecognized_exact_title_preserves_suffix_classification():
+    result = classify_instrument("ACR-PD", _classification(), exact_dei_title="ACRES")
+    assert result.security_type == "preferred stock"
+    assert result.source == "symbol_suffix"
+
+
 def test_security_type_for_instrument_suffix_wins_over_bag():
     assert (
         security_type_for_instrument("ACR-PC", "ACRES Commercial Realty Corp.", _classification())
@@ -537,7 +584,7 @@ def test_parse_dei_instrument_titles_single_class_pairs():
     assert titles == ["Common Stock, $0.00001 par value per share"]
 
 
-def test_parse_dei_instrument_titles_unpaired_keeps_titles():
+def test_parse_dei_instrument_titles_contexts_disambiguate_identical_titles():
     xml = _dei_instance_xml(
         [
             ("AA", "Common Stock"),
@@ -545,7 +592,7 @@ def test_parse_dei_instrument_titles_unpaired_keeps_titles():
         ]
     )
     pairs, titles = parse_dei_instrument_titles(xml)
-    assert pairs == []
+    assert pairs == [("AA", "Common Stock"), ("AA-B", "Common Stock")]
     assert titles == ["Common Stock"]
 
 

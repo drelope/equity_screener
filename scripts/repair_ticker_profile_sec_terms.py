@@ -32,6 +32,11 @@ This job, which is DB-only and idempotent:
    but unambiguous when it has only one; the name parse still wins, so this
    only fills a blank.
 
+Step 1 also re-parses name-derived columns that a later, better security name
+has made stale (see ``stale_name_columns``). This job runs after every
+security-name writer in the nightly, so the profile and the name agree even
+when the rename lands after the profile fetch.
+
 Usage:
     python -m scripts.repair_ticker_profile_sec_terms --dry-run
     python -m scripts.repair_ticker_profile_sec_terms
@@ -75,11 +80,16 @@ SELECT tp.security_id, tp.ticker, tp.provider,
        s.security_name, s.security_type AS reference_security_type, s.cik, s.active,
        tp.raw_payload -> 'openbb' AS openbb,
        tp.raw_payload -> 'sec_xbrl' AS sec_xbrl,
+       tp.field_sources,
        {columns}
 FROM raw.ticker_profile tp
 LEFT JOIN reference.securities s ON s.security_id = tp.security_id
 ORDER BY tp.security_id
 """
+
+#: Loaders whose name-parse columns are exactly the parse of the security name
+#: at the time (None: rows written before field_sources was recorded).
+NAME_PARSE_WRITERS = (None, "populate_dividend_data", "populate_raw_tables")
 
 REFERENCE_REPAIR_SQL = """
 WITH sec AS (
@@ -188,6 +198,32 @@ def changed_columns(row, parsed, lone_preferred=False):
     return changed
 
 
+def stale_name_columns(row, parsed):
+    """Return the name-parse columns that no longer match the current security name.
+
+    The columns are parsed from ``reference.securities.security_name`` when the
+    profile is fetched, so a later, better name (the SEC cover title written by
+    ``populate_sec_instrument_titles``, or a rename by the classification
+    repair) leaves them stale until the next fetch: ABR-PD kept the issuer
+    name "ARBOR REALTY TRUST INC" as its series and ABR-PF ``fixed`` for a
+    Fixed-to-Floating title. A column last written by the name parser takes the
+    new parse, blank included. A column another loader set (an allocated SEC
+    coupon, a title-filled blank) is only replaced by a non-blank parse: the
+    name parse wins, but never erases another source's value.
+    """
+    sources = row.get("field_sources") or {}
+    stale = [
+        column
+        for column in NAME_PARSE_COLUMNS
+        if not _same(row.get(column), parsed[column])
+        and (sources.get(column) in NAME_PARSE_WRITERS or parsed[column] is not None)
+    ]
+    if "coupon_rate" in stale and "coupon_type" not in stale:
+        if not _same(row.get("coupon_type"), parsed["coupon_type"]):
+            stale.append("coupon_type")
+    return stale
+
+
 def allocation_columns(row, singleton):
     """Return the issuer-level SEC terms safe to assign to a lone preferred.
 
@@ -212,24 +248,33 @@ def allocation_columns(row, singleton):
 
 
 def repair(conn):
-    rows = (
-        conn.execute(
+    rows = [
+        dict(row)
+        for row in conn.execute(
             text(LOAD_ROWS_SQL.format(columns=", ".join(f"tp.{c}" for c in NAME_PARSE_COLUMNS)))
         )
         .mappings()
         .all()
-    )
+    ]
     column_changes = dict.fromkeys((*SEC_TERM_COLUMNS, "coupon_type"), 0)
+    refreshed_columns = dict.fromkeys(NAME_PARSE_COLUMNS, 0)
     singleton_ciks = _get_singleton_ciks(conn)
-    repaired = 0
+    repaired = refreshed = 0
     for row in rows:
         parsed = reparse_row(row)
         changed = changed_columns(row, parsed, lone_preferred=row.get("cik") in singleton_ciks)
-        if not changed:
+        stale = [column for column in stale_name_columns(row, parsed) if column not in changed]
+        if not changed and not stale:
             continue
-        repaired += 1
+        if changed:
+            repaired += 1
+        if stale:
+            refreshed += 1
         for column in changed:
             column_changes[column] += 1
+        for column in stale:
+            refreshed_columns[column] += 1
+        owned = changed + stale
         upsert_ticker_profile(
             conn,
             {
@@ -237,12 +282,14 @@ def repair(conn):
                 "ticker": row["ticker"],
                 "provider": row["provider"],
                 "raw_payload": {},
-                **{column: parsed[column] for column in changed},
+                **{column: parsed[column] for column in owned},
             },
             loader=LOADER,
-            owned_columns=changed,
+            owned_columns=owned,
             refreshed=False,
         )
+        # The allocation pass below reads these rows, so it must see the repair.
+        row.update({column: parsed[column] for column in owned})
 
     counts = (
         conn.execute(text(REFERENCE_REPAIR_SQL.format(action=REFERENCE_COUNT_ACTION)))
@@ -289,6 +336,8 @@ def repair(conn):
         "profiles_scanned": len(rows),
         "profiles_repaired": repaired,
         "column_changes": column_changes,
+        "profiles_refreshed": refreshed,
+        "refreshed_columns": refreshed_columns,
         "profiles_allocated": allocated,
         "allocated_columns": allocated_columns,
         "reference_allocated_rows": reference_allocated,
@@ -320,6 +369,10 @@ def main(argv=None):
     print(f"[{label}] scanned {result['profiles_scanned']} raw.ticker_profile rows")
     print(f"  profiles with SEC-leaked terms repaired: {result['profiles_repaired']}")
     for column, count in result["column_changes"].items():
+        if count:
+            print(f"    {column}: {count}")
+    print(f"  profiles re-parsed from a changed security name: {result['profiles_refreshed']}")
+    for column, count in result["refreshed_columns"].items():
         if count:
             print(f"    {column}: {count}")
     print(

@@ -102,6 +102,25 @@ TERMS_FACTS = [
     ("Last ex-date", "preferred.v_security_terms", "ex_date"),
     ("Currency", "reference.securities", "currency"),
 ]
+# Dividend source policy (V0080/V0081): OPENBB rows are listing-level events through
+# OpenBB and carry true ex-dates -- FMP first (as-declared amount, announced future
+# ex-dates), Yahoo Finance as the per-symbol fallback, recorded per row in ``feed``.
+# SEC XBRL filings are the last fallback, dated to the fiscal period end.
+EX_DATE_PROVIDER = "OPENBB"
+FEED_LABELS = {"fmp": "FMP (via OpenBB)", "yfinance": "Yahoo Finance (via OpenBB)"}
+PROVIDER_LABELS = {"OPENBB": FEED_LABELS["yfinance"], "SEC_XBRL": "SEC XBRL filing"}
+RECOMMENDED_SOURCE = "Recommended: listing ex-dates (FMP, Yahoo fallback)"
+SEC_SOURCE = "SEC XBRL filings (fiscal period-ends)"
+DIVIDEND_SOURCES = (RECOMMENDED_SOURCE, SEC_SOURCE, "All sources (comparison)")
+
+
+def _source_label(provider, feed=None) -> str:
+    """Display name of a dividend row's source: the OpenBB feed when known."""
+    if provider == EX_DATE_PROVIDER and _present(feed):
+        return FEED_LABELS.get(feed, f"{feed} (via OpenBB)")
+    return PROVIDER_LABELS.get(provider, provider)
+
+
 # The related-listings table is rebuilt from the hierarchy's children JSON, so its labels
 # are not column names; a short note stands in for the stored definition.
 RELATED_HELP = {
@@ -262,7 +281,7 @@ def profile(ticker: str) -> pd.DataFrame:
                s.security_type, s.cik, s.exchange_id, s.currency, s.coupon_rate,
                v.liquidation_preference, v.liquidation_source,
                v.first_call_date, v.call_price, v.call_source,
-               v.ex_date,
+               v.ex_date, v.ex_date_is_period_end,
                tp.coupon_type, tp.fixed_period_end, tp.floating_spread,
                f.dividend_yield,
                s.dividend_last_paid, s.sec_data_status
@@ -303,14 +322,21 @@ def prices(security_id: str, days: int | None) -> pd.DataFrame:
 
 
 def dividend_dates(security_id: str) -> pd.DataFrame:
+    """True ex-dividend dates for the price chart.
+
+    Only OPENBB (FMP or Yahoo Finance) rows carry the listing's ex-date; SEC XBRL rows
+    are fiscal period-ends, so marking them on the price series would place a drop on
+    a day nothing traded ex. The amount is split-adjusted, like the price series.
+    """
     return ui.query(
         """
-        SELECT ex_dividend_date, amount
+        SELECT ex_dividend_date, COALESCE(adjusted_amount, amount) AS amount
         FROM raw.dividend_data
         WHERE security_id = CAST(:sid AS uuid) AND ex_dividend_date IS NOT NULL
+          AND provider = :provider
         ORDER BY ex_dividend_date
         """,
-        {"sid": security_id},
+        {"sid": security_id, "provider": EX_DATE_PROVIDER},
     )
 
 
@@ -336,6 +362,9 @@ def overview(security_id: str) -> pd.Series | None:
                cpx.exchange AS profile_exchange,
                NULLIF(BTRIM(tp.raw_payload->'openbb'->>'long_description'), '') AS description,
                v.dividend_amount AS announced_amount, v.ex_date AS announced_ex_date,
+               v.ex_date_is_period_end AS announced_is_period_end,
+               v.dividend_provider AS announced_provider,
+               v.dividend_feed AS announced_feed,
                s.currency AS announced_currency
         FROM reference.securities s
         LEFT JOIN reference.issuers i ON i.issuer_id = s.issuer_id
@@ -396,7 +425,10 @@ def _add_ex_dividend_markers(fig: go.Figure, df: pd.DataFrame, security_id: str)
     """
     divs = dividend_dates(security_id)
     if divs.empty:
-        st.caption("No ex-dividend dates stored for this security.")
+        st.caption(
+            "No true ex-dividend dates stored for this security (SEC filings carry "
+            "fiscal period-ends only)."
+        )
         return
     divs = divs.assign(ex_dividend_date=pd.to_datetime(divs["ex_dividend_date"]))
     divs = divs[
@@ -430,7 +462,8 @@ def dividend_section(security_id: str) -> None:
     st.subheader("Dividends")
     df = ui.query(
         """
-        SELECT ex_dividend_date, amount, frequency, currency, provider, concept
+        SELECT ex_dividend_date, amount, adjusted_amount, frequency, currency, provider,
+               feed, amount_feed, concept
         FROM raw.dividend_data WHERE security_id = CAST(:sid AS uuid)
         ORDER BY ex_dividend_date DESC
         """,
@@ -439,38 +472,87 @@ def dividend_section(security_id: str) -> None:
     if df.empty:
         st.caption("No dividend events stored for this security.")
         return
-    provider_filter = st.selectbox(
-        "Provider",
-        ["All sources", "OPENBB", "SEC XBRL"],
+    source = st.selectbox(
+        "Source",
+        list(DIVIDEND_SOURCES),
         key="detail_dividend_provider",
+        help=(
+            "The recommended source is the listing's own dividend events through OpenBB: "
+            "FMP (as-declared amounts that match SEC filings, a split-adjusted amount, "
+            "and announced upcoming ex-dates), with Yahoo Finance where FMP has none. "
+            "SEC XBRL filings report declared per-share amounts dated to the fiscal "
+            "period end and arrive a filing cycle later."
+        ),
     )
-    if provider_filter == "OPENBB":
-        df = df[df.provider == "OPENBB"]
-    elif provider_filter == "SEC XBRL":
-        df = df[df.provider != "OPENBB"]
+    recommended = df[df.provider == EX_DATE_PROVIDER]
+    if source == RECOMMENDED_SOURCE:
+        if recommended.empty:
+            df = df[df.provider != EX_DATE_PROVIDER]
+            st.caption(
+                "FMP and Yahoo Finance have no dividend events for this security; showing "
+                "the SEC XBRL filing fallback."
+            )
+        else:
+            df = recommended
+    elif source == SEC_SOURCE:
+        df = df[df.provider != EX_DATE_PROVIDER]
     if df.empty:
-        st.caption("No dividend events from the selected provider.")
+        st.caption("No dividend events from the selected source.")
         return
-    if (df.provider != "OPENBB").any():
+    if (df.provider != EX_DATE_PROVIDER).any():
         st.caption(
-            "OPENBB dates are true ex-dates. SEC XBRL dates are fiscal period-ends "
-            "(not ex-dates) with per-share declared amounts; CashPaid rows are annual "
-            "aggregates and are excluded from the chart."
+            "SEC XBRL dates are fiscal period-ends (not ex-dates) with per-share declared "
+            "amounts; CashPaid rows are annual aggregates and are excluded from the chart. "
+            "FMP and Yahoo Finance dates are true ex-dates."
         )
+    upcoming = pd.to_datetime(df.ex_dividend_date) > pd.Timestamp.today().normalize()
+    if upcoming.any():
+        st.caption(f"Includes {int(upcoming.sum())} announced upcoming ex-date(s) not yet reached.")
+    if df.adjusted_amount.notna().any():
+        st.caption(
+            "amount is the dividend as declared; adjusted_amount restates it per "
+            "current share after splits. The chart plots the split-adjusted figure."
+        )
+    if "amount_feed" not in df:
+        df = df.assign(amount_feed=df.feed)
+    reconciled = (
+        (df.provider == EX_DATE_PROVIDER) & df.amount_feed.notna() & (df.amount_feed != df.feed)
+    )
+    if reconciled.any():
+        st.caption(
+            f"{int(reconciled.sum())} amount(s) come from "
+            f"{FEED_LABELS.get('yfinance', 'Yahoo Finance')} rather than FMP: the two "
+            "disagreed and Polygon.io confirmed Yahoo's figure (see amount_feed)."
+        )
+    df = df.assign(provider=[_source_label(p, f) for p, f in zip(df.provider, df.feed)])
     plot = df[df.amount.notna() & (df.concept != "CommonStockDividendsPerShareCashPaid")]
+    # Yahoo rows are already split-adjusted and FMP's adjusted_amount is restated by
+    # the same split factors, so one series stays continuous across a feed switch or
+    # a split.
+    plot = plot.assign(per_share=plot.adjusted_amount.fillna(plot.amount))
     if not plot.empty:
         st.plotly_chart(
             px.bar(
                 plot,
                 x="ex_dividend_date",
-                y="amount",
+                y="per_share",
                 color="provider",
                 barmode="group",
-                labels={"ex_dividend_date": "Ex-dividend date", "amount": "Per share"},
+                labels={"ex_dividend_date": "Ex-dividend date", "per_share": "Per share"},
             ),
             width="stretch",
         )
-    shown = df.drop(columns=["concept"])
+    shown = df.drop(columns=["concept", "feed"])
+    if reconciled.any():
+        shown = shown.assign(
+            amount_feed=[
+                FEED_LABELS.get(f, f) if r else "" for f, r in zip(shown.amount_feed, reconciled)
+            ]
+        )
+    else:
+        shown = shown.drop(columns=["amount_feed"])
+    if shown.adjusted_amount.isna().all():
+        shown = shown.drop(columns=["adjusted_amount"])
     st.dataframe(
         shown,
         hide_index=True,
@@ -599,8 +681,26 @@ def _announced_dividend(ov) -> None:
     currency = f" {ov['announced_currency']}" if _present(ov.get("announced_currency")) else ""
     line = f"Announced cash dividend **{amount}{currency}**"
     if _present(ov.get("announced_ex_date")):
-        line += f"  \nEx-date **{ov['announced_ex_date']}**"
+        label = (
+            "Period end (SEC filing)" if _is_true(ov.get("announced_is_period_end")) else "Ex-date"
+        )
+        line += f"  \n{label} **{ov['announced_ex_date']}**"
+    provider = ov.get("announced_provider")
+    if _present(provider):
+        line += f"  \nSource: {_source_label(provider, ov.get('announced_feed'))}"
     st.markdown(line)
+
+
+def _is_true(value) -> bool:
+    return _present(value) and bool(value)
+
+
+def _ex_date_text(value, is_period_end) -> str:
+    """The selected dividend date, flagged when it is an SEC fiscal period end."""
+    text_value = _text(value)
+    if text_value != "N/A" and _is_true(is_period_end):
+        return f"{text_value} (SEC period end)"
+    return text_value
 
 
 def _company_overview(ov) -> None:
@@ -819,10 +919,10 @@ def render() -> None:
         return
     info = found.iloc[0]
     ov = overview(info.security_id)
+    st.markdown(f"### {info.ticker}")
+    st.text(_text(info.security_name), width="stretch", wrap=True)
     left, right = st.columns([1, 2])
     with left:
-        st.markdown(f"### {info.ticker}")
-        st.caption(_text(ov.get("short_name")) if ov is not None else _text(info.security_name))
         _announced_dividend(ov)
     with right:
         _company_overview(ov)
@@ -840,6 +940,7 @@ def render() -> None:
         "call_price": _liquidation_text,
         "floating_spread": _spread_text,
         "dividend_yield": _yield_text,
+        "ex_date": lambda value: _ex_date_text(value, info.get("ex_date_is_period_end")),
     }
     _fact_cells(
         [

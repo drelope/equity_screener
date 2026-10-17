@@ -4,17 +4,20 @@ Run the full dividend-equity ETL pipeline.
 Stages (in dependency order):
     0. populate_raw_tables       -> raw.company_ticker + raw.ticker_profile (dividend payers)
     1. populate_reference_tables -> reference.exchanges/issuers/securities (dividend flags)
+    1a. populate_sec_instrument_titles -> exact preferred cover titles + missing parsed terms
+    1b. populate_exchange_listing_titles -> Nasdaq-directory titles for preferreds still
+        named after the issuer; notes/units/common listed as preferred are reclassified
     2. populate_market_data      -> raw.market_data daily OHLCV (dividend universe only)
     3. populate_dividend_data    -> raw.dividend_data, raw.ticker_profile, preferred.security_terms
-    3a. populate_clean_ticker_profile -> clean.ticker_profile (one normalized CIK/ticker row)
-    3b. populate_clean_company_profile -> clean.company_profile + clean.company_officer
-                                         + clean.corporate_action
     4a. ... --preferred-facts   -> raw.companyfacts (preferred set; priority, runs first)
     4b. populate_companyfacts   -> raw.sec_submissions + raw.companyfacts (dividend universe)
     4c. ... --sweep-unlinked    -> raw.companyfacts (CIKs in neither universe)
     5. populate_sec_documents    -> raw.sec_documents concept_groups (dividend universe only)
     5b. populate_contract_terms  -> preferred.contract_terms (mined liquidation/call terms,
                                     feeding preferred.v_security_terms)
+    5c. populate_clean_ticker_profile -> clean.ticker_profile (one normalized CIK/ticker row)
+    5d. populate_clean_company_profile -> clean.company_profile + clean.company_officer
+                                         + clean.corporate_action
     6. populate_fundamentals     -> fundamentals.periodic_financials (offline, stored XBRL)
     7. build_features            -> model.features (offline, last --feature-days only)
     8. score_rank                -> model.scores + model.predictions + model.rankings
@@ -22,7 +25,7 @@ Stages (in dependency order):
     10. label_targets (optional) -> model.features.target_sustainable_dividend
                                     (run with --run-labels after ~12 months of data)
 
-After the reference writers (stage 3a above), two idempotent repair stages run
+After the reference writers (stage 3 above), two idempotent repair stages run
 before the 4a preferred sweep and the features: ``repair_security_classification``
 moves SPAC warrants/rights/units off 'preferred stock', and
 ``repair_ticker_profile_sec_terms`` resets issuer-level SEC terms copied onto
@@ -229,6 +232,16 @@ def main():
     )
     parser.add_argument("--skip-reference", action="store_true", help="Skip stage 1")
     parser.add_argument("--skip-raw", action="store_true", help="Skip stage 0")
+    parser.add_argument(
+        "--skip-instrument-titles",
+        action="store_true",
+        help="Skip stage 1a, preferred SEC cover titles",
+    )
+    parser.add_argument(
+        "--skip-exchange-titles",
+        action="store_true",
+        help="Skip stage 1b, exchange-directory titles for issuer-named preferreds",
+    )
     parser.add_argument("--skip-market-data", action="store_true", help="Skip stage 2")
     parser.add_argument("--skip-dividend-data", action="store_true", help="Skip stage 3")
     parser.add_argument("--skip-companyfacts", action="store_true", help="Skip stage 4b")
@@ -365,6 +378,12 @@ def main():
 
     raw_args = ["--limit", str(args.limit)] if args.limit is not None else []
     reference_args = ["--limit", str(args.limit)] if args.limit is not None else []
+    instrument_title_args = list(base) + ["--preferred-only"]
+    if args.limit is not None:
+        instrument_title_args += ["--limit", str(args.limit)]
+    exchange_title_args = list(base)
+    if args.limit is not None:
+        exchange_title_args += ["--limit", str(args.limit)]
     market_data_args = list(base)
     if args.limit is not None:
         market_data_args += ["--limit", str(args.limit)]
@@ -453,10 +472,26 @@ def main():
         ):
             all_ok = False
 
+        if all_ok and not stage(
+            "scripts.populate_sec_instrument_titles",
+            instrument_title_args,
+            args.skip_instrument_titles,
+        ):
+            all_ok = False
+
+        if all_ok and not stage(
+            "scripts.populate_exchange_listing_titles",
+            exchange_title_args,
+            args.skip_exchange_titles,
+        ):
+            all_ok = False
+
         if all_ok:
             if args.all:
                 market_data_args += ["--all"]
-        if not stage("scripts.populate_market_data", market_data_args, args.skip_market_data):
+        if all_ok and not stage(
+            "scripts.populate_market_data", market_data_args, args.skip_market_data
+        ):
             all_ok = False
 
         if all_ok:
@@ -473,12 +508,6 @@ def main():
         if all_ok and not stage(
             "scripts.populate_dividend_data", dividend_args, args.skip_dividend_data
         ):
-            all_ok = False
-
-        if all_ok and not stage("scripts.populate_clean_ticker_profile", []):
-            all_ok = False
-
-        if all_ok and not stage("scripts.populate_clean_company_profile", []):
             all_ok = False
 
         # Repair stages run after every reference writer and before 4a/features,
@@ -559,6 +588,12 @@ def main():
         if all_ok and not stage(
             "scripts.populate_contract_terms", contract_terms_args, args.skip_contract_terms
         ):
+            all_ok = False
+
+        if all_ok and not stage("scripts.populate_clean_ticker_profile", []):
+            all_ok = False
+
+        if all_ok and not stage("scripts.populate_clean_company_profile", []):
             all_ok = False
 
         if all_ok and not stage("scripts.populate_fundamentals", [], args.skip_derived):

@@ -309,6 +309,10 @@ def classify_security_type(title):
 
     if any(
         term in normalized_title for term in ("preferred", "depositary share", "depositary receipt")
+    ) or re.search(
+        r"\bpref\.?\s+(?:stock|stk)\b|\bdeposit[ao]ry\s+shrs?\b|\bpreference\s+(?:units?|shares?)\b"
+        r"|\bpreference\s+securities\b|\bpfd\b",
+        normalized_title,
     ):
         return "preferred stock"
 
@@ -325,7 +329,8 @@ def classify_security_type(title):
             "subordinated debt",
             "due 20",
         )
-    ):
+    ) or re.search(r"\bnotes?\b[^.;]*\bdue\b", normalized_title):
+        # Exchange titles spell the maturity out ("Notes due June 1, 2059").
         return "corporate bond"
 
     if any(term in normalized_title for term in ("unit", "units")):
@@ -552,11 +557,18 @@ def _bound_details(bound):
 
 
 def classify_instrument(
-    ticker, classification=None, *, dei_titles=None, submissions=None, issuer_name=None
+    ticker,
+    classification=None,
+    *,
+    dei_titles=None,
+    submissions=None,
+    issuer_name=None,
+    exact_dei_title=None,
 ):
     """Decide the single canonical security_type for one SEC-listed instrument.
 
-    Combines, in priority order, the symbol's dash suffix (high), dei titles
+    Combines, in priority order, an explicitly supplied exact CIK/ticker cover
+    title (high), the symbol's dash suffix (high), dei titles
     bound to the symbol by series letter (high), the issuer name keywords, the
     submissions ``tickers[]`` anchor / leading-position (medium), dividend-tag
     evidence (medium) and finally the CIK-level concept bag (low). Every
@@ -605,6 +617,31 @@ def classify_instrument(
     # never turn the primary symbol preferred; only per-symbol evidence (dash
     # suffix, series-bound dei title) can.
     primary_symbol = anchor["anchor_ok"] and anchor["in_tickers"] and anchor["primary"]
+
+    if exact_dei_title:
+        exact_type = classify_security_type(exact_dei_title)
+        if exact_type != "other":
+            evidence.append(
+                {
+                    "phase": 1,
+                    "signal": "exact_dei_title",
+                    "detail": {"title": exact_dei_title, "type": exact_type},
+                }
+            )
+            suffix = symbol_suffix_evidence(symbol)
+            if suffix is not None and suffix.security_type != exact_type:
+                conflicts.append(
+                    f"suffix:{suffix.security_type} overruled by exact title:{exact_type}"
+                )
+            return InstrumentClassification(
+                security_type=exact_type,
+                source="dei_title",
+                confidence="high",
+                matched_title=exact_dei_title,
+                submissions=anchor,
+                evidence=evidence,
+                conflicts=conflicts,
+            )
 
     # Phase 1: symbol dash suffix (non-common classes decide immediately).
     suffix = symbol_suffix_evidence(symbol)
@@ -1089,16 +1126,16 @@ def parse_dei_instrument_titles(instance_xml, known_symbols=None):
     SEC's companyfacts JSON never carries ``dei:SecurityTitle`` /
     ``dei:Security12bTitle`` (only an allowlist of dei concepts), so the
     cover-page titles have to be read from the filing's financial-report
-    instance (``*_htm.xml``). There each registered class reports, within the
-    same period context, a ``dei:TradingSymbol`` and a dei security-title
-    concept side by side, in document order:
+    instance (``*_htm.xml``). Each registered class normally reports its
+    ``dei:TradingSymbol`` and title in the same dimensional context. Sharing a
+    period date does not identify a class.
 
     Returns:
         tuple: ``(pairs, titles)`` where ``pairs`` is a list of
-        ``(symbol, title)`` tuples zipped by period (positional within the
-        period, matching how SEC enumerated the classes on the cover) and
-        ``titles`` is the flat list of every distinct title read (recency-
-        ordered, canonical tag order), even when pairing was ambiguous.
+        ``(symbol, title)`` tuples bound by context, newest period first (one
+        title per symbol). Positional pairing is retained only for a single
+        shared context with equal symbol/title counts. ``titles`` contains
+        every distinct title in document order, even when pairing is ambiguous.
     """
     pairs = []
     titles = []
@@ -1129,6 +1166,8 @@ def parse_dei_instrument_titles(instance_xml, known_symbols=None):
 
     symbol_rows = []
     title_rows = []
+    context_symbols = {}
+    context_titles = {}
     for element in root.iter():
         localname = _xml_localname(element.tag)
         if not isinstance(element.tag, str) or not element.tag.startswith("{"):
@@ -1136,11 +1175,14 @@ def parse_dei_instrument_titles(instance_xml, known_symbols=None):
         value = (element.text or "").strip()
         if not value:
             continue
-        end_date = end_dates.get(element.get("contextRef") or "")
+        context_id = element.get("contextRef") or ""
+        end_date = end_dates.get(context_id)
         if localname == "TradingSymbol":
             symbol_rows.append((end_date, value))
+            context_symbols.setdefault(context_id, []).append(value)
         elif localname in title_localnames:
             title_rows.append((localname, end_date, value))
+            context_titles.setdefault(context_id, []).append(value)
 
     seen_titles = set()
     for _localname, _end_date, value in title_rows:
@@ -1148,12 +1190,33 @@ def parse_dei_instrument_titles(instance_xml, known_symbols=None):
             seen_titles.add(value)
             titles.append(value)
 
-    # Pair TradingSymbol <-> security title per period context (both are
-    # declared per registered class on the cover, in the same document order).
     all_periods = {end_date for end_date, _value in symbol_rows if end_date} | {
         end_date for _localname, end_date, _value in title_rows if end_date
     }
+    seen_symbols = set()
     for period_end in sorted(all_periods, key=str, reverse=True):
+        contexts = {
+            context_id
+            for context_id in context_symbols.keys() | context_titles.keys()
+            if end_dates.get(context_id) == period_end
+        }
+        context_pairs = {}
+        for context_id, symbols in context_symbols.items():
+            if context_id not in contexts:
+                continue
+            symbols = list(dict.fromkeys(symbol.upper() for symbol in symbols))
+            class_titles = list(dict.fromkeys(context_titles.get(context_id, [])))
+            if len(symbols) == len(class_titles) == 1:
+                context_pairs.setdefault(symbols[0], set()).add(class_titles[0])
+        if context_pairs:
+            for symbol, class_titles in context_pairs.items():
+                if symbol not in seen_symbols:
+                    seen_symbols.add(symbol)
+                    if len(class_titles) == 1:
+                        pairs.append((symbol, next(iter(class_titles))))
+            continue
+        if len(contexts) != 1:
+            continue
         period_symbols = [value for end_date, value in symbol_rows if end_date == period_end]
         period_titles = [
             value
@@ -1165,7 +1228,8 @@ def parse_dei_instrument_titles(instance_xml, known_symbols=None):
         if clean_symbols and len(clean_symbols) == len(clean_titles):
             for symbol, title in zip(clean_symbols, clean_titles):
                 candidate = (str(symbol).upper(), title)
-                if candidate not in pairs:
+                if candidate[0] not in seen_symbols:
+                    seen_symbols.add(candidate[0])
                     pairs.append(candidate)
 
     # Single-class fallback: one symbol and one title under one issuer.

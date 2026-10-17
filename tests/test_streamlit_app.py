@@ -173,6 +173,29 @@ def test_the_security_page_opens_the_ticker_chosen_on_the_screener(without_token
     assert any(ticker in m.value for m in at.markdown)
 
 
+def test_the_security_header_shows_full_security_name_without_provider_shortening(without_token):
+    with engine.connect() as conn:
+        row = (
+            conn.execute(
+                text(
+                    "SELECT ticker, security_name FROM reference.securities "
+                    "WHERE active AND LENGTH(security_name) > 80 "
+                    "ORDER BY LENGTH(security_name) DESC, ticker LIMIT 1"
+                )
+            )
+            .mappings()
+            .first()
+        )
+    assert row, "expected an active security with a long instrument title"
+
+    at = _open_the_security_page(row["ticker"])
+
+    assert not at.exception, [e.value for e in at.exception]
+    assert any(element.value == row["security_name"] for element in at.text)
+    title = next(element for element in at.text if element.value == row["security_name"])
+    assert title.proto.wrap
+
+
 def test_the_security_header_shows_overview_and_ex_date_toggle(without_token):
     with engine.connect() as conn:
         ticker = conn.execute(
@@ -383,7 +406,6 @@ def test_the_dividend_tab_lists_events_and_named_cadence(without_token):
 
     assert not at.exception, [e.value for e in at.exception]
     assert any("Dividends" in s.value for s in at.subheader)
-    assert any("SEC XBRL dates are fiscal period-ends" in c.value for c in at.caption)
     tables = _dividend_tables(at)
     assert tables, "expected the dividend dataframe"
     assert "frequency" in tables[0], "the table must show its cadence"
@@ -393,17 +415,70 @@ def test_the_dividend_tab_lists_events_and_named_cadence(without_token):
     assert labels, "the cadence labels must actually be populated"
 
 
+def test_the_dividend_tab_defaults_to_the_recommended_true_ex_date_source(without_token):
+    ticker = _both_provider_ticker()
+    assert ticker, "expected a security carrying both dividend providers"
+    at = _open_the_security_page(ticker)
+
+    assert not at.exception, [e.value for e in at.exception]
+    assert at.selectbox(key="detail_dividend_provider").value.startswith("Recommended")
+    assert not any("SEC XBRL dates are fiscal period-ends" in c.value for c in at.caption)
+    tables = _dividend_tables(at)
+    assert tables, "expected the dividend dataframe"
+    assert set(_column_values(tables[0], "provider")) <= {
+        "FMP (via OpenBB)",
+        "Yahoo Finance (via OpenBB)",
+    }
+
+
+def test_the_dividend_tab_compares_all_sources_with_labels(without_token):
+    ticker = _both_provider_ticker()
+    assert ticker, "expected a security carrying both dividend providers"
+    at = _open_the_security_page(ticker)
+    at.selectbox(key="detail_dividend_provider").set_value("All sources (comparison)").run()
+
+    assert not at.exception, [e.value for e in at.exception]
+    assert any("SEC XBRL dates are fiscal period-ends" in c.value for c in at.caption)
+    tables = _dividend_tables(at)
+    labels = set(_column_values(tables[0], "provider"))
+    assert "SEC XBRL filing" in labels
+    assert labels & {"FMP (via OpenBB)", "Yahoo Finance (via OpenBB)"}
+    assert labels <= {"FMP (via OpenBB)", "Yahoo Finance (via OpenBB)", "SEC XBRL filing"}
+
+
+def test_the_dividend_tab_falls_back_to_sec_when_yahoo_has_nothing(without_token):
+    with engine.connect() as conn:
+        ticker = conn.execute(
+            text(
+                "SELECT s.ticker FROM reference.securities s "
+                "WHERE s.active AND s.security_id IN ("
+                "  SELECT security_id FROM raw.dividend_data WHERE provider = 'SEC_XBRL' "
+                "  EXCEPT SELECT security_id FROM raw.dividend_data WHERE provider = 'OPENBB') "
+                "ORDER BY s.ticker LIMIT 1"
+            )
+        ).scalar()
+    if ticker is None:
+        pytest.skip("every SEC-only security also has OpenBB events")
+    at = _open_the_security_page(ticker)
+
+    assert not at.exception, [e.value for e in at.exception]
+    assert any("showing the SEC XBRL filing fallback" in c.value for c in at.caption)
+    assert any("SEC period end" in m.value or "N/A" in m.value for m in at.markdown)
+
+
 def test_the_dividend_tab_filters_by_provider(without_token):
     ticker = _both_provider_ticker()
     assert ticker, "expected a security carrying both dividend providers"
     at = _open_the_security_page(ticker)
-    at.selectbox(key="detail_dividend_provider").set_value("OPENBB").run()
+    at.selectbox(key="detail_dividend_provider").set_value(
+        "SEC XBRL filings (fiscal period-ends)"
+    ).run()
 
     assert not at.exception, [e.value for e in at.exception]
-    assert not any("SEC XBRL dates are fiscal period-ends" in c.value for c in at.caption)
+    assert any("SEC XBRL dates are fiscal period-ends" in c.value for c in at.caption)
     tables = _dividend_tables(at)
     assert tables, "expected the dividend dataframe"
-    assert set(_column_values(tables[0], "provider")) == {"OPENBB"}
+    assert set(_column_values(tables[0], "provider")) == {"SEC XBRL filing"}
 
 
 def test_the_dividend_tab_says_when_nothing_is_stored(without_token):

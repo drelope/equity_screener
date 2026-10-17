@@ -9,6 +9,8 @@ that set each column); the payload itself stays in raw.ticker_profile /
 raw.ticker_profile_load and is joined on demand. Only groups with an active
 representative are emitted, so deactivated tickers do not appear in the
 curated snapshot while their lineage stays in ``source_profiles``.
+When profile preferences are wholly absent, the representative's mined contract
+preference supplies the value, with its source document retained in lineage.
 
 Usage:
     python -m scripts.populate_clean_ticker_profile
@@ -49,6 +51,11 @@ WITH candidates AS (
            NULLIF(BTRIM(p.tax_status), '') AS tax_status,
            p.call_date,
            p.liquidation_preference,
+           ct.liquidation_preference AS contract_liquidation_preference,
+           ct.first_call_date AS contract_first_call_date,
+           ct.fixed_period_end AS contract_fixed_period_end,
+           ct.floating_spread AS contract_floating_spread,
+           ct.source_document_id AS contract_source_document_id,
            p.retrieved_at,
            MD5(p.raw_payload::text) AS payload_hash,
            p.field_sources,
@@ -73,6 +80,7 @@ WITH candidates AS (
     FROM raw.ticker_profile AS p
     JOIN reference.securities AS s ON s.security_id = p.security_id
     LEFT JOIN reference.issuers AS i ON i.issuer_id = s.issuer_id
+    LEFT JOIN preferred.contract_terms AS ct ON ct.security_id = s.security_id
     WHERE NULLIF(BTRIM(s.cik), '') IS NOT NULL
       AND NULLIF(BTRIM(s.ticker), '') IS NOT NULL
 ), ranked AS (
@@ -190,7 +198,12 @@ WITH candidates AS (
                    'security_type', security_type,
                    'classify_source', classify_source,
                    'classify_confidence', classify_confidence,
-                   'classification_evidence', classification_evidence
+                   'classification_evidence', classification_evidence,
+                   'contract_liquidation_preference', contract_liquidation_preference,
+                   'contract_first_call_date', contract_first_call_date,
+                   'contract_fixed_period_end', contract_fixed_period_end,
+                   'contract_floating_spread', contract_floating_spread,
+                   'contract_source_document_id', contract_source_document_id
                )
                ORDER BY security_id, provider
            ) AS source_profiles,
@@ -288,11 +301,23 @@ SELECT representative.cik,
        grouped.industry,
        grouped.coupon_type,
        grouped.coupon_rate,
-       grouped.fixed_period_end,
-       grouped.floating_spread,
+       CASE WHEN grouped.fixed_period_end_count = 0
+                 AND representative.security_type = 'preferred stock'
+            THEN representative.contract_fixed_period_end
+            ELSE grouped.fixed_period_end END,
+       CASE WHEN grouped.floating_spread_count = 0
+                 AND representative.security_type = 'preferred stock'
+            THEN representative.contract_floating_spread
+            ELSE grouped.floating_spread END,
        grouped.tax_status,
-       grouped.call_date,
-       grouped.liquidation_preference,
+       CASE WHEN grouped.call_date_count = 0
+                 AND representative.security_type = 'preferred stock'
+            THEN representative.contract_first_call_date
+            ELSE grouped.call_date END,
+       CASE WHEN grouped.liquidation_preference_count = 0
+                 AND representative.security_type = 'preferred stock'
+            THEN representative.contract_liquidation_preference
+            ELSE grouped.liquidation_preference END,
        grouped.liquidation_preference_count > 1,
        grouped.metadata_conflicts,
        grouped.source_profiles,

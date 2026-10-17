@@ -22,6 +22,10 @@ Two accuracy problems, both repaired here without a schema change:
 It also drops implausibly large/small ``preferred.security_terms.dividend_rate``
 values (a nominal $0.0001 par or a 33,500,000 aggregate read as a rate).
 
+Exact CIK/ticker cover titles also correct common shares and listed notes that
+were mistaken for preferreds. Those authoritative titles outrank symbol suffixes;
+the repair preserves security IDs and stores the title and filing provenance.
+
 Idempotent and DB-only. ``--dry-run`` runs the full repair and rolls back.
 
 Usage:
@@ -30,6 +34,7 @@ Usage:
 """
 
 import argparse
+import json
 import sys
 from pathlib import Path
 
@@ -39,6 +44,7 @@ if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from src.crispdm.db import engine
+from src.crispdm.sec_client import classify_instrument
 
 LOADER = "repair_security_classification"
 
@@ -50,11 +56,17 @@ WITH candidate AS (
            LEFT(s.ticker, LENGTH(s.ticker) - 1) AS base,
            (SELECT CASE
                        WHEN it.title ~* '\\m(warrant|right)' THEN 'derivative'
-                       WHEN it.title ~* '\\munits?\\M' THEN 'other_debt_and_equity'
+                       WHEN it.title ~* '\\munits?\\M'
+                            AND it.title !~* '\\m(preferred|preference)\\M'
+                            THEN 'other_debt_and_equity'
                    END
             FROM raw.sec_instrument_titles it
             WHERE it.cik = s.cik AND UPPER(it.ticker) = UPPER(s.ticker)
-              AND it.title ~* '\\m(warrant|right|units?)\\M'
+              AND (
+                  it.title ~* '\\m(warrant|right)\\M'
+                  OR (it.title ~* '\\munits?\\M'
+                      AND it.title !~* '\\m(preferred|preference)\\M')
+              )
             LIMIT 1) AS title_type,
            CASE
                WHEN s.ticker ~ '-W(S|T)?$' THEN 'derivative'
@@ -129,6 +141,78 @@ RETURNING security_id
 """
 
 
+def repair_exact_titles(conn):
+    """Correct only instruments with a decisive, exact CIK/ticker cover title."""
+    rows = (
+        conn.execute(
+            text("""
+        SELECT s.security_id, s.ticker, t.title, t.accession_no, t.source_url
+        FROM reference.securities s
+        JOIN raw.sec_instrument_titles t ON t.cik = s.cik AND t.ticker = s.ticker
+        WHERE s.active AND s.security_type = 'preferred stock'
+    """)
+        )
+        .mappings()
+        .all()
+    )
+    repaired = []
+    for row in rows:
+        decision = classify_instrument(row["ticker"], exact_dei_title=row["title"])
+        if decision.source != "dei_title" or decision.security_type not in (
+            "common_stock",
+            "corporate bond",
+            "government debt",
+            "derivative",
+            "other_debt_and_equity",
+        ):
+            continue
+        evidence = json.dumps(
+            {
+                "exact_dei_title": row["title"],
+                "accession_no": row["accession_no"],
+                "source_url": row["source_url"],
+                "evidence": decision.evidence,
+                "conflicts": decision.conflicts,
+            }
+        )
+        result = conn.execute(
+            text("""
+            UPDATE reference.securities s
+            SET security_type = :new_type, security_name = :title,
+                classify_source = 'dei_title', classify_confidence = 'high',
+                classification_evidence = CAST(:evidence AS jsonb),
+                liquidation_preference = NULL,
+                coupon_rate = CASE WHEN :new_type IN ('common_stock', 'derivative',
+                    'other_debt_and_equity') THEN NULL ELSE coupon_rate END,
+                updated_at = now()
+            WHERE s.security_id = :security_id
+              AND NOT EXISTS (
+                  SELECT 1 FROM reference.securities d
+                  WHERE d.cik = s.cik AND d.ticker = s.ticker
+                    AND d.security_type = :new_type AND d.dividend = s.dividend
+                    AND d.security_id <> s.security_id
+              )
+            RETURNING s.ticker, s.security_type
+        """),
+            {**row, "new_type": decision.security_type, "evidence": evidence},
+        ).all()
+        if not result:
+            # A row of the real type already holds the unique (cik, ticker, type,
+            # dividend) key, so retire the misclassified preferred duplicate.
+            result = conn.execute(
+                text("""
+                UPDATE reference.securities
+                SET active = FALSE, classification_evidence = CAST(:evidence AS jsonb),
+                    updated_at = now()
+                WHERE security_id = :security_id
+                RETURNING ticker, 'retired duplicate of ' || :new_type
+            """),
+                {**row, "new_type": decision.security_type, "evidence": evidence},
+            ).all()
+        repaired.extend(result)
+    return repaired
+
+
 def repair(conn):
     """Apply every repair; return the reclassified rows and a counts summary.
 
@@ -136,7 +220,8 @@ def repair(conn):
     UPDATE's RETURNING, so a re-run reports only what it actually changed rather
     than every row a previous run touched.
     """
-    reclassified = conn.execute(text(RECLASSIFY_SQL), {"loader": LOADER}).all()
+    reclassified = repair_exact_titles(conn)
+    reclassified.extend(conn.execute(text(RECLASSIFY_SQL), {"loader": LOADER}).all())
     cleared_leak = conn.execute(text(CLEAR_COMMON_LEAK_SQL)).all()
     cleared_rate = conn.execute(text(CLEAR_ABSURD_RATE_SQL)).all()
     summary = {
@@ -166,7 +251,7 @@ def main(argv=None):
 
     label = "DRY RUN" if args.dry_run else "REPAIRED"
     print(f"[{label}]")
-    print(f"  reclassified warrant/right/unit rows: {summary['reclassified']}")
+    print(f"  reclassified exact-title/suffix rows: {summary['reclassified']}")
     for ticker, security_type in sorted(rows)[:40]:
         print(f"    {ticker:<8} -> {security_type}")
     if len(rows) > 40:

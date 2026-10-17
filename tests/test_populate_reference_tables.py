@@ -16,6 +16,9 @@ class _Result:
     def mappings(self):
         return self
 
+    def __iter__(self):
+        return iter(self.rows)
+
     def all(self):
         return self.rows
 
@@ -256,6 +259,71 @@ def _run_main(monkeypatch, result):
     monkeypatch.setattr(sys, "argv", ["populate_reference_tables", "--securities"])
     monkeypatch.setattr(populate_reference_tables, "populate_securities", lambda *a, **k: result)
     return populate_reference_tables.main()
+
+
+@pytest.mark.parametrize("tickers", [None, [], ["XRPN", "XRPNW"]])
+def test_security_rebuild_scopes_raw_tickers_before_classification(monkeypatch, tickers):
+    conn = _Connection([_Result(), _Result()])
+    monkeypatch.setattr(populate_reference_tables, "engine", SimpleNamespace(connect=lambda: conn))
+
+    class StopBeforeClassification(Exception):
+        pass
+
+    def stop(_conn):
+        raise StopBeforeClassification
+
+    monkeypatch.setattr(populate_reference_tables, "observed_payer_keys", stop)
+    with pytest.raises(StopBeforeClassification):
+        populate_reference_tables.populate_securities(limit=2, tickers=tickers)
+
+    sql, params = conn.statements[1]
+    assert ("WHERE ticker = ANY(:tickers)" in sql) == (tickers is not None)
+    assert "LIMIT :limit" in sql
+    assert params == ({"limit": 2} if tickers is None else {"limit": 2, "tickers": tickers})
+
+
+def test_targeted_security_cli_normalizes_and_forwards_symbols(monkeypatch):
+    import sys
+
+    calls = []
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["populate_reference_tables", "--securities", "--tickers", " xrpnw,XRPN,xrpn, "],
+    )
+
+    def populate(*args, **kwargs):
+        calls.append((args, kwargs))
+        return 2, 2, 0
+
+    monkeypatch.setattr(populate_reference_tables, "populate_securities", populate)
+    assert populate_reference_tables.main() == 0
+    assert calls == [
+        ((None,), {"repopulate": False, "reclassify": False, "tickers": ["XRPN", "XRPNW"]})
+    ]
+
+
+@pytest.mark.parametrize(
+    "args",
+    [
+        ["--tickers", "XRPN"],
+        ["--securities", "--issuers", "--tickers", "XRPN"],
+        ["--securities", "--repopulate", "--tickers", "XRPN"],
+        ["--securities", "--tickers", " , "],
+    ],
+)
+def test_targeted_security_cli_rejects_invalid_scope(monkeypatch, args):
+    import sys
+
+    monkeypatch.setattr(sys, "argv", ["populate_reference_tables", *args])
+    with pytest.raises(SystemExit) as exc:
+        populate_reference_tables.main()
+    assert exc.value.code == 2
+
+
+def test_targeted_rebuild_cannot_sweep_unrelated_orphans():
+    with pytest.raises(ValueError, match="global repopulate sweep"):
+        populate_reference_tables.populate_securities(tickers=["XRPN"], repopulate=True)
 
 
 def test_a_securities_run_that_stopped_early_fails_even_though_it_wrote_rows(monkeypatch, capsys):

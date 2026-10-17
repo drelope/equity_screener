@@ -79,9 +79,12 @@ TABLE_HELP = {
         "preferred.v_security_terms",
         "ex_date",
         (
-            "Most recent dividend date for the security. OPENBB rows are true ex-dates; "
-            "SEC XBRL rows are fiscal period-ends. A preferred series prefers its own "
-            "dividend over the issuer's common."
+            "Most recent dividend date for the security. Listing ex-dates through "
+            "OpenBB (FMP, with Yahoo Finance where FMP has none; may be an announced "
+            "upcoming ex-date) are preferred for every type; SEC XBRL filings are the "
+            "fallback and are fiscal period-ends. A preferred series never shows its "
+            "issuer's common "
+            "dividend, nor an issuer-level preferred fact shared by several series."
         ),
     ),
     "dividend_amount": (

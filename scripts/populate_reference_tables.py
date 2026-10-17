@@ -577,7 +577,7 @@ def _upsert_classification_cache(conn, cik, ticker, company_name, classification
     )
 
 
-def populate_securities(limit=None, repopulate=False, reclassify=False):
+def populate_securities(limit=None, repopulate=False, reclassify=False, *, tickers=None):
     """Build audited security rows from raw tickers and SEC Company Facts.
 
     One row per SEC-listed instrument: ``raw.company_ticker`` already enumerates
@@ -585,6 +585,8 @@ def populate_securities(limit=None, repopulate=False, reclassify=False):
     concept-bucket set from ``classify_companyfacts`` is collapsed to a single
     security_type instead of being fanned out into a row per bucket.
     """
+    if tickers is not None and repopulate:
+        raise ValueError("A targeted ticker rebuild cannot run the global repopulate sweep")
     print("Populating reference.securities...")
 
     count = 0
@@ -598,15 +600,22 @@ def populate_securities(limit=None, repopulate=False, reclassify=False):
         exchange_map = {e["exchange_code"]: e["exchange_id"] for e in exchanges}
 
         limit_sql = " LIMIT :limit" if limit else ""
+        ticker_sql = " WHERE ticker = ANY(:tickers)" if tickers is not None else ""
+        params = {}
+        if limit:
+            params["limit"] = limit
+        if tickers is not None:
+            params["tickers"] = tickers
         raw_tickers = list(
             conn.execute(
                 text(f"""
             SELECT ticker, cik, title
             FROM raw.company_ticker
+            {ticker_sql}
             ORDER BY ticker
             {limit_sql}
         """),
-                {"limit": limit} if limit else {},
+                params,
             ).mappings()
         )
         batch_ciks = {row["cik"] for row in raw_tickers if row["cik"] is not None}
@@ -780,6 +789,7 @@ def populate_securities(limit=None, repopulate=False, reclassify=False):
                 instrument = classify_instrument(
                     sec["ticker"],
                     classification,
+                    exact_dei_title=exact_title,
                     dei_titles=(
                         [exact_title]
                         if exact_title
@@ -921,7 +931,9 @@ def populate_securities(limit=None, repopulate=False, reclassify=False):
         f"downstream: {reconcile_log['deactivated_with_children'][:10]}..."
     )
 
-    validate_securities_reference_fk(check_active_identity_duplicates=limit is None)
+    validate_securities_reference_fk(
+        check_active_identity_duplicates=limit is None and tickers is None
+    )
     return securities_result
 
 
@@ -971,6 +983,9 @@ def main():
     parser.add_argument("--issuers", action="store_true", help="Only populate issuers")
     parser.add_argument("--securities", action="store_true", help="Only populate securities")
     parser.add_argument(
+        "--tickers", help="Comma-separated symbols to rebuild (requires --securities)"
+    )
+    parser.add_argument(
         "--legacy-sec",
         action="store_true",
         help="Repair missing issuer fields using legacy SEC CompanyDBSearch",
@@ -989,6 +1004,17 @@ def main():
     )
 
     args = parser.parse_args()
+    tickers = None
+    if args.tickers is not None:
+        if not args.securities or args.exchanges or args.issuers or args.legacy_sec:
+            parser.error("--tickers requires --securities without other table selectors")
+        if args.repopulate:
+            parser.error("--tickers cannot be combined with the global --repopulate sweep")
+        tickers = sorted(
+            {value.strip().upper() for value in args.tickers.split(",") if value.strip()}
+        )
+        if not tickers:
+            parser.error("--tickers must contain at least one symbol")
 
     # If no specific tables chosen, populate all
     populate_all = not any([args.exchanges, args.issuers, args.securities, args.legacy_sec])
@@ -1005,7 +1031,10 @@ def main():
 
         if args.securities or populate_all:
             attempted, written, errors = populate_securities(
-                args.limit, repopulate=args.repopulate, reclassify=args.reclassify
+                args.limit,
+                repopulate=args.repopulate,
+                reclassify=args.reclassify,
+                tickers=tickers,
             )
             # A run that stops early leaves a partially rebuilt universe, and later stages
             # would read it as complete. The 2026-10-07 nightly stopped at "O" and still

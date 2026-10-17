@@ -13,6 +13,9 @@ import re
 from decimal import Decimal
 
 from src.crispdm.doc_clauses import (
+    _extract_liquidation_preference,
+    depositary_ratio,
+    extract_floating_terms,
     extract_liquidation_preference,
     extract_redemption,
     html_to_text,
@@ -241,8 +244,6 @@ def test_series_scoped_redemption_picks_own_series():
 
 
 def test_depositary_ratio_from_security_name():
-    from src.crispdm.doc_clauses import depositary_ratio
-
     assert (
         depositary_ratio(
             "Depositary Shares, each representing a 1/1,000th interest in a share "
@@ -259,6 +260,13 @@ def test_depositary_ratio_from_security_name():
     )
     assert depositary_ratio("4.75% Series A Cumulative Preferred Stock") is None
     assert depositary_ratio("Common Stock, par value $0.001") is None
+    assert (
+        depositary_ratio(
+            "Depository Shares, each representing 1/1,000th interest in a share "
+            "of 6.25% Non-Cumulative Preferred Stock, Series B"
+        )
+        == 1000
+    )
     # Rights/warrants are also written as fractions but are not depositaries.
     assert (
         depositary_ratio("Rights, each entitling the holder to receive one-tenth (1/10) of a share")
@@ -489,3 +497,80 @@ def test_issuance_purchase_price_is_not_a_call_price():
         "$9,091 per share."
     )
     assert extract_redemption(document) is None
+
+
+def test_liquidation_skips_par_value_and_reads_word_depositary_ratios():
+    text = (
+        "8.50% Series A Mandatory Convertible Preferred Stock (par value $1.00 per share) "
+        "(Liquidation Preference as specified below). The Liquidation Preference is "
+        "$1,000.00 per share."
+    )
+    assert _extract_liquidation_preference(text)["amount"] == 1000
+    assert depositary_ratio("Dep Shs, represent 1/1,000th interest in a share of Pref Stk") == 1000
+    assert (
+        depositary_ratio("Depositary Shares, each representing one one-thousandth of a share")
+        == 1000
+    )
+
+
+def test_single_series_certificate_falls_back_to_unscoped_liquidation():
+    text = (
+        "Series A Mandatorily Convertible Preferred Stock. "
+        + "Filler. " * 3000
+        + "Original Liquidation Preference means, with respect to any share of Convertible "
+        "Preferred Stock, $1,000 per share."
+    )
+    pattern = re.compile(r"\bseries\s*(?:A)\b", re.IGNORECASE)
+    assert extract_liquidation_preference(text, pattern)["amount"] == 1000
+    other = text.replace("Filler. Original", "The Series B Preferred Stock. Filler. Original", 1)
+    assert extract_liquidation_preference(other, pattern) is None
+
+
+# Arbor Realty Trust 424B5 (0001104659-22-010852), Series F dividend clause.
+FIXED_TO_FLOATING = (
+    "Holders of the New Series F Preferred Stock are entitled to receive cumulative cash "
+    "dividends (i) from and including January 30, 2022 to, but excluding, October 30, 2026 at "
+    "a fixed rate equal to 6.25% per annum of the $25.00 per share liquidation preference and "
+    "(ii) from and including October 30, 2026 at a floating rate equal to a benchmark rate "
+    "(which is expected to be Three-Month Term SOFR (as defined below)) plus a spread of "
+    "5.442% per annum of the $25.00 per share liquidation preference."
+)
+
+
+def test_fixed_to_floating_clause_gives_the_period_end_and_spread():
+    result = extract_floating_terms(FIXED_TO_FLOATING)
+
+    assert result["fixed_period_end"] == "2026-10-30"
+    assert result["floating_spread"] == Decimal("5.442")
+    assert result["benchmark"] == "benchmark rate"
+
+
+def test_fixed_rate_reset_clause_gives_the_reset_date_and_spread():
+    text = (
+        "Dividends will accrue (i) from and including the date of original issue to, but "
+        "excluding, February 15, 2031, at a fixed rate of 8.750% per annum, and (ii) thereafter, "
+        "during each reset period, at a rate per annum equal to the five-year treasury rate as "
+        "of the most recent reset dividend determination date plus 5.009% per annum."
+    )
+
+    result = extract_floating_terms(text)
+
+    assert result["fixed_period_end"] == "2031-02-15"
+    assert result["floating_spread"] == Decimal("5.009")
+
+
+def test_a_credit_facility_spread_is_not_a_floating_dividend():
+    text = (
+        "Borrowings under the revolving credit facility bear interest at Term SOFR plus 1.30%. "
+        "Dividends on the Series D Preferred Stock accrue at a fixed rate of 6.375% per annum."
+    )
+
+    assert extract_floating_terms(text) is None
+
+
+def test_floating_terms_are_scoped_to_the_series():
+    other = FIXED_TO_FLOATING.replace("Series F", "Series G")
+    document = "Series D Preferred Stock pays a fixed 6.375% dividend. " + "x " * 1500 + other
+
+    assert extract_floating_terms(document, re.compile(r"\bseries\s+D\b", re.I)) is None
+    assert extract_floating_terms(document, re.compile(r"\bseries\s+G\b", re.I))

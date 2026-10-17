@@ -626,7 +626,17 @@ def build_features(date_from=None, date_to=None):
     """
     sql = """
     WITH d AS (
-      SELECT security_id, ex_dividend_date, amount, provider, frequency
+      -- Split-adjusted, to match the split-adjusted closes these payments are
+      -- compared with. FMP rows store the as-declared amount and, in
+      -- adjusted_amount, that amount restated by Yahoo's split factors (the ones
+      -- the closes carry; see openbb_client._price_basis_adjust); yfinance rows
+      -- are already adjusted and leave
+      -- adjusted_amount NULL. Reading the as-declared figure would fake a cut (or
+      -- a raise) at every split: WLFC 0.40 declared is 0.1333 per post-split share.
+      SELECT security_id, ex_dividend_date,
+             CASE WHEN provider = 'OPENBB' THEN COALESCE(adjusted_amount, amount)
+                  ELSE amount END AS amount,
+             provider, frequency
       FROM raw.dividend_data
       WHERE amount > 0
         AND (provider <> 'SEC_XBRL' OR concept IN (

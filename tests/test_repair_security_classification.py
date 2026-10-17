@@ -206,3 +206,75 @@ def test_repair_is_idempotent():
             assert "ZQAW" not in dict(second)
         finally:
             trans.rollback()
+
+
+def test_exact_title_repairs_debt_and_common_without_changing_security_ids():
+    engine = _live_engine()
+    if engine is None:
+        pytest.skip("no database available")
+    with engine.connect() as conn:
+        trans = conn.begin()
+        try:
+            debt = _insert_security(
+                conn, "ZQT-PA", "9000000021", "preferred stock", liquidation=25000
+            )
+            common = _insert_security(
+                conn, "ZQTC", "9000000021", "preferred stock", coupon=5, liquidation=25
+            )
+            _insert_security(conn, "ZQTU", "9000000021", "preferred stock")
+            _insert_title(conn, "9000000021", "ZQTU", "Unrecognized issuer label")
+            _insert_security(conn, "ZQT-PB", "9000000021", "preferred stock")
+            _insert_title(conn, "9000000021", "ZQT-PB", "9% Series B Preferred Units")
+            _insert_security(conn, "ZQT-PC", "9000000021", "preferred stock")
+            _insert_title(conn, "9000000021", "ZQT-PC", "Series C Preference Units")
+            _insert_title(conn, "9000000021", "ZQT-PA", "6% Senior Notes due 2030")
+            _insert_title(conn, "9000000021", "ZQTC", "Common stock, par value $0.01")
+            changed = dict(repair.repair_exact_titles(conn))
+            assert changed["ZQT-PA"] == "corporate bond"
+            assert changed["ZQTC"] == "common_stock"
+            assert "ZQTU" not in changed
+            all_changes, _ = repair.repair(conn)
+            assert "ZQT-PB" not in dict(all_changes)
+            assert "ZQT-PC" not in dict(all_changes)
+            rows = (
+                conn.execute(
+                    text("""
+                SELECT security_id, coupon_rate, liquidation_preference,
+                       classify_source, classify_confidence
+                FROM reference.securities WHERE security_id IN (:debt, :common)
+            """),
+                    {"debt": debt, "common": common},
+                )
+                .mappings()
+                .all()
+            )
+            assert {r["security_id"] for r in rows} == {debt, common}
+            assert all(r["liquidation_preference"] is None for r in rows)
+            assert all(r["classify_source"] == "dei_title" for r in rows)
+            assert all(r["classify_confidence"] == "high" for r in rows)
+            assert next(r for r in rows if r["security_id"] == common)["coupon_rate"] is None
+            assert not repair.repair_exact_titles(conn)
+        finally:
+            trans.rollback()
+
+
+def test_exact_title_retires_preferred_duplicate_of_existing_common():
+    engine = _live_engine()
+    if engine is None:
+        pytest.skip("no database available")
+    with engine.connect() as conn:
+        trans = conn.begin()
+        try:
+            _insert_security(conn, "ZQD", "9000000031", "common_stock")
+            duplicate = _insert_security(conn, "ZQD", "9000000031", "preferred stock")
+            _insert_title(conn, "9000000031", "ZQD", "Class A common shares, par value $0.01")
+            changed = dict(repair.repair_exact_titles(conn))
+            assert changed["ZQD"] == "retired duplicate of common_stock"
+            active = conn.execute(
+                text("SELECT active FROM reference.securities WHERE security_id = :id"),
+                {"id": duplicate},
+            ).scalar_one()
+            assert active is False
+            assert not repair.repair_exact_titles(conn)
+        finally:
+            trans.rollback()

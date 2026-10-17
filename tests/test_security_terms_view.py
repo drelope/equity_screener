@@ -22,9 +22,10 @@ from pathlib import Path
 
 import pytest
 
-MIGRATION = (
-    Path(__file__).resolve().parents[1] / "sql" / "migrations" / "V0066_security_terms_view.sql"
-)
+VIEW_DDL = "CREATE OR REPLACE VIEW preferred.v_security_terms"
+MIGRATIONS = Path(__file__).resolve().parents[1] / "sql" / "migrations"
+# The live definition is the newest migration that (re)creates the view.
+MIGRATION = max(p for p in MIGRATIONS.glob("V*.sql") if VIEW_DDL in p.read_text())
 
 
 def _live_connection():
@@ -103,6 +104,45 @@ def test_dividend_pick_is_class_aware():
 
 def test_dividend_amount_is_guarded():
     assert "(d.amount is null or d.amount <= 1000)" in _view_statement()
+
+
+def test_the_view_migration_records_the_dividend_feed():
+    assert MIGRATION.name == "V0081_dividend_feed_provenance.sql"
+    ddl = _view_statement()
+    assert "d.feed" in ddl
+    assert "dd.feed as dividend_feed" in ddl
+
+
+def test_view_exposes_a_known_dividend_feed():
+    from sqlalchemy import text
+
+    with _live_engine().connect() as conn:
+        feeds = set(
+            conn.execute(
+                text(
+                    "SELECT DISTINCT dividend_feed FROM preferred.v_security_terms "
+                    "WHERE dividend_provider = 'OPENBB'"
+                )
+            ).scalars()
+        )
+    assert feeds, "expected OPENBB-sourced dividends in the view"
+    assert feeds <= {"fmp", "yfinance"}
+
+
+def test_true_ex_dates_rank_first_for_every_security_type():
+    """V0066 ranked the SEC common concept (a fiscal period-end) above OPENBB."""
+    ddl = _view_statement()
+    order_by = ddl[ddl.index("order by\n        case") :]
+    assert order_by.index("when d.provider = 'openbb' then 0") < order_by.index(
+        "commonstockdividendspersharedeclared"
+    )
+    assert "when s.security_type = 'preferred stock' and d.provider" not in ddl
+
+
+def test_preferred_sec_fallback_needs_a_single_active_series():
+    ddl = _view_statement()
+    assert "ps.active_series = 1" in ddl
+    assert "coalesce(d.concept, '') = ''" not in ddl
 
 
 def _live_engine():
@@ -186,3 +226,40 @@ def test_live_preferred_dividends_never_use_the_issuer_common_concept():
         ).scalar()
     assert leaked == 0
     assert over_guard == 0
+
+
+def test_live_sec_period_ends_never_displace_a_stored_true_ex_date():
+    from sqlalchemy import text
+
+    with _live_engine().connect() as conn:
+        displaced = conn.execute(
+            text("""
+            SELECT count(*)
+            FROM preferred.v_security_terms v
+            WHERE v.dividend_provider IS DISTINCT FROM 'OPENBB'
+              AND EXISTS (
+                SELECT 1 FROM raw.dividend_data d
+                WHERE d.security_id = v.security_id AND d.provider = 'OPENBB'
+                  AND (d.amount IS NULL OR d.amount <= 1000))
+            """)
+        ).scalar()
+    assert displaced == 0
+
+
+def test_live_preferred_sec_fallback_is_single_series_only():
+    from sqlalchemy import text
+
+    with _live_engine().connect() as conn:
+        shared = conn.execute(
+            text("""
+            SELECT count(*)
+            FROM preferred.v_security_terms v
+            JOIN reference.securities s USING (security_id)
+            WHERE s.security_type = 'preferred stock'
+              AND v.dividend_provider = 'SEC_XBRL'
+              AND (SELECT count(*) FROM reference.securities o
+                   WHERE o.cik = s.cik AND o.active
+                     AND o.security_type = 'preferred stock') <> 1
+            """)
+        ).scalar()
+    assert shared == 0

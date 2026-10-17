@@ -39,3 +39,6 @@ t -ErrorAction SilentlyContinue | Select-Object Name,Source
 /_*.py
 /_*.sh
 /_*.out
+
+# OpenBB provider credentials (loaded at runtime by src/crispdm/openbb_client.py)
+ObbCredentials.json

@@ -7,6 +7,10 @@ class Settings(BaseSettings):
     database_url: str = "postgresql+psycopg://dividend:dividend@localhost:5432/dividend"
     sec_user_agent: str = "Your Name your.email@example.com"
     openbb_provider: str | None = None
+    #: JSON file holding OpenBB provider API keys under a top-level "credentials" object
+    #: (e.g. fmp_api_key, polygon_api_key). Relative paths resolve from the repo root.
+    #: The file is git-ignored; a missing file just leaves keyless providers available.
+    openbb_credentials_file: str = "ObbCredentials.json"
     api_key: str | None = None
     min_recall: float = 0.30
     #: Horizon of the sustainability label. A feature row dated D is labelled

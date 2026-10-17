@@ -10,6 +10,8 @@ the dollar amounts next to the standard contractual phrases:
 - ``optional redemption`` / ``redemption at the option of the Company`` ->
   the call price at the First Call Date, the First Call Date itself, and any
   redemption price schedule
+- a fixed-to-floating / fixed-rate reset dividend clause -> the end of the
+  fixed-rate period and the spread over the benchmark rate
 
 Every extractor returns the matched value together with the section heading
 and a short evidence snippet, so the stored terms stay auditable.
@@ -117,6 +119,23 @@ def _per_share_vicinity(text, value_offset):
 #: denominator is how many depositary shares represent one preferred share, so a
 #: per-share amount is divided by it to reach the per-depositary figure.
 DEPOSITARY_RATIO_RE = re.compile(r"1\s*/\s*([0-9][0-9,]*)")
+#: "one one-thousandth of a share" / "a one-fortieth interest".
+_WORD_FRACTIONS = {
+    "tenth": 10,
+    "twentieth": 20,
+    "twenty-fifth": 25,
+    "fortieth": 40,
+    "hundredth": 100,
+    "four-hundredth": 400,
+    "thousandth": 1000,
+    "four-thousandth": 4000,
+    "ten-thousandth": 10000,
+}
+DEPOSITARY_WORD_RATIO_RE = re.compile(
+    r"\bone[\s-]+(" + "|".join(sorted(_WORD_FRACTIONS, key=len, reverse=True)) + r")\b",
+    re.IGNORECASE,
+)
+_DEPOSITARY_NAME_RE = re.compile(r"deposit[ao]r|\bdep\.?\s+shs?\b", re.IGNORECASE)
 #: A figure followed by this is already stated per depositary share.
 PER_DEPOSITARY_RE = re.compile(r"per\s+depositary\s+share", re.IGNORECASE)
 #: The first "per [depositary ]share" unit after a money value; group 1 captures
@@ -140,11 +159,12 @@ def depositary_ratio(name):
     described as fractions ("each right entitling the holder to one-tenth (1/10)
     of a share") but are not preferred shares and must not be divided.
     """
-    if not name or not re.search(r"depositar", name, re.IGNORECASE):
+    if not name or not _DEPOSITARY_NAME_RE.search(name):
         return None
     match = DEPOSITARY_RATIO_RE.search(name)
     if not match:
-        return None
+        word = DEPOSITARY_WORD_RATIO_RE.search(name)
+        return _WORD_FRACTIONS[word.group(1).lower()] if word else None
     try:
         ratio = int(match.group(1).replace(",", ""))
     except ValueError:
@@ -232,6 +252,41 @@ LIQUIDATION_ANCHOR = re.compile(
     r"liquidation\s+(?:preference|preferences|rights?)?\s*", re.IGNORECASE
 )
 
+_PAR_VALUE_PREFIX_RE = re.compile(r"\bpar\s+value(?:\s+of)?\s*[:(]?\s*$", re.IGNORECASE)
+
+#: The plain-English entitlement sentence ("In the event of our liquidation,
+#: holders of ... are entitled to receive $25.00 per share plus ..."). The
+#: anchor above needs whitespace after "liquidation", so this comma form is
+#: missed; it is only consulted when the anchored scan finds nothing.
+LIQUIDATION_ENTITLEMENT_RE = re.compile(
+    r"in\s+the\s+event\s+of\s+(?:our|any|the|a)?\s*(?:voluntary\s+or\s+involuntary\s+)?"
+    r"liquidation\b[^.$]{0,250}?\bholders\b[^.$]{0,200}?\bentitled\s+to\s+receive\s+"
+    r"(\$\s?\d[\d,]*(?:\.\d+)?)\s+per\s+(?:depositary\s+)?(?:share|unit)\b",
+    re.IGNORECASE,
+)
+
+
+def _extract_liquidation_entitlement(text, depositary_ratio=None):
+    for match in LIQUIDATION_ENTITLEMENT_RE.finditer(text):
+        value = _parse_money(match.group(1))
+        if value is None or not (MIN_PER_SHARE <= value <= MAX_PER_SHARE):
+            continue
+        offset = match.start(1)
+        if re.match(r"\s*(?:per\s+annum|per\s+year|each\s+year|annually)", text[match.end() :]):
+            continue
+        amount = _scale_for_depositary(text, offset, value, depositary_ratio)
+        if amount is None:
+            continue
+        return {
+            "amount": amount,
+            "per_share": True,
+            "confidence": 0.7,
+            "match": match.group(1).strip(),
+            "heading": _heading_at(text, offset) or "Liquidation Preference",
+            "snippet": _snippet(text, offset),
+        }
+    return None
+
 
 def _extract_liquidation_preference(text, depositary_ratio=None):
     """Whole-text per-share Liquidation Preference scan (internal helper)."""
@@ -273,6 +328,10 @@ def _extract_liquidation_preference(text, depositary_ratio=None):
                 continue
             if _negates_liquidation_rights(window, offset):
                 continue
+            if _PAR_VALUE_PREFIX_RE.search(window[max(0, offset - 30) : offset]):
+                # "(par value $1.00 per share) (Liquidation Preference as
+                # specified below)": the nearest per-share figure is the par.
+                continue
             candidate = {
                 "amount": amount,
                 "per_share": per_share,
@@ -292,7 +351,8 @@ def _extract_liquidation_preference(text, depositary_ratio=None):
                 }
     if best is not None:
         best.pop("distance", None)
-    return best
+        return best
+    return _extract_liquidation_entitlement(text, depositary_ratio)
 
 
 REDEMPTION_ANCHOR = re.compile(
@@ -488,6 +548,23 @@ def _negates_liquidation_rights(window, offset):
     return _NEGATED_PREFERENCE_RE.search(window[max(0, offset - 40) : offset + 240]) is not None
 
 
+#: "The notes may be redeemed ..." / "we may redeem ... the notes": a debt
+#: redemption clause (a notes prospectus filed by a preferred issuer), not the
+#: preferred's call feature.
+_DEBT_REDEMPTION_RE = re.compile(
+    r"\b(?:the|our|such|of)\s+(?:[\w-]+\s+){0,3}?(?:notes|debentures|debt\s+securities)\b",
+    re.IGNORECASE,
+)
+_EQUITY_SUBJECT_RE = re.compile(
+    r"\bpreferred\b|\bpreference\b|\bshares?\b|\bunits?\b", re.IGNORECASE
+)
+
+
+def _is_debt_redemption(window_pre, window):
+    clause = window_pre[-60:] + window[:160]
+    return _DEBT_REDEMPTION_RE.search(clause) is not None and not _EQUITY_SUBJECT_RE.search(clause)
+
+
 def _extract_redemption(text, depositary_ratio=None):
     """Whole-text optional/call-feature scan (internal helper)."""
     percentage_priced = _PERCENT_OF_VALUE_RE.search(text) is not None
@@ -498,6 +575,8 @@ def _extract_redemption(text, depositary_ratio=None):
             continue
         window = text[start : min(len(text), start + 2200)]
         window_pre = text[max(0, start - 160) : start]
+        if _is_debt_redemption(window_pre, window):
+            continue
         optional = OPTION_RE.search(window) is not None or OPTION_RE.search(window_pre) is not None
 
         call_date = None
@@ -656,6 +735,16 @@ def _merge_best_clause(current, candidate):
     return candidate if priority else current
 
 
+_ANY_SERIES_RE = re.compile(r"\b[Ss]eries\s+(?:[A-Z]{1,2}|\d{1,2})\b")
+
+
+def _names_only_this_series(text, series_pattern):
+    """True when every "Series X" in ``text`` is this series, so scoping cannot
+    pick up another series' terms (a single-series certificate that otherwise
+    says just "the Convertible Preferred Stock")."""
+    return all(series_pattern.search(m.group(0)) for m in _ANY_SERIES_RE.finditer(text))
+
+
 def extract_liquidation_preference(text, series_pattern=None, depositary_ratio=None):
     """Per-share Liquidation Preference; scoped to ``series_pattern`` when given."""
     if series_pattern is None:
@@ -665,6 +754,8 @@ def extract_liquidation_preference(text, series_pattern=None, depositary_ratio=N
         best = _merge_best_clause(
             best, _extract_liquidation_preference(text[start:end], depositary_ratio)
         )
+    if best is None and _names_only_this_series(text, series_pattern):
+        best = _extract_liquidation_preference(text, depositary_ratio)
     return best
 
 
@@ -676,3 +767,64 @@ def extract_redemption(text, series_pattern=None, depositary_ratio=None):
     for start, end in _series_regions(text, series_pattern):
         best = _merge_best_clause(best, _extract_redemption(text[start:end], depositary_ratio))
     return best
+
+
+# A fixed-to-floating (or fixed-rate reset) dividend sentence names both terms
+# together: "... to, but excluding, October 30, 2026 at a fixed rate equal to
+# 6.25% ... and (ii) from and including October 30, 2026 at a floating rate equal
+# to ... Three-Month Term SOFR plus a spread of 5.442% per annum". Requiring the
+# fixed-period end and the benchmark spread in one clause keeps a credit
+# facility's "SOFR plus 1.30%" or a note's "Treasury Rate plus 25 basis points"
+# from being read as a preferred's floating terms.
+FLOATING_CLAUSE_RE = re.compile(
+    r"to,?\s+but\s+(?:excluding|not\s+including),?\s+(?:the\s+)?"
+    rf"(?P<month>{_MONTH_JOIN})\s+(?P<day>[0-9]{{1,2}}),?\s+(?P<year>[0-9]{{4}})"
+    r"(?P<mid>.{0,700}?)"
+    r"(?P<benchmark>SOFR|LIBOR|benchmark(?:\s+rate)?|treasury\s+rate|reference\s+rate|treasury)"
+    r"[^.;]{0,220}?\bplus\s+(?:a\s+spread\s+of\s+)?(?P<spread>[0-9]{1,2}(?:\.[0-9]{1,4})?)\s*%",
+    re.IGNORECASE | re.DOTALL,
+)
+_FIXED_RATE_RE = re.compile(r"\bfixed\b", re.IGNORECASE)
+_FLOATING_CONTEXT_RE = re.compile(
+    r"floating|\breset\b|benchmark|\bSOFR\b|\bLIBOR\b|treasury", re.IGNORECASE
+)
+MIN_FLOATING_SPREAD = Decimal("0.1")
+MAX_FLOATING_SPREAD = Decimal("15")
+
+
+def _extract_floating_terms(text):
+    for match in FLOATING_CLAUSE_RE.finditer(text):
+        if not _FIXED_RATE_RE.search(text[max(0, match.start() - 250) : match.start() + 400]):
+            continue
+        if not _FLOATING_CONTEXT_RE.search(match.group("mid") + match.group("benchmark")):
+            continue
+        spread = Decimal(match.group("spread"))
+        if not MIN_FLOATING_SPREAD <= spread <= MAX_FLOATING_SPREAD:
+            continue
+        end = _month_day_year(match)
+        if end is None:
+            continue
+        return {
+            "fixed_period_end": end,
+            "floating_spread": spread,
+            "benchmark": " ".join(match.group("benchmark").split()),
+            "heading": _heading_at(text, match.start()),
+            "snippet": _snippet(text, match.start(), width=400),
+            "match": " ".join(match.group(0).split())[:400],
+        }
+    return None
+
+
+def extract_floating_terms(text, series_pattern=None):
+    """Fixed-period end date + floating/reset spread over the benchmark (percent).
+
+    Scoped to ``series_pattern`` when given; returns the first series region
+    whose dividend clause states both terms, or None.
+    """
+    if series_pattern is None:
+        return _extract_floating_terms(text)
+    for start, end in _series_regions(text, series_pattern):
+        found = _extract_floating_terms(text[start:end])
+        if found:
+            return found
+    return None

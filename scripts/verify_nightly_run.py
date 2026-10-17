@@ -342,12 +342,18 @@ def assess(
     elif model.get("readiness") == "no_go":
         # Accepted 2026-10-06: the rule-based composite is the product. The recall on this
         # row belongs to an always-"sustainable" model, so it must not read as a pass.
+        failed = [
+            f"{name}={check['actual']:.4f} (required {check['required']:.4f})"
+            for name, check in (model.get("gate_detail") or {}).get("checks", {}).items()
+            if check.get("passed") is False
+        ]
+        reason = f"; failed checks: {', '.join(failed)}" if failed else ""
         checks.append(
             _check(
                 "walk_forward_gate",
                 "info",
                 f"ML model not adopted: latest walk-forward is NO-GO ({model.get('created_at')}); "
-                "rule-based scoring is in use",
+                f"rule-based scoring is in use{reason}",
             )
         )
     else:
@@ -451,7 +457,7 @@ def fetch_findings(conn, run_date, lookback_start):
             conn.execute(
                 text(
                     """
-                SELECT run_id, recall, readiness, created_at
+                SELECT run_id, recall, readiness, created_at, gate_detail
                 FROM audit.model_runs
                 ORDER BY created_at DESC
                 LIMIT 1
@@ -465,6 +471,7 @@ def fetch_findings(conn, run_date, lookback_start):
             "run_id": str(model["run_id"]) if model else None,
             "recall": float(model["recall"]) if model and model["recall"] is not None else None,
             "readiness": model["readiness"] if model else None,
+            "gate_detail": model["gate_detail"] if model else None,
             "created_at": (
                 model["created_at"].isoformat()
                 if model and model["created_at"] is not None

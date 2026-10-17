@@ -17,13 +17,13 @@ class _Lock:
         pass
 
 
-def _run(monkeypatch, argv):
+def _run(monkeypatch, argv, fail_stage=None):
     calls = []
     recorded = {}
 
     def fake_run_module(name, args, skip=False):
         calls.append((name, tuple(args), skip))
-        return True
+        return name != fail_stage
 
     def fake_record(trigger, started_at, stages, exit_code):
         recorded["stages"] = dict(stages)
@@ -40,6 +40,45 @@ def _run(monkeypatch, argv):
 
 def _names(calls):
     return [name for name, _, _ in calls]
+
+
+def test_preferred_titles_run_before_dividend_and_contract_writers(monkeypatch):
+    calls, recorded, rc = _run(monkeypatch, ["--tickers", "FRT-PC", "--limit", "7"])
+    names = _names(calls)
+    title_stage = "scripts.populate_sec_instrument_titles"
+    assert rc == 0
+    assert names.index("scripts.populate_reference_tables") < names.index(title_stage)
+    assert names.index(title_stage) < names.index("scripts.populate_dividend_data")
+    args = next(args for name, args, _ in calls if name == title_stage)
+    assert args == ("--tickers", "FRT-PC", "--preferred-only", "--limit", "7")
+    assert recorded["stages"][title_stage] == "ok"
+
+
+def test_skip_instrument_titles_is_recorded(monkeypatch):
+    _, recorded, _ = _run(monkeypatch, ["--skip-instrument-titles"])
+    assert recorded["stages"]["scripts.populate_sec_instrument_titles"] == "skipped"
+
+
+def test_exchange_titles_run_after_sec_titles_before_dividend_data(monkeypatch):
+    calls, recorded, rc = _run(monkeypatch, ["--tickers", "AGM-PI", "--limit", "3"])
+    names = _names(calls)
+    exchange_stage = "scripts.populate_exchange_listing_titles"
+    assert rc == 0
+    assert names.index("scripts.populate_sec_instrument_titles") < names.index(exchange_stage)
+    assert names.index(exchange_stage) < names.index("scripts.populate_dividend_data")
+    args = next(args for name, args, _ in calls if name == exchange_stage)
+    assert args == ("--tickers", "AGM-PI", "--limit", "3")
+    _, recorded, _ = _run(monkeypatch, ["--skip-exchange-titles"])
+    assert recorded["stages"][exchange_stage] == "skipped"
+
+
+def test_failed_title_ingestion_stops_downstream_writers(monkeypatch):
+    calls, recorded, rc = _run(monkeypatch, [], fail_stage="scripts.populate_sec_instrument_titles")
+    assert rc == 1
+    assert recorded["stages"]["scripts.populate_sec_instrument_titles"] == "failed"
+    assert "scripts.populate_market_data" not in _names(calls)
+    assert "scripts.populate_dividend_data" not in _names(calls)
+    assert "scripts.populate_contract_terms" not in _names(calls)
 
 
 def test_repairs_run_after_the_writers_and_before_the_preferred_sweep(monkeypatch):
@@ -70,6 +109,9 @@ def test_contract_terms_runs_after_documents_and_before_features(monkeypatch):
     features = names.index("scripts.build_features")
 
     assert documents < miner < features
+    clean_ticker = names.index("scripts.populate_clean_ticker_profile")
+    clean_company = names.index("scripts.populate_clean_company_profile")
+    assert miner < clean_ticker < clean_company < features
 
 
 def test_skip_repairs_marks_both_repairs_skipped(monkeypatch):

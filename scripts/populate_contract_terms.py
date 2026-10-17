@@ -46,6 +46,7 @@ from sqlalchemy import text
 from src.crispdm.db import engine
 from src.crispdm.doc_clauses import (
     depositary_ratio,
+    extract_floating_terms,
     extract_liquidation_preference,
     extract_redemption,
     html_to_text,
@@ -361,6 +362,143 @@ def fetch_source_documents(conn, security, force=False):
     return docs
 
 
+# Older offering supplements scanned when the governing documents give no first
+# call date (a later shelf/ATM supplement rarely restates it).
+OFFERING_SUPPLEMENT_LIMIT = 25
+OFFERING_SUPPLEMENT_FORMS = ("424B5", "424B5/A", "424B2", "424B3", "424B4", "424B7")
+
+
+def coupon_token(security):
+    """The coupon as written in the security name ("6.375%"), or None."""
+    match = re.search(r"(\d+(?:\.\d+)?)\s*%", security.get("security_name") or "")
+    return f"{match.group(1)}%" if match else None
+
+
+FLOATING_STRUCTURE_RE = re.compile(r"floating|\breset\b|fixed\s*-?\s*to\s*-?", re.IGNORECASE)
+
+
+# An offering supplement announces what it sells on its cover page.
+OFFERING_COVER_CHARS = 3000
+COVER_SERIES_RE = re.compile(
+    r"(?i:preferred\s+(?:stock|shares))[^.;]{0,40}?(?i:series)\s+([A-Z]{1,2})\b"
+    r"|(?i:series)\s+([A-Z]{1,2})\s+(?:[\w%.,\-]+\s+){0,8}?(?i:preferred)"
+)
+
+
+COVER_DEBT_RE = re.compile(r"\b(?:notes|debentures)\s+due\s+(?:19|20)\d\d\b", re.IGNORECASE)
+
+
+def coupon_regex(coupon):
+    """Match the coupon as a whole number ("10%" must not match "110%")."""
+    return re.compile(r"(?<![\d.])" + re.escape(coupon[:-1]) + r"\s*%")
+
+
+def cover_offering_mismatch(normalized, pattern, coupon_re):
+    """What the supplement's cover offers instead of this series, or None.
+
+    "series": a later series' offering restates an older series' coupon in
+    passing (capitalization table, "existing preferred" summary) while its own
+    redemption clause - and call date - belong to the new series.
+    "debt": a notes/debentures offering; its optional-redemption terms are the
+    notes', so a clause only counts if it names the series itself.
+    """
+    cover = normalized[:OFFERING_COVER_CHARS]
+    if pattern.search(cover) or coupon_re.search(cover):
+        return None
+    if COVER_SERIES_RE.search(cover):
+        return "series"
+    if COVER_DEBT_RE.search(cover):
+        return "debt"
+    return None
+
+
+def _names_series(result, pattern):
+    return bool(result) and bool(pattern.search(result.get("snippet") or ""))
+
+
+def has_floating_structure(security):
+    """The name or profile coupon type marks a floating / fixed-rate reset dividend."""
+    if (security.get("coupon_type") or "") in ("fixed-to-floating", "floating"):
+        return True
+    return bool(FLOATING_STRUCTURE_RE.search(security.get("security_name") or ""))
+
+
+def fetch_offering_supplement(
+    conn, security, known_accessions=(), want_call_date=True, want_floating=False
+):
+    """Find + store the older offering supplement that states this series' missing terms.
+
+    Only consulted when the governing documents leave the first call date (or,
+    for a floating/reset structure, the floating terms) unresolved. A candidate
+    is accepted only when it names the security's own coupon rate and the
+    series-scoped extraction finds a wanted term, so an earlier same-letter
+    series that was since redeemed cannot donate its terms.
+    Returns the stored document row or None.
+    """
+    coupon = coupon_token(security)
+    pattern = series_pattern_from_security(security)
+    if not coupon or pattern is None or not (want_call_date or want_floating):
+        return None
+    coupon_re = coupon_regex(coupon)
+    ratio = depositary_ratio(security.get("security_name"))
+    cik = security["cik"]
+    candidates = [
+        filing
+        for filing in _filings(security.get("raw_payload"), OFFERING_SUPPLEMENT_FORMS)
+        if filing.get("primaryDocument") and filing["accessionNumber"] not in known_accessions
+    ][:OFFERING_SUPPLEMENT_LIMIT]
+    for filing in candidates:
+        if REQUEST_DELAY:
+            time.sleep(REQUEST_DELAY)
+        url = filing_url(cik, filing["accessionNumber"], filing["primaryDocument"])
+        try:
+            raw_text, doc_hash = fetch_filing(url)
+        except Exception:  # noqa: S112 - a fetch failure skips this filing, not the run
+            continue
+        normalized = html_to_text(raw_text)
+        if not coupon_re.search(normalized):
+            continue
+        mismatch = cover_offering_mismatch(normalized, pattern, coupon_re)
+        if mismatch == "series":
+            continue
+        redemption = extract_redemption(normalized, pattern, ratio) if want_call_date else None
+        floating = extract_floating_terms(normalized, pattern) if want_floating else None
+        if mismatch == "debt":
+            redemption = redemption if _names_series(redemption, pattern) else None
+            floating = floating if _names_series(floating, pattern) else None
+        if not (redemption and redemption.get("first_call_date")) and not floating:
+            continue
+        document_id, _new = _store_document(
+            conn,
+            security["security_id"],
+            cik,
+            filing["form"],
+            filing.get("filingDate"),
+            filing["accessionNumber"],
+            filing["primaryDocument"],
+            None,
+            url,
+            normalized,
+            doc_hash,
+        )
+        return {
+            "document_id": document_id,
+            "form_type": filing["form"],
+            "exhibit_type": None,
+            "raw_text": normalized,
+        }
+    return None
+
+
+def with_stored_documents(conn, security_id, docs):
+    """Fetched documents plus every other stored document for the security."""
+    fetched = {doc["document_id"] for doc in docs}
+    stored = [
+        doc for doc in load_stored_documents(conn, security_id) if doc["document_id"] not in fetched
+    ]
+    return [*docs, *stored]
+
+
 def load_stored_documents(conn, security_id):
     rows = (
         conn.execute(
@@ -385,7 +523,7 @@ def load_stored_documents(conn, security_id):
     ]
 
 
-def extract_from_documents(docs, series_pattern=None, depositary_ratio=None):
+def extract_from_documents(docs, series_pattern=None, depositary_ratio=None, floating=False):
     """Mine clauses across the fetched documents; prefer the certificate.
 
     ``series_pattern`` (from :func:`series_pattern_from_security`) scopes every
@@ -397,6 +535,9 @@ def extract_from_documents(docs, series_pattern=None, depositary_ratio=None):
     preferred share's per-share amounts to the per-depositary figures the listed
     security actually trades in; the extractors also prefer a per-depositary
     equivalent stated in the document when one is present.
+
+    ``floating`` (see :func:`has_floating_structure`) also mines the fixed-period
+    end and the spread over the benchmark.
     """
     results = []
     for doc in docs:
@@ -410,6 +551,7 @@ def extract_from_documents(docs, series_pattern=None, depositary_ratio=None):
                 "exhibit_type": doc["exhibit_type"],
                 "liquidation": liquidation,
                 "redemption": redemption,
+                "floating": extract_floating_terms(text, series_pattern) if floating else None,
             }
         )
 
@@ -419,10 +561,17 @@ def extract_from_documents(docs, series_pattern=None, depositary_ratio=None):
     results.sort(key=lambda result: (is_certificate(result), result["document_id"]), reverse=True)
 
     liquidation_result = next((r for r in results if r["liquidation"]), None)
-    redemption_result = next((r for r in results if r["redemption"]), None)
+    # A later shelf/ATM supplement often restates the redemption price without
+    # the first call date; the original offering supplement that states it wins.
+    redemption_result = next(
+        (r for r in results if r["redemption"] and r["redemption"].get("first_call_date")),
+        None,
+    ) or next((r for r in results if r["redemption"]), None)
+    floating_result = next((r for r in results if r["floating"]), None)
     source = (
         liquidation_result
         or redemption_result
+        or floating_result
         or (
             next((r for r in results if is_certificate(r)), None)
             or (results[0] if results else None)
@@ -463,9 +612,26 @@ def extract_from_documents(docs, series_pattern=None, depositary_ratio=None):
                 ),
             }
         )
+    if floating_result:
+        floating_terms = floating_result["floating"]
+        sections.append(
+            {
+                "clause": "floating_rate",
+                "source_document_id": floating_result["document_id"],
+                "form_type": floating_result["form_type"],
+                "exhibit_type": floating_result["exhibit_type"],
+                "heading": floating_terms.get("heading"),
+                "snippet": floating_terms.get("snippet"),
+                "match": floating_terms.get("match"),
+                "fixed_period_end": floating_terms["fixed_period_end"],
+                "floating_spread": str(floating_terms["floating_spread"]),
+                "benchmark": floating_terms["benchmark"],
+            }
+        )
 
     redemption = redemption_result["redemption"] if redemption_result else None
     liquidation = liquidation_result["liquidation"] if liquidation_result else None
+    floating_terms = floating_result["floating"] if floating_result else None
     confidence_values = [
         value
         for value in (
@@ -480,6 +646,9 @@ def extract_from_documents(docs, series_pattern=None, depositary_ratio=None):
         "first_call_date": (redemption["first_call_date"] if redemption else None),
         "redemption_schedule": (redemption["schedule"] if redemption else []),
         "optional_redemption": bool(redemption and redemption["optional"]),
+        "fixed_period_end": (floating_terms["fixed_period_end"] if floating_terms else None),
+        "floating_spread": (floating_terms["floating_spread"] if floating_terms else None),
+        "floating_benchmark": (floating_terms["benchmark"] if floating_terms else None),
         "source_document_id": (source["document_id"] if source else None),
         "sections": sections,
         "confidence": (
@@ -516,11 +685,18 @@ def series_pattern_from_security(security):
     pattern = r"\bseries\s*[-.]?\s*(?:" + "|".join(re.escape(token) for token in tokens) + r")\b"
     single = [letter for letter in letters if len(letter) <= 2 and not re.search(r"\d", letter)]
     if single:
+        alternatives = "|".join(re.escape(letter) for letter in single)
         pattern += (
             r"|\b(?:"
-            + "|".join(re.escape(letter) for letter in single)
+            + alternatives
             + r")\s+(?:cumulative\s+)?(?:fixed\s*-?\s*to\s*-?\s*floating\s+)?"
             r"(?:preferred|redeemable)"
+        )
+        # A combined prospectus names the series jointly ("Series D/E/F
+        # Preferred Stock", "Series D, E and F"), so the middle letter must
+        # match too: ABR-PE's $25.00 preference sits only in such a sentence.
+        pattern += (
+            r"|\bseries\s+(?:[A-Z]{1,2}\s*(?:/|,|,?\s+and|,?\s+or)\s*)+(?:" + alternatives + r")\b"
         )
     return re.compile(pattern, re.IGNORECASE)
 
@@ -540,9 +716,11 @@ def load_preferred_securities(conn, tickers=None, cik=None, limit=None):
         conn.execute(
             text(f"""
         SELECT s.security_id, s.ticker, s.cik, s.security_name,
+               tp.coupon_type,
                sub.raw_payload
         FROM reference.securities s
         JOIN raw.sec_submissions sub ON sub.cik = s.cik
+        LEFT JOIN raw.ticker_profile tp ON tp.security_id = s.security_id
         WHERE {where}
         ORDER BY s.ticker
         {limit_sql}
@@ -554,7 +732,9 @@ def load_preferred_securities(conn, tickers=None, cik=None, limit=None):
     )
 
 
-def populate_contract_terms(tickers=None, cik=None, limit=None, force=False, discover_only=False):
+def populate_contract_terms(
+    tickers=None, cik=None, limit=None, force=False, discover_only=False, scan_offerings=False
+):
     """Run the mine: fetch/load documents, extract clauses, upsert terms."""
     processed = errors = 0
     updated = 0
@@ -575,25 +755,54 @@ def populate_contract_terms(tickers=None, cik=None, limit=None, force=False, dis
                 if OFFLINE_ON:
                     docs = load_stored_documents(conn, security["security_id"])
                 else:
-                    docs = fetch_source_documents(conn, security, force=force)
+                    # Stored documents include vetted offering supplements from
+                    # an earlier --scan-offerings run; without them an online
+                    # (nightly) re-mine would drop the call dates they supply.
+                    docs = with_stored_documents(
+                        conn,
+                        security["security_id"],
+                        fetch_source_documents(conn, security, force=force),
+                    )
                 if not docs:
                     if not OFFLINE_ON:
                         print(f"  No source documents for {security['ticker']}")
                     processed += 1
                     continue
 
+                floating = has_floating_structure(security)
+                pattern = series_pattern_from_security(security)
+                ratio = depositary_ratio(security.get("security_name"))
                 terms = extract_from_documents(
-                    docs,
-                    series_pattern=series_pattern_from_security(security),
-                    depositary_ratio=depositary_ratio(security.get("security_name")),
+                    docs, series_pattern=pattern, depositary_ratio=ratio, floating=floating
                 )
-                if terms["liquidation_preference"] is None and terms["call_price"] is None:
+                want_call_date = terms["first_call_date"] is None
+                want_floating = floating and terms["fixed_period_end"] is None
+                if (want_call_date or want_floating) and scan_offerings and not OFFLINE_ON:
+                    known = _stored_accessions(conn, security["security_id"])
+                    supplement = fetch_offering_supplement(
+                        conn,
+                        security,
+                        known,
+                        want_call_date=want_call_date,
+                        want_floating=want_floating,
+                    )
+                    if supplement:
+                        docs = [*docs, supplement]
+                        terms = extract_from_documents(
+                            docs, series_pattern=pattern, depositary_ratio=ratio, floating=floating
+                        )
+                if (
+                    terms["liquidation_preference"] is None
+                    and terms["call_price"] is None
+                    and terms["first_call_date"] is None
+                    and terms["fixed_period_end"] is None
+                ):
                     # Documents exist but yield nothing: drop any row left by an
                     # earlier mine so an over-eager extraction cannot linger as a
                     # stale false positive.
                     _delete_contract_terms(conn, security["security_id"])
                     if not OFFLINE_ON:
-                        print(f"  No liquidation/redemption clause found for {security['ticker']}")
+                        print(f"  No contract-term clause found for {security['ticker']}")
                     processed += 1
                     continue
 
@@ -639,6 +848,16 @@ def _prune_non_preferred_contract_terms(conn):
     return result.rowcount or 0
 
 
+def _stored_accessions(conn, security_id):
+    return {
+        row[0]
+        for row in conn.execute(
+            text("SELECT accession_no FROM raw.contract_documents WHERE security_id = :sid"),
+            {"sid": security_id},
+        )
+    }
+
+
 def _delete_contract_terms(conn, security_id):
     conn.execute(
         text("DELETE FROM preferred.contract_terms WHERE security_id = :sid"),
@@ -651,16 +870,21 @@ def _persist_contract_terms(conn, security_id, terms):
         text("""
         INSERT INTO preferred.contract_terms
             (security_id, liquidation_preference, call_price, first_call_date,
-             redemption_schedule, optional_redemption, source_document_id,
+             redemption_schedule, optional_redemption, fixed_period_end,
+             floating_spread, floating_benchmark, source_document_id,
              sections, confidence, updated_at)
         VALUES (:sid, :liq, :call, :date, CAST(:schedule AS jsonb),
-                :optional, :doc_id, CAST(:sections AS jsonb), :confidence, now())
+                :optional, :fixed_end, :spread, :benchmark, :doc_id,
+                CAST(:sections AS jsonb), :confidence, now())
         ON CONFLICT (security_id) DO UPDATE SET
             liquidation_preference = EXCLUDED.liquidation_preference,
             call_price = EXCLUDED.call_price,
             first_call_date = EXCLUDED.first_call_date,
             redemption_schedule = EXCLUDED.redemption_schedule,
             optional_redemption = EXCLUDED.optional_redemption,
+            fixed_period_end = EXCLUDED.fixed_period_end,
+            floating_spread = EXCLUDED.floating_spread,
+            floating_benchmark = EXCLUDED.floating_benchmark,
             source_document_id = EXCLUDED.source_document_id,
             sections = EXCLUDED.sections,
             confidence = EXCLUDED.confidence,
@@ -673,6 +897,9 @@ def _persist_contract_terms(conn, security_id, terms):
             "date": terms["first_call_date"],
             "schedule": json.dumps(terms["redemption_schedule"] or []),
             "optional": terms["optional_redemption"],
+            "fixed_end": terms.get("fixed_period_end"),
+            "spread": terms.get("floating_spread"),
+            "benchmark": terms.get("floating_benchmark"),
             "doc_id": terms["source_document_id"],
             "sections": json.dumps(terms["sections"]),
             "confidence": terms["confidence"],
@@ -704,6 +931,15 @@ def main():
     parser.add_argument(
         "--discover", action="store_true", help="Report planned document sources without fetching"
     )
+    parser.add_argument(
+        "--scan-offerings",
+        action="store_true",
+        help=(
+            "Backfill: when no first call date is found, scan up to "
+            f"{OFFERING_SUPPLEMENT_LIMIT} older offering supplements for the series' own "
+            "call date and store the vetted document"
+        ),
+    )
     args = parser.parse_args()
 
     tickers = (
@@ -718,6 +954,7 @@ def main():
             limit=args.max,
             force=args.force,
             discover_only=args.discover,
+            scan_offerings=args.scan_offerings,
         )
         code = stage_exit_code("populate_contract_terms", processed, updated, errors=errors)
     except Exception as exc:

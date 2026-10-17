@@ -41,6 +41,50 @@ Thresholds are overridable (e.g. `--min-coverage 0.90`). Every run inserts a
 verification row into `audit.nightly_checks` (disable with `--no-check-log`,
 label ownership with `--verified-by`, annotate with `--notes`).
 
+### Preferred security consistency
+
+Missing coupons/preferences, repeated titles and issuer-only titles are
+informational data gaps, not permission to guess a rate or assign $25 to every
+preferred. The $1,000/share preference threshold is a review trigger, not a cap:
+an underlying preferred share and its listed depositary receipt have different
+units.
+
+The nightly runs `populate_sec_instrument_titles --preferred-only` after the
+reference stage and before dividend profiles and the contract miner. It refreshes
+changed filings and retries issuers whose active preferred symbols lack titles.
+Filed symbol variants (for example `FRT-C` vs `FRT-PC`, or `STT.PRG` vs `STT-PG`)
+are bound only to a unique known symbol of the same issuer. Exact CIK/ticker
+titles replace display names and fill missing title-parsed terms; existing terms
+are preserved. Depositary amounts are left to the narrative contract miner,
+which applies the depositary ratio from the newly acquired title.
+Clean ticker/company profiles are rebuilt after repairs and contract mining,
+so the nightly does not leave them one run behind the final reference terms.
+If all raw profiles lack a preference, the clean profile uses the representative
+security's mined contract value and retains its source document ID in lineage.
+Conflicting raw profile preferences still remain NULL and flagged.
+The XML parser pairs a trading symbol with its title by dimensional context,
+not merely by period or document position. This preserves identical depositary
+titles reported for several classes and ignores unpaired rights titles; older
+periods cannot overwrite a symbol's newer title.
+
+Exact CIK/ticker cover titles outrank symbol heuristics: for example, a `-PE`
+symbol can be a subordinated debenture, not a preferred share. The classification
+repair applies those corrections without changing security IDs and retains the
+source filing in the evidence. Filed aliases are matched against canonical
+reference symbols, not against another spelling from submissions; `/PR`, `.PR.`
+and space-separated `PR` spellings are supported.
+
+For an evidence-backed backfill, run
+`python -m scripts.populate_sec_instrument_titles --preferred-only`, then
+`python -m scripts.populate_contract_terms` and rebuild the clean ticker profiles.
+Do not overlap a manual backfill with a nightly. `--skip-instrument-titles` is
+available for partial/debug pipeline runs. Unsupported terms remain NULL.
+
+The walk-forward NO-GO detail lists the failed acceptance checks and their
+measured/required values from `audit.model_runs.gate_detail`. This is not a
+request to bypass the gate: a model that fails minority-class recall or
+balanced-accuracy lift remains unadopted, and rule-based scoring stays in use.
+
 ## Reading the output
 
 ```
@@ -202,6 +246,22 @@ It does not touch `raw.company_ticker`. The next ordinary `populate_raw_tables` 
 finds the ticker unreferenced and ingests the incoming CIK with no override. Only the
 ticker in question is removed: other tickers of the same issuer (for `PORT-UN`, `ANGX`)
 are untouched. Restoring from the archive is manual; the file holds each row as JSON.
+
+After refreshing the raw snapshot, rebuild only the released instruments rather
+than reclassifying the entire universe:
+
+```
+python -m scripts.populate_reference_tables --securities --tickers XRPN,XRPNW
+python -m scripts.verify_nightly_run --notes "Released reviewed predecessor mappings and ingested successors"
+```
+
+For the October 2026 XRPN/XRPNW succession, Evernorth's
+[closing 8-K](https://www.sec.gov/Archives/edgar/data/2092592/000119312526419146/d24481d8k.htm)
+documents the October 9 closing, suspension/delisting of Armada's predecessor
+instruments, and October 12 start of trading for Evernorth's common stock and
+warrants under those same symbols. This is external evidence for an
+`AMBIGUOUS` review when the successor submissions ticker array is still empty;
+do not treat the empty array alone as evidence or release sibling symbols.
 
 ## Audit trail
 

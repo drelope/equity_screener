@@ -271,6 +271,28 @@ def test_assess_model_gate_attention_when_recall_below_min():
     assert any(c["name"] == "walk_forward_gate" and c["status"] == "attention" for c in r["checks"])
 
 
+def test_no_go_explains_failed_acceptance_checks_without_adopting_model():
+    f = _findings(
+        model_gate={
+            "run_id": "r1",
+            "readiness": "no_go",
+            "recall": 1.0,
+            "created_at": "2026-10-06",
+            "gate_detail": {
+                "checks": {
+                    "negative_recall": {"actual": 0.0, "required": 0.1, "passed": False},
+                    "flag_rate": {"actual": 0.01, "required": 0.2, "passed": True},
+                }
+            },
+        }
+    )
+    check = next(c for c in _f(f)["checks"] if c["name"] == "walk_forward_gate")
+    assert check["status"] == "info"
+    assert "negative_recall=0.0000 (required 0.1000)" in check["detail"]
+    assert "flag_rate=" not in check["detail"]
+    assert "rule-based scoring is in use" in check["detail"]
+
+
 def test_a_no_go_walk_forward_is_informational_not_a_pass_or_a_failure():
     """The accepted NO-GO: rule-based scoring is the product, so it neither alarms nor passes.
 
@@ -831,8 +853,11 @@ def test_nightly_rebuilds_clean_profile_after_profile_writers():
     assert order.index("scripts.populate_clean_ticker_profile") < order.index(
         "scripts.populate_clean_company_profile"
     )
+    assert order.index("scripts.populate_contract_terms") < order.index(
+        "scripts.populate_clean_ticker_profile"
+    )
     assert order.index("scripts.populate_clean_company_profile") < order.index(
-        "scripts.populate_companyfacts.preferred"
+        "scripts.build_features"
     )
 
 

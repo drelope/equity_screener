@@ -308,6 +308,17 @@ python -m scripts.populate_raw_tables --limit 100
 # ENFORCE_DIVIDEND_RECENCY=false to restore the any-positive-fact-ever rule.
 python -m scripts.populate_reference_tables --limit 100
 
+# Stage 1a — Fetch SEC cover titles for active preferred issuers, resolve
+# unique filed-symbol variants, and fill missing title-parsed metadata.
+# Changed filings and incomplete preferred title coverage are retried.
+python -m scripts.populate_sec_instrument_titles --preferred-only
+
+# Stage 1b — Name preferreds still titled after the issuer from the Nasdaq
+# Trader symbol directory; reclassify notes/units/common listed as preferred.
+# Falls back to the raw.exchange_listings snapshot offline or on a failed
+# download (skip with --skip-exchange-titles in run_full_etl).
+python -m scripts.populate_exchange_listing_titles --dry-run
+
 # Stage 2 — Daily OHLCV prices into raw.market_data (dividend universe only)
 python -m scripts.populate_market_data
 
@@ -316,14 +327,6 @@ python -m scripts.populate_market_data
 # DIVIDEND_LOOKBACK_START (default 2025-01-01 = the 12-month lookback) and
 # accrues forward; add --full-history after the PoC gate for total history.
 python -m scripts.populate_dividend_data --tickers ACR-PC,ACR-PD,LFMDP --sources all
-
-# Stage 3a — Rebuild one normalized profile per CIK/ticker. The raw rows and
-# all source payloads are retained; conflicting attributes are flagged.
-python -m scripts.populate_clean_ticker_profile
-
-# Stage 3b — Split company-level scalar fields from normalized officer rows.
-# Epoch fields become UTC dates/timestamps; omitted compensation remains NULL.
-python -m scripts.populate_clean_company_profile
 
 # Stage 4 — Load SEC submissions and complete companyfacts (dividend payers
 # only by default; add --preferred-facts to target preferred stocks recorded
@@ -349,6 +352,22 @@ python -m scripts.populate_sec_documents --tickers AAPL,MSFT,JNJ
 # SEC_ETL_OFFLINE=1 to mine only already-stored documents (no SEC fetch). Skip
 # with --skip-contract-terms on run_full_etl.
 python -m scripts.populate_contract_terms
+
+# One-off backfill (not part of the nightly): when the governing documents give
+# no first call date (or, for a fixed-to-floating/reset series, no floating
+# terms), scan up to 25 older offering supplements (424B*) for the series'
+# original terms. A supplement is kept only if it names the security's own
+# coupon rate and the series-scoped clause states the wanted term; it is then
+# stored in raw.contract_documents, so later nightly/offline runs keep it.
+python -m scripts.populate_contract_terms --scan-offerings
+
+# Stage 5c — Rebuild normalized CIK/ticker profiles after repairs and contract
+# mining, so clean profiles include the final reference terms.
+python -m scripts.populate_clean_ticker_profile
+
+# Stage 5d — Split company-level fields from officers and corporate actions.
+# Epoch fields become UTC dates/timestamps; omitted compensation remains NULL.
+python -m scripts.populate_clean_company_profile
 
 # Stage 6 — Offline derived financials over stored XBRL (no network)
 python -m scripts.populate_fundamentals
@@ -378,6 +397,109 @@ that never pay a dividend; force a full sweep only for debugging with
 `--all` (`populate_companyfacts`/`populate_sec_documents`) or
 `--include-non-dividend` (`populate_dividend_data`).
 `populate_dividend_data --limit N` limits the universe itself.
+
+**Dividend source policy.** OpenBB dividend events are stored as provider
+`OPENBB`; the OpenBB provider that answered is recorded per row in
+`raw.dividend_data.feed` (V0081). `openbb_client.dividends` tries FMP first
+and falls back to Yahoo Finance (`yfinance`) per symbol when FMP returns
+nothing or errors (`DIVIDEND_PROVIDERS`; FMP is only tried when an FMP key is
+loaded, and a non-empty `OPENBB_PROVIDER` pins a single provider). These are
+the listing's true ex-dates and the preferred source everywhere
+`preferred.v_security_terms` is read (Screener, Security page, feature window)
+since V0080. SEC XBRL declared per-share facts, dated to the fiscal period end,
+are the fallback and are labelled as such. A preferred series uses the SEC
+preferred fact only when its issuer has exactly one active preferred series.
+
+FMP rows store the dividend **as declared** in `amount` (it matches SEC 10-K
+declarations, e.g. WLFC 0.40). `adjusted_amount` is recomputed by
+`openbb_client._price_basis_adjust`: the declared amount divided by every
+later Yahoo split factor, i.e. the factors the stored Yahoo closes are
+restated by (these include spin-offs Yahoo books as splits, CTVA 6.665, and
+small stock dividends, TROLB 1.03). FMP's own `adjDividend` is not used,
+because it misses splits (SF stayed 0.46 after its 3-for-2; GPMT was not
+restated for its 1-for-10). Yahoo rows are already restated and leave
+`adjusted_amount` NULL. Features read `COALESCE(adjusted_amount, amount)` for
+OPENBB rows so trailing sums stay on the closes' price basis. The OpenBB end
+date is open-ended, so FMP's announced upcoming ex-dates are kept; an
+undeclared ex-date more than 120 days out is dropped as a projection (FMP
+lists exchange-traded note coupons such as GECCG out to maturity). FMP
+sometimes lists one payment under two ex-dates (same payment date, amount
+within 1%: CAT, RYAAY, CMTV); the loader keeps one, preferring the declared
+row whose ex-date is on or before the record date. Payments that share a
+payment date but differ in amount (BBD/ABEV interest on capital, BCIC
+special plus regular) are kept separately. A re-pull deletes OPENBB rows in
+the fetched window that the incoming feed no longer carries: from its first
+event for the same feed, or from 7 days before it when the feed changed. A
+payment both feeds date differently (GFIOF, 2 days apart) is therefore never
+counted twice; older history stays.
+
+FMP fetching: the plan allows 300 calls per rolling minute, then HTTP 429
+"Limit Reach". Calls are paced at 280/minute and a 429 is waited out, so a
+symbol does not drop to Yahoo for a transient reason. FMP sends `""` for a
+date it does not know yet, and OpenBB's model rejects the whole symbol
+(CAT, ASB-PF). Such payloads are read from FMP's `/stable/dividends` REST
+endpoint directly, with blanks treated as missing. On 2026-10-16 this
+recovered 192 of 292 symbols that had been falling back; the 93 left on Yahoo
+are ones FMP has no data for (mostly preferreds such as AGM-PH, C-PR, BA-PA).
+
+Evaluation on 2026-10-16 after the FMP plan upgrade (since 2025-01-01, FMP vs
+stored Yahoo): FMP answered 72/80 sampled common stocks and 37/40 preferreds;
+of 738 shared ex-dates, 714 agreed within 1% on split-adjusted amount
+(the rest are splits/FX); FMP added 12 events Yahoo lacked (Yahoo 4 FMP
+lacked), 11 announced upcoming ex-dates, declaration dates on 94% of common
+events, and payment dates on all; last-past-ex-date freshness was equal.
+Earlier (Yahoo vs SEC): Yahoo was fresh for 96.6% of 2,702 securities versus
+83.9% of 2,067 for SEC.
+
+Universe audit of declared amounts (16,976 shared events): 629 (183 tickers)
+differ by more than 1%. Most of these are not FMP errors:
+- Yahoo rounds to 3 decimals (GROW, HL), while FMP keeps the exact amount.
+- Yahoo restates amounts for splits and spin-offs, which the
+  recomputed `adjusted_amount` now handles.
+- Yahoo converts Canadian OTC listings at a stale constant FX rate. For FORFF,
+  FMP's figure equals C$0.30625 × CADUSD on each ex-date, within 0.5%.
+
+The remaining differences are mostly foreign ADR amounts, where the feeds net
+depositary fees or convert FX differently, and no feed is right every time.
+Polygon.io was used as a third source on 165 disputed events:
+- 114 matched FMP (TSM 2025-12 onward, IHG, UL, NVO, GSK);
+- 22 matched Yahoo (CHA, SAN, EQNR, HTGC). CHA's 6-K of 2025-11-28 declares
+  US$0.92 per ADS, while FMP has 0.87;
+- on ORANY, ABBNY, FORTY and IMOS, Yahoo was within a few percent of Polygon
+  and FMP was far off.
+
+The loader therefore settles each disagreement per event
+(`openbb_client.reconcile_amounts`, V0083):
+- **Detecting a dispute.** Each FMP event is matched to Yahoo's within 4 days
+  and compared on the split-restated basis. A difference over 1%, and beyond
+  Yahoo's 3-decimal rounding, is a dispute.
+- **Asking Polygon.** Each disputed symbol costs one Polygon call. Polygon's
+  same-day events are summed (HTGC base plus supplemental). Only its USD
+  figure is used.
+- **Choosing Yahoo.** Yahoo's amount replaces FMP's when it is within 10% of
+  Polygon and at most half as far from it as FMP. The amount is restated to
+  the declared basis, and the row's `amount_feed` becomes `yfinance`.
+- **Otherwise FMP stays.** This includes Polygon having no event, or only a
+  local-currency one (FORFF in CAD, ASRMF in MXN), where FMP's USD
+  conversion is right and Yahoo's is stale or 10× off. It also includes one
+  Yahoo payment that FMP lists in parts (CMBT 0.44 + 0.20 against Yahoo's
+  0.64), so Yahoo's figure is never counted twice.
+- **Caching verdicts.** Each verdict is stored in `raw.dividend_amount_check`
+  with all three figures. Polygon's free key allows 5 calls/minute, so only
+  new disagreements are asked. Unresolved ones are re-asked after 7 days,
+  unless Polygon only had a local-currency figure.
+
+The Security page labels rows whose amount came from Yahoo. Without a
+`polygon_api_key` every dispute stays unresolved and FMP's figure is kept.
+
+**OpenBB credentials.** `src/crispdm/openbb_client.py` loads provider keys at
+import from `ObbCredentials.json` in the repo root (override with
+`OPENBB_CREDENTIALS_FILE`), shaped as `{"credentials": {"fmp_api_key": "...",
+...}}`. Only keys OpenBB defines are applied (currently `fmp_api_key`,
+`fred_api_key`, `benzinga_api_key`); `polygon_api_key` is kept aside for the
+direct Polygon.io calls above; others are ignored and values are never logged.
+The file is git-ignored — never commit it. Intrinio is not used: it has no
+active subscription, and its key was removed (2026-10-16).
 
 For every equity flagged `dividend = TRUE`, `scripts.populate_raw_tables`
 also fetches a **ticker profile summary**, merging SEC Company Facts XBRL
@@ -458,6 +580,12 @@ which is why SEC terms are still worth keeping as a fallback rather than
 dropping them. When the CIK has exactly one active preferred the fact *is*
 unambiguous, and `scripts.repair_ticker_profile_sec_terms` allocates it to that
 lone series (filling a blank, never overwriting a name parse).
+The same repair also re-parses name-derived profile columns when a later stage
+(SEC cover titles, classification repair) has renamed the security since the
+profile was fetched. A fresh non-blank parse replaces the stale value, but a
+blank parse never erases a value from another loader. Depositary titles carry
+no per-share liquidation preference from the name, because the stated par
+belongs to the underlying share.
 
 Some preferred terms are simply absent from the sources we hold, so a blank is
 the correct value rather than a gap to force-fill. Measured over the active
@@ -468,6 +596,32 @@ recovers liquidation/call terms for a security only when its filing actually
 contains the clause ("`populate_contract_terms --discover`" reports the planned
 sources without fetching). Separately, preferreds with no `raw.market_data`
 price row cannot produce a feature or a yield at all.
+
+`clean.ticker_profile.call_date` falls back to the mined
+`preferred.contract_terms.first_call_date` when no profile source supplies a
+call date (preferred stock only, mirroring the liquidation-preference
+fallback; lineage is kept in `source_profiles.contract_first_call_date`). The
+miner keeps a row that yields only a call date, and when several documents
+carry a redemption clause the one that states the first call date wins over a
+later shelf/ATM supplement that restates only the price. A redemption clause
+whose subject is the issuer's notes, debentures or debt securities (and names
+no preferred/share/unit) is skipped, so an exchange-listed baby bond's call
+date can't land on a preferred.
+
+For fixed-to-floating and fixed-rate-reset series (coupon type
+`fixed-to-floating`/`floating`, or a name containing *floating*, *reset* or
+*fixed-to*), the miner also extracts the end of the fixed-rate period and the
+spread over the benchmark from the dividend-rate clause ("from and including …
+to, but excluding, *date* … fixed rate …, and from and including *date*, …
+Three-Month Term SOFR plus a spread of *x*%"), stored in
+`preferred.contract_terms.fixed_period_end` / `floating_spread` (percent) /
+`floating_benchmark` (migration V0085). A spread outside 0.1–15% or a clause
+with no nearby "fixed" rate is ignored, and the clause is series-scoped like the
+redemption terms. `clean.ticker_profile.fixed_period_end` / `floating_spread`
+fall back to these mined values (preferred stock only; lineage in
+`source_profiles.contract_fixed_period_end` / `contract_floating_spread`). For a
+reset series the spread is over the reset benchmark (e.g. five-year Treasury),
+recorded in `floating_benchmark`.
 
 Stage 0 resolves both sources in one pass and only falls back to the SEC value
 when the name parse produced nothing
@@ -537,14 +691,25 @@ python -m scripts.run_etl --symbols GNL,HMLPF,CMSC --start 2020-01-01
 ```
 
 The command requires `--symbols` and `--start`; `--end` is optional. It loads
-prices and dividends through the configured OpenBB provider.
+prices through the configured OpenBB provider and dividends through OpenBB's
+`yfinance` provider unless `OPENBB_PROVIDER` is set.
 
 ## Web app (Streamlit)
 
 ```bash
-streamlit run app/streamlit_app.py --server.address 127.0.0.1   # http://localhost:8501
+python -m streamlit run app/streamlit_app.py --server.address 127.0.0.1   # http://localhost:8501
 python -m scripts.ops_worker                # runs queued tasks; needed for the Operations page
 ```
+
+Use the activated project environment for both commands. Pandas table styling
+requires Jinja2 >= 3.1.2; `requirements.txt` pins a compatible version. If pandas
+reports that the `.style` accessor requires Jinja2, install the runtime
+requirements with that same Python (`python -m pip install -r requirements.txt`)
+and restart Streamlit. An older system Jinja2 can trigger this error even when
+Jinja2 is installed.
+
+Security detail displays the full stored instrument name above the overview
+columns, wrapping long titles rather than substituting the provider's short name.
 
 Pass `--server.address 127.0.0.1` when running Streamlit directly: by default it listens on
 every interface. With Docker Compose, `docker compose up -d streamlit worker` starts both. The app
@@ -728,7 +893,21 @@ The issuer name is normalized onto `reference.issuers.issuer_name`
 `reference.securities.security_name` holds the per-class cover title exactly as
 reported on the Form 8-K / annual-report cover for that ticker (e.g.
 `7.875% Series D Cumulative Redeemable Preferred Stock` for ACR-PD), sourced
-from `raw.sec_instrument_titles`.
+from `raw.sec_instrument_titles`. When no cover title names the instrument
+(none filed, or only a bare label such as `5.40% Series L`), stage 1b
+`scripts.populate_exchange_listing_titles` takes the issue name from the free
+Nasdaq Trader symbol directory (`nasdaqtraded.txt`, snapshotted in
+`raw.exchange_listings`; `AGM-PI` is listed as `AGM$I`). Only the text after
+the issuer name is classified, so a fund called "... Preferred and Income Fund"
+is not mistaken for a preferred. A preferred title replaces the issuer name and
+fills a blank coupon or liquidation preference. Notes, debentures, units or
+common stock listed under a preferred-style symbol are reclassified with
+`classify_source = 'exchange_title'` and the title kept in
+`classification_evidence`. When a row of the real type already exists for the
+same CIK and ticker, the misclassified row is deactivated instead. SEC cover
+titles that name the type win: `repair_security_classification` applies the
+same twin rule to them. OTC and delisted symbols are absent from the
+directory and stay issuer-named.
 
 ### clean — consolidated profiles
 
@@ -753,7 +932,8 @@ The `c2_c3_leverage_exempt` tag marks `issue_type = EQUITY` and `sector_key = re
 |---|---|---|
 | `raw.company_ticker` | SEC `company_tickers.json` snapshot | `ticker` PK, `cik`, `title`, `raw_payload`; unique `(ticker, cik)` |
 | `raw.market_data` | Daily OHLCV prices | PK `(security_id, observation_date, provider)`, `open/high/low/close/adjusted_close`, `volume` |
-| `raw.dividend_data` | Normalized dividend events | PK `(security_id, ex_dividend_date, provider)`, `declaration_date`, `record_date`, `payment_date`, `amount`, `adjusted_amount`, `frequency`, `currency` |
+| `raw.dividend_data` | Normalized dividend events | PK `(security_id, ex_dividend_date, provider)`, `declaration_date`, `record_date`, `payment_date`, `amount`, `adjusted_amount`, `frequency`, `currency`, `feed`, `amount_feed` |
+| `raw.dividend_amount_check` | FMP/Yahoo amount disagreements settled by Polygon.io | PK `(ticker, ex_dividend_date)`, `fmp_amount`, `yahoo_amount`, `polygon_amount`, `polygon_currency`, `chosen`, `checked_at` |
 | `raw.ticker_profile` | **Ticker profile summary** for every dividend payer, driven from `raw.company_ticker` (Security Type, Coupon Type/Rate, Fixed Period End, Floating Spread, Tax Status, Call Date, Liquidation Preference); `coupon_rate`/`liquidation_preference` come from SEC Company Facts XBRL tags when reported, else Yahoo/OpenBB or name parsing | `security_id` PK, `ticker`, provider, `coupon_type`, `coupon_rate`, `fixed_period_end`, `floating_spread`, `tax_status`, `call_date`, `liquidation_preference`, `raw_payload` |
 | `raw.companyfacts` | Full XBRL company facts, fetched once per issuer CIK | `cik` PK, `company_name`, `concept_groups` (JSONB), `raw_payload` (JSONB), `content_hash`, `provider` |
 | `raw.company_taxonomy` | Taxonomy-scoped XBRL concept facts (preferred-stock tags) via the SEC XBRL Data API `companyconcept` endpoint, fetched once per issuer CIK | `cik` PK, `company_name`, `taxonomies` (JSONB), `concept_groups` (JSONB), `raw_payload` (JSONB), `content_hash`, `provider` |
@@ -825,7 +1005,7 @@ call_date, liquidation_preference (par), raw_payload (JSONB), retrieved_at
 | Table | Purpose | Key columns |
 |---|---|---|
 | `preferred.security_terms` | Preferred-stock legal/economic terms | `security_id` PK, `preferred_series`, `dividend_rate`, `liquidation_preference`, `confidence_score`, `reviewed_by` |
-| `preferred.contract_terms` | **Mined** liquidation / call terms (stage 5b, `scripts.populate_contract_terms`), one row per preferred security, extracted from the issuer's stored `raw.contract_documents` by `src/crispdm/doc_clauses.py`. Evidence — the matched clause and the filing it came from — is kept in `sections` (JSONB). A security with no mineable clause has **no row**: absence is *unresolved*, not "no call". Feeds the `preferred.v_security_terms` lookup the app reads. | `security_id` PK, `liquidation_preference`, `call_price`, `first_call_date`, `redemption_schedule` (JSONB), `optional_redemption`, `source_document_id`, `sections` (JSONB), `confidence`, `updated_at` |
+| `preferred.contract_terms` | **Mined** liquidation / call terms (stage 5b, `scripts.populate_contract_terms`), one row per preferred security, extracted from the issuer's stored `raw.contract_documents` by `src/crispdm/doc_clauses.py`. Evidence — the matched clause and the filing it came from — is kept in `sections` (JSONB). A security with no mineable clause has **no row**: absence is *unresolved*, not "no call". Feeds the `preferred.v_security_terms` lookup the app reads. | `security_id` PK, `liquidation_preference`, `call_price`, `first_call_date`, `redemption_schedule` (JSONB), `optional_redemption`, `fixed_period_end`, `floating_spread`, `floating_benchmark`, `source_document_id`, `sections` (JSONB), `confidence`, `updated_at` |
 | `preferred.dividend_snapshot` | Preferred issuers with dividend evidence (built by `scripts.sec_xbrl_dividend_tags`); `active=False` flags issuers whose latest dividend fact falls outside the lookback window | `security_id` PK, `ticker`, `cik`, `preferred_flag`, `pays_dividend`, `active`, `dividend_evidence_tag`, `latest_dividend_period_end/filed/form` |
 | `preferred.issuer_terms` | **View.** SEC XBRL preferred terms at *issuer* granularity, recovered from `raw.ticker_profile.raw_payload->sec_xbrl` where `populate_preferred_profiles` parks them. Exists because Company Facts carry no series dimension, so these values are deliberately **not** promoted into `clean.ticker_profile`'s per-series columns | `cik` (grouping key), `issuer_name`, `issuer_coupon_rate_pct`, `issuer_liquidation_or_par_value`, `security_count`, `distinct_coupon_values`, `distinct_liquidation_values`, `terms_scope` (constant `issuer_level_unallocated`) |
 
@@ -850,8 +1030,9 @@ extraction honest:
   ...` has its per-depositary figures scaled back to the underlying share (the
   reverse when the filing quotes the underlying price), unless an explicit
   per-depositary equivalent is stated. The ratio is only applied when the class
-  name actually contains "depositary", so a rights/warrants `1/N` split is left
-  alone.
+  name actually contains "depositary" (or the abbreviated "Dep Shs"), so a
+  rights/warrants `1/N` split is left alone. Word fractions ("one
+  one-thousandth of a share") count as ratios too.
 - **False-positive guards.** Blank-check (SPAC) trust language — "we redeem the
   public shares for the funds held in the Trust Account" or "$10.00 per share on
   the liquidation of our trust account" — is not a preferred call or preference.
@@ -865,7 +1046,10 @@ extraction honest:
   documents mis-typed as preferred stock. Aggregate totals scaled by
   "million"/"billion", funding thresholds ("an aggregate Liquidation Preference in
   excess of $1,000,000"), figures paired with a prior/next amount, and clauses
-  that negate liquidation rights are dropped.
+  that negate liquidation rights are dropped. A par value ("par value $1.00 per
+  share (Liquidation Preference as specified below)") is never a liquidation
+  preference. A series-scoped scan that finds nothing falls back to the whole
+  document only when it names no other series.
 - **The primary symbol is always common.** The issuer's submissions leading
   ticker is its common class, so issuer-level evidence — preferred dividend
   facts, an issuer name like "Preferred & Income Fund", a preferred-only concept
@@ -910,7 +1094,7 @@ name. The tag prefixes are `dei` (Document and Entity Information), `us-gaap`
 | `preferred.security_terms.dividend_rate` | `us-gaap:PreferredStockDividendRatePercentage` (seeded from the latest `raw.dividend_data` amount when no XBRL rate was filed) |
 | `raw.ticker_profile.call_date` | parsed from `dei:SecurityTitle` (`...RedemptionPricePerShare` supplies the price, not the date) |
 | `raw.ticker_profile.coupon_type` / `fixed_period_end` / `floating_spread` / `tax_status`, `preferred.security_terms.preferred_series` | parsed from `dei:SecurityTitle` / iXBRL filing language, not standalone us-gaap facts |
-| `clean.ticker_profile.coupon_rate` / `coupon_type` / `fixed_period_end` / `floating_spread` / `tax_status` / `call_date` / `liquidation_preference` | consensus of `raw.ticker_profile`, which is **NULL for almost every row by design**, not by failure. Two independent causes: (1) the name-based parsers match almost nothing — over all 11,659 `reference.securities` names, `coupon_rate` matches 0.3% and `call_date` / `fixed_period_end` / `floating_spread` / `tax_status` match **0%**; (2) the rich SEC XBRL terms are issuer-level and are quarantined in `raw.ticker_profile.raw_payload->sec_xbrl` rather than assigned to a series (see `preferred.issuer_terms`). ~67% of `clean.ticker_profile` is `common_stock`, where these fields are not applicable |
+| `clean.ticker_profile.coupon_rate` / `coupon_type` / `fixed_period_end` / `floating_spread` / `tax_status` / `call_date` / `liquidation_preference` | consensus of `raw.ticker_profile`, which is **NULL for almost every row by design**, not by failure. Two independent causes: (1) the name-based parsers match almost nothing — over all 11,659 `reference.securities` names, `coupon_rate` matches 0.3% and `call_date` / `fixed_period_end` / `floating_spread` / `tax_status` match **0%**; (2) the rich SEC XBRL terms are issuer-level and are quarantined in `raw.ticker_profile.raw_payload->sec_xbrl` rather than assigned to a series (see `preferred.issuer_terms`). ~67% of `clean.ticker_profile` is `common_stock`, where these fields are not applicable. For preferred stock, `call_date` / `fixed_period_end` / `floating_spread` / `liquidation_preference` fall back to the document-mined `preferred.contract_terms` (stage 5b) when no profile source supplies them |
 | `raw.company_taxonomy` | preferred-stock concepts fetched once per CIK via the XBRL Data API `companyconcept` endpoint (`PREFERRED_STOCK_TAXONOMY_CONCEPTS`) |
 
 The tag lists used by each extractor (`DIVIDEND_TAGS`,

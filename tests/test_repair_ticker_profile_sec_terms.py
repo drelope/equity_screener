@@ -187,3 +187,63 @@ def test_a_lone_preferred_coupon_is_not_treated_as_a_leak():
     assert "coupon_rate" not in repair.changed_columns(row, parsed, lone_preferred=True)
     # ... but a multi-preferred issuer's leaked coupon is still cleared.
     assert "coupon_rate" in repair.changed_columns(row, parsed, lone_preferred=False)
+
+
+ABR_PF = (
+    "Preferred Stock, 6.25% Series F Fixed-to-Floating Rate Cumulative Redeemable, "
+    "par value $0.01 per share"
+)
+
+
+def test_a_profile_parsed_from_the_issuer_name_follows_the_new_cover_title():
+    """ABR-PF was profiled while its name was still the issuer's."""
+    row = _stored(
+        ticker="ABR-PF",
+        security_name=ABR_PF,
+        openbb={},
+        security_type="ARBOR REALTY TRUST INC",
+        coupon_type="fixed",
+        coupon_rate=6.25,
+        field_sources={c: "populate_dividend_data" for c in ("security_type", "coupon_type")},
+    )
+    parsed = repair.reparse_row(row)
+
+    stale = repair.stale_name_columns(row, parsed)
+
+    assert stale == ["security_type", "coupon_type"]
+    assert parsed["security_type"].startswith("Series F Fixed-to-Floating")
+    assert parsed["coupon_type"] == "fixed-to-floating"
+
+
+def test_a_title_coupon_replaces_an_allocated_one_but_a_blank_parse_never_erases_it():
+    hpp = _stored(
+        ticker="HPP-PC",
+        security_name="4.750% Series C Cumulative Redeemable Preferred Stock",
+        openbb={},
+        security_type="Series C Cumulative Redeemable Preferred Stock",
+        coupon_type="fixed",
+        coupon_rate=6.25,
+        field_sources={"coupon_rate": "repair_ticker_profile_sec_terms"},
+    )
+    assert repair.stale_name_columns(hpp, repair.reparse_row(hpp)) == ["coupon_rate"]
+
+    whr = _stored(
+        ticker="WHR-PA",
+        security_name="WHIRLPOOL CORP /DE/",
+        openbb={},
+        security_type="WHIRLPOOL CORP /DE/",
+        coupon_type="fixed",
+        coupon_rate=8.5,
+        field_sources={
+            c: "repair_ticker_profile_sec_terms" for c in ("coupon_rate", "coupon_type")
+        },
+    )
+    assert repair.stale_name_columns(whr, repair.reparse_row(whr)) == []
+
+
+def test_a_profile_matching_its_name_is_not_refreshed():
+    row = _stored(field_sources={})
+    parsed = repair.reparse_row(row)
+    row.update(parsed)
+
+    assert repair.stale_name_columns(row, parsed) == []
