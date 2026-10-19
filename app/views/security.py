@@ -9,6 +9,7 @@ import streamlit as st
 
 from app import column_docs, ui
 from app.views.screener import SELECTED_KEY
+from src.crispdm.analysis import store
 
 RANGES = {"1 year": 365, "3 years": 3 * 365, "5 years": 5 * 365, "All": None}
 
@@ -675,6 +676,37 @@ def fundamentals_section(security_id: str) -> None:
     )
 
 
+def recommendation_section(security_id: str) -> None:
+    """The saved calls for this security, one row per change, newest first.
+
+    Read from the append-only worksheet revisions (V0088) so the track record cannot drift
+    from what was actually saved; the query collapses re-saves that kept the same call.
+    """
+    st.subheader("Recommendation history")
+    with ui.engine.connect() as conn:
+        rows = store.recommendation_history(conn, security_id)
+    if not rows:
+        st.caption("No recommendations recorded for this security yet.")
+        return
+    df = pd.DataFrame(rows)
+    st.caption(
+        "The sequence of saved calls for this security, newest first, one row per change. "
+        "A worksheet re-saved without changing its call is collapsed, and a call withdrawn "
+        "to an empty cell is not shown. Derived from the append-only revision history "
+        "(V0088), so it matches what was saved."
+    )
+    display = pd.DataFrame(
+        {
+            "Date": [ui.fmt_ts(row["saved_at"]) for row in rows],
+            "Call": df["recommendation"],
+            "From": df["previous"].where(df["previous"].notna(), "—"),
+            "Status": df["status"].str.title(),
+            "By": df["saved_by"],
+        }
+    )
+    st.dataframe(display, hide_index=True, width="stretch")
+
+
 def _announced_dividend(ov) -> None:
     """The most recent announced cash dividend and its ex-date, under the ticker."""
     if ov is None or not _present(ov.get("announced_amount")):
@@ -970,7 +1002,9 @@ def render() -> None:
 
     issuer_section(info.cik, info.ticker)
 
-    tabs = st.tabs(["Price", "Dividends", "Scores", "Features", "Financials", "Fundamentals"])
+    tabs = st.tabs(
+        ["Price", "Dividends", "Scores", "Features", "Financials", "Fundamentals", "Recommendations"]
+    )
     sid = info.security_id
     with tabs[0]:
         price_section(sid)
@@ -984,3 +1018,5 @@ def render() -> None:
         financials_section(sid)
     with tabs[5]:
         fundamentals_section(sid)
+    with tabs[6]:
+        recommendation_section(sid)

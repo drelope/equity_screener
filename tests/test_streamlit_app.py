@@ -772,6 +772,58 @@ def test_the_security_page_offers_the_analysis_worksheet_for_its_ticker(without_
     assert [b.label for b in at.button].count("Analyze") == 1
 
 
+def test_the_security_page_tracks_the_recommendation_history(without_token):
+    from app import analysis_schema as schema
+    from src.crispdm.analysis import store
+
+    with engine.connect() as conn:
+        row = conn.execute(
+            text(
+                "SELECT security_id::text, ticker FROM reference.securities "
+                "WHERE active ORDER BY ticker LIMIT 1"
+            )
+        ).first()
+    if row is None:
+        pytest.skip("no active securities in the warehouse")
+    security_id, ticker = row
+
+    payload = schema.empty_payload()
+    with engine.begin() as conn:
+        analysis_id = store.create(
+            conn,
+            security_id=security_id,
+            ticker=ticker,
+            payload=payload,
+            thesis="One. Two. Three.",
+            recommendation="Hold",
+            confidence="Medium",
+            overall_risk_score=5,
+            status="draft",
+            created_by=OPERATOR,
+        )
+        # Re-save the same call (collapsed) then change it, so only one change shows.
+        for call in ("Hold", "Trim"):
+            store.update(
+                conn,
+                analysis_id,
+                payload=payload,
+                thesis="One. Two. Three.",
+                recommendation=call,
+                confidence="Medium",
+                overall_risk_score=5,
+                status="draft",
+                updated_by=OPERATOR,
+            )
+
+    at = _open_the_security_page(ticker)
+    assert not at.exception, [e.value for e in at.exception]
+
+    table = next(frame.value for frame in at.dataframe if "Call" in frame.value.columns)
+    ours = table[table["By"] == OPERATOR]
+    assert list(ours["Call"])[:2] == ["Trim", "Hold"]
+    assert list(ours["From"])[:2] == ["Hold", "—"]
+
+
 def _fill_worksheet(at: AppTest) -> None:
     """Set every worksheet widget to a valid value, located by its schema key."""
     from app import analysis_schema as schema

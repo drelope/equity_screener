@@ -84,13 +84,16 @@ two people editing the same worksheet silently overwrote each other.
   but it is exported in Markdown and documented in the workflow, closing the "cite your
   sources" requirement with somewhere to put them.
 
-### Phase 4 — assisted analysis (not started)
+### Phase 4 — assisted analysis (in progress)
 
-- **LLM-assisted draft.** The Markdown export is designed to be pasted into an external
-  model; a supported "generate a draft from the warehouse context" path is the obvious
+- **Recommendation history (done).** The track record of the calls themselves is derived
+  from the append-only revisions, so it needs no extra storage and cannot drift from what
+  was saved. `store.recommendation_history(conn, security_id)` returns every change of
+  call for one security, newest first, collapsing re-saves that kept the same call and
+  dropping withdrawals; the Security detail page renders it in a **Recommendations** tab.
+- **LLM-assisted draft (not started).** The Markdown export is designed to be pasted into
+  an external model; a supported "generate a draft from the warehouse context" path is the
   next step, gated on the same Final rules so a model cannot skip the workflow.
-- **Recommendation history.** Track Buy/Add/Hold/Trim/Sell over time per security to
-  audit the track record of the calls themselves.
 
 ## Rules for future changes
 

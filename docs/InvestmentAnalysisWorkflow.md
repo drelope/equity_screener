@@ -406,6 +406,12 @@ V0088). `analysis_schema.diff_payloads(before, after)` lists the fields that cha
 between two revisions, and `format_change` renders one line per change; the sidebar's
 History panel uses them to show what each save altered.
 
+`store.recommendation_history(conn, security_id)` derives the track record of the calls
+themselves from the same table: the changes of recommendation for one security (Buy / Add
+/ Hold / Trim / Sell), newest first, collapsing re-saves that kept the call. The Security
+detail page shows it in a **Recommendations** tab. A call withdrawn to an empty cell is
+not listed, so the record is the sequence of calls that were made.
+
 ---
 
 *This document mirrors `app/analysis_schema.py`; keep both in sync.*

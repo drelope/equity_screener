@@ -286,3 +286,67 @@ def test_revisions_are_deleted_with_their_worksheet(db_conn, security):
     store.delete(db_conn, analysis_id)
 
     assert store.revisions(db_conn, analysis_id) == []
+
+
+# --- recommendation history -------------------------------------------------------
+
+
+def _set_call(db_conn, analysis_id, recommendation, status="draft"):
+    return store.update(
+        db_conn,
+        analysis_id,
+        payload=payload_with(),
+        thesis="One. Two. Three.",
+        recommendation=recommendation,
+        confidence="Medium",
+        overall_risk_score=5,
+        status=status,
+        updated_by="pytest-editor",
+    )
+
+
+def _our_history(db_conn, security, analysis_ids):
+    rows = store.recommendation_history(db_conn, security[0])
+    return [row for row in rows if row["analysis_id"] in analysis_ids]
+
+
+def test_recommendation_history_keeps_only_changes_newest_first(db_conn, security):
+    analysis_id = create(db_conn, security)  # Hold
+    _set_call(db_conn, analysis_id, "Hold")  # unchanged, collapsed
+    _set_call(db_conn, analysis_id, "Add")
+    _set_call(db_conn, analysis_id, "Add")  # unchanged again
+    _set_call(db_conn, analysis_id, "Trim")
+
+    history = _our_history(db_conn, security, {analysis_id})
+
+    assert [row["recommendation"] for row in history] == ["Trim", "Add", "Hold"]
+    assert [row["previous"] for row in history] == ["Add", "Hold", None]
+    assert [row["status"] for row in history] == ["draft", "draft", "draft"]
+
+
+def test_recommendation_history_skips_a_withdrawn_call(db_conn, security):
+    analysis_id = create(db_conn, security)  # Hold
+    _set_call(db_conn, analysis_id, None)  # withdrawn
+    _set_call(db_conn, analysis_id, "Buy")
+
+    history = _our_history(db_conn, security, {analysis_id})
+
+    assert [row["recommendation"] for row in history] == ["Buy", "Hold"]
+    assert [row["previous"] for row in history] == ["Hold", None]
+
+
+def test_recommendation_history_spans_worksheets_newest_first(db_conn, security):
+    first = create(db_conn, security, recommendation="Buy")
+    second = create(db_conn, security, recommendation="Sell")
+
+    history = _our_history(db_conn, security, {first, second})
+
+    assert [row["recommendation"] for row in history] == ["Sell", "Buy"]
+    assert all(row["previous"] is None for row in history)
+    assert all(row["saved_by"] == BY for row in history)
+
+
+def test_recommendation_history_ignores_worksheets_with_no_call(db_conn, security):
+    analysis_id = create(db_conn, security, recommendation=None)
+
+    assert _our_history(db_conn, security, {analysis_id}) == []

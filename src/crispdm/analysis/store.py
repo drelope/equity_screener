@@ -186,3 +186,38 @@ def revisions(conn, analysis_id: int) -> list[dict]:
         """,
         {"id": analysis_id},
     )
+
+
+def recommendation_history(conn, security_id: str) -> list[dict]:
+    """Every change of recommended call for one security, newest first.
+
+    A worksheet is usually re-saved many times with the same recommendation, so this
+    keeps only the saves where the call differs from the previous one for that worksheet:
+    the moments the analyst actually changed their mind. It is derived from the V0088
+    revisions table, so it needs no extra storage and cannot drift from the saved calls.
+
+    Recommendations withdrawn (the call set back to empty) are dropped along with every
+    other NULL, because the track record is the sequence of calls that were made, not the
+    gaps between them. ``previous`` is NULL for a worksheet's first recorded call.
+    """
+    return _rows(
+        conn,
+        """
+        WITH calls AS (
+            SELECT r.analysis_id, r.revision_id, r.saved_at, r.saved_by, r.status,
+                   r.recommendation,
+                   LAG(r.recommendation) OVER (
+                       PARTITION BY r.analysis_id ORDER BY r.revision_id
+                   ) AS previous
+            FROM analysis.investment_analysis_revisions r
+            JOIN analysis.investment_analyses a ON a.analysis_id = r.analysis_id
+            WHERE a.security_id = CAST(:sid AS uuid)
+              AND r.recommendation IS NOT NULL
+        )
+        SELECT analysis_id, revision_id, saved_at, saved_by, status, recommendation, previous
+        FROM calls
+        WHERE previous IS DISTINCT FROM recommendation
+        ORDER BY revision_id DESC
+        """,
+        {"sid": security_id},
+    )
