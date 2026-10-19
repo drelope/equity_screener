@@ -655,6 +655,23 @@ def test_the_shell_renders_and_explains_when_controls_are_off(without_token):
     assert any("Controls are off" in c.value for c in at.sidebar.caption)
 
 
+def test_every_registered_page_runs_through_the_navigation(without_token):
+    """A st.Page target must be callable. Passing a module instead of its
+    .render only blows up when that page is opened, which the per-page tests
+    never do — they call render() directly."""
+    at = shell().run()
+    assert not at.exception, [e.value for e in at.exception]
+    registered = list(at._registered_pages.items())
+    assert registered, "st.navigation registered no pages"
+    for page_hash, info in registered:
+        page = shell().run()
+        # switch_page() only resolves file paths, so callable pages can only be
+        # opened by the hash st.navigation registered for their url_path.
+        page._page_hash = page_hash
+        page.run()
+        assert not page.exception, (info["page_name"], [e.value for e in page.exception])
+
+
 def test_signing_in_with_the_right_token_records_the_operator(with_token):
     at = sign_in(shell().run(), "  Dana  ", TOKEN)
     assert not at.exception
