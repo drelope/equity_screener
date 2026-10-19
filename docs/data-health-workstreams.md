@@ -11,7 +11,7 @@ fixing.
 | 1 | Dividend data health / junk-price denominators | **Fixed** |
 | 2 | Model gate vs naive baseline | **Fixed**; PR-AUC criterion superseded by WS5, model now GO |
 | 3 | Feature completeness | **Fixed**, all 8 features real |
-| 4 | Coverage and freshness | **Open**, pre-existing. Freshness metric, the frozen-filings source, and the two-population refresh gap **fixed**; units for the timer written but **not yet installed** (needs `sudo`); coverage (95% vs a 61.7% ceiling) and data quality (80% vs a 52.3% ceiling) are unattainable as defined |
+| 4 | Coverage and freshness | **Open on coverage/data-quality only**, pre-existing. Freshness metric, the frozen-filings source, and the two-population refresh gap **fixed**; the systemd timer is **installed and enabled** (since 2026-10-14; every nightly since runs `trigger = 'systemd'`); coverage (95% vs a 61.7% ceiling) and data quality (80% vs a 52.3% ceiling) are unattainable as defined |
 | 5 | Label embargo / leakage | **Fixed**; GO on 4/4 rolling folds under revised policy |
 | 6 | Fundamentals look-ahead | **Fixed**; verdict re-run, still GO on 4/4 folds |
 | 7 | Quarterly TTM vintage chain | **Fixed**; API consumer repaired, build made memory-bounded |
@@ -489,10 +489,12 @@ labelled rows: the per-payment OPENBB series only starts 2025-01-02, so the
 prior-year window does not exist for any labelled row, all of which end
 2025-09-25. The XBRL annual-declaration path fixed it.
 
-## WS4 -- Coverage and freshness (pre-existing; freshness fixed, the rest open)
+## WS4 -- Coverage and freshness (pre-existing; freshness and the schedule fixed, coverage/data-quality open)
 
-**Status: open. Freshness metric and the frozen filings source fixed; the
-coverage and data-quality thresholds are still unattainable as defined.**
+**Status: open on coverage/data-quality only. Freshness metric, the frozen
+filings source, the two-population refresh gap, and the missing schedule are all
+fixed (the systemd timer has been installed and enabled since 2026-10-14); the
+coverage and data-quality thresholds remain unattainable as defined.**
 
 These failures were present before the dividend work and were **not** caused by
 it. The dividend work neither caused nor cured them, and must not be credited
@@ -529,12 +531,14 @@ the pipeline -- only by changing what is being measured.
 The staleness grew 48.2h -> 49.4h -> 74.0h across the session. That signature is
 the diagnosis: the age is just "time since someone last ran the ETL by hand".
 
-1. **The 03:00 ET nightly is a template, not an installed unit.**
-   `ops/systemd/dividend-etl.{service,timer}` are checked-in templates; nothing
-   is installed in `/etc/systemd/system`, `systemctl list-timers` shows no
-   dividend timer, and all 7 rows in `audit.nightly_runs` carry
-   `trigger = 'manual'`. No schedule exists, so no source can stay inside a
-   26h SLA. The ETL works; it is simply never invoked automatically.
+1. **The 03:00 ET nightly was a template, not an installed unit** (now
+   resolved). `ops/systemd/dividend-etl.{service,timer}` were checked-in
+   templates; nothing was installed in `/etc/systemd/system`, `systemctl
+   list-timers` showed no dividend timer, and the first 7 rows in
+   `audit.nightly_runs` carried `trigger = 'manual'`. No schedule existed, so no
+   source could stay inside a 26h SLA. The ETL worked; it was simply never
+   invoked automatically. The units were installed 2026-10-05 and the timer
+   enabled 2026-10-14; every run since the latter is `trigger = 'systemd'`.
 
 2. **`raw.companyfacts` can never refresh, by construction.** This is the more
    serious of the two. `populate_companyfacts` computed
@@ -570,9 +574,9 @@ the diagnosis: the age is just "time since someone last ran the ETL by hand".
 #### What was fixed, and what it actually bought
 
 Findings 2 and 3 are defects in the measurement and in the ingestion contract,
-so they are fixed here. Finding 1 is an operational gap; the units for it are now
-written and verified, but **installing them needs a `sudo` password, so the timer
-is still not enabled on this host** (see "Installing the timer" below).
+so they are fixed here. Finding 1 was an operational gap; the units are written
+and verified, and **have since been installed on this host** -- the timer was
+enabled 2026-10-14 (see "Installing the timer" below).
 
 - **`raw.companyfacts` is now refreshable.** `select_pending_ciks` decides what
   happens to a CIK that is already stored: skipped (the backfill default),
@@ -740,7 +744,9 @@ install, neither of which fails loudly:
   start. `ops/systemd/wait_for_db.py` is an `ExecStartPre` that blocks until a
   real query succeeds, so a boot race is not recorded as a pipeline fault.
 
-Not yet done, because it needs a `sudo` password:
+Done on this host -- units copied 2026-10-05, timer enabled and started
+2026-10-14; `systemctl list-timers dividend-etl.timer` shows the next 02:00 CDT
+firing. The commands were:
 
 ```bash
 sudo cp ops/systemd/dividend-etl.service ops/systemd/dividend-etl.timer /etc/systemd/system/
@@ -913,10 +919,10 @@ changes what the next one can measure:
 2. ~~Make `raw.companyfacts` refreshable.~~ **Done.**
 3. ~~Point the dividend freshness at a retrieval timestamp, and cover
    `raw.market_data`.~~ **Done.**
-4. Install the timer so there is a schedule at all. Units are written and
-   verified; only the `sudo` install is outstanding, and it is the last thing
-   between the freshness check and green -- both remaining breaches are "nobody
-   ran the ETL". Mind the WSL2 caveat above before trusting the SLA.
+4. ~~Install the timer so there is a schedule at all.~~ **Done 2026-10-14** --
+   the units were written and verified, then installed and enabled; every
+   nightly since runs `trigger = 'systemd'`. Mind the WSL2 caveat above before
+   trusting the SLA.
 5. Re-derive `data_quality` over sources the pipeline actually populates for the
    whole universe, normalise `security_type` before comparing, and decide
    explicitly whether the floor is 80% of *all* securities or of the dividend

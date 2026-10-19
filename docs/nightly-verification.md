@@ -277,6 +277,51 @@ Both tables are installed by `python -m scripts.migrate`
 (`sql/migrations/V0005_nightly_run_tracking.sql`; fresh installs get them from
 `schema.sql`).
 
+## Replaying a historical date (scoring-policy change)
+
+The nightly scores the newest feature date only. A change to the scoring policy
+-- a weight, the coverage floor, a feature definition -- makes every already
+published date an output of a rule that no longer holds, so the change has to be
+replayed over history rather than waited out one night at a time.
+
+```bash
+python -m scripts.score_rank --as-of 2026-09-29
+```
+
+`--as-of` anchors the feature window on that date instead of the newest row;
+`model.scores` and `model.rankings` are rewritten at it, and `model.predictions`
+gets a fresh run. The dates can be replayed in any order.
+
+**A replay prunes superseded predictions by default.** `model.scores` and
+`model.rankings` are keyed by `(security_id, as_of_date)` and every run prunes
+the securities it did not write at that date; a replay can shrink the frame, so
+the superseded `model.predictions` runs -- which still cover the old, larger
+frame -- would otherwise survive. `model.current_predictions` resolves to the
+newest run *per security*, so it would then report the union of the old and new
+frames while `model.scores` held only the new, and the two would quietly
+disagree on the date's coverage. Pass `--keep-superseded` only if those rows are
+genuinely wanted. The nightly keeps its opt-in retention (`run_full_etl` passes
+`--prune-superseded`), because its frame is stable and the superseded runs are
+the audit trail.
+
+**A replay refuses the wrong date.** If the requested date is not the newest
+feature row within the carry-forward window (a weekend or holiday, or a date past
+the newest feature), the run exits **2** with "refusing to re-score the wrong
+date" rather than write the wrong day's scores. A missing or malformed `--as-of`
+is likewise a usage error, never a silent fall back to the nightly date.
+
+After a replay, confirm the coverage agreement the prune protects:
+
+```sql
+SELECT count(*) FROM (
+  SELECT v.as_of_date
+  FROM (SELECT as_of_date, count(*) n FROM model.current_predictions GROUP BY 1) v
+  JOIN (SELECT as_of_date, count(*) n FROM model.scores GROUP BY 1) s USING (as_of_date)
+  WHERE v.n <> s.n) x;
+```
+
+Zero rows means `current_predictions` and `scores` agree on every date.
+
 ## Monthly review
 
 At each SDLC review cycle, export the two tables and confirm: (a) the nightly
