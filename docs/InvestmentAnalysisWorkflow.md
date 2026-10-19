@@ -412,6 +412,16 @@ themselves from the same table: the changes of recommendation for one security (
 detail page shows it in a **Recommendations** tab. A call withdrawn to an empty cell is
 not listed, so the record is the sequence of calls that were made.
 
+### LLM-assisted draft (local)
+
+A local model can prefill a **Draft** from the warehouse context (`app/llm_client.py`).
+It is off by default and points at a loopback OpenAI-compatible endpoint (Ollama, vllm,
+LM Studio, the llama.cpp server), so nothing leaves the machine. Generation only returns a
+payload that passes `validate_draft`; it never saves, and a Final recommendation is still
+governed by the normal on-save rules. Configure it with `LLM_ENABLED`, `LLM_ENDPOINT`,
+`LLM_MODEL` and the related `LLM_*` settings; a non-localhost endpoint needs an explicit
+opt-in before any context is sent.
+
 ---
 
 *This document mirrors `app/analysis_schema.py`; keep both in sync.*

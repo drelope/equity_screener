@@ -1,4 +1,5 @@
 from datetime import date
+from urllib.parse import urlparse
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -55,6 +56,20 @@ class Settings(BaseSettings):
     #: Where the web app reaches the data API, and the key it sends. The key is the API's
     #: own ``API_KEY``; the app never shows it.
     api_base_url: str = "http://localhost:8000"
+    #: Local LLM-assisted draft (Phase 4). Off by default and pointed at localhost, so
+    #: nothing is generated and nothing leaves the machine until it is deliberately
+    #: switched on. The endpoint is OpenAI-compatible (Ollama, vllm, LM Studio and the
+    #: llama.cpp server all expose one), so no provider SDK or cloud account is needed;
+    #: generated text only ever prefills a Draft, which the analyst still reviews and
+    #: saves through the normal validation. ``llm_api_key`` is only for a local endpoint
+    #: that asks for one and is never logged or exported.
+    llm_enabled: bool = False
+    llm_endpoint: str = "http://localhost:11434/v1/chat/completions"
+    llm_model: str = "llama3.1:8b"
+    llm_timeout_seconds: int = 120
+    llm_max_tokens: int = 2000
+    llm_temperature: float = 0.2
+    llm_api_key: str | None = None
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
     def require_sec_user_agent(self) -> None:
@@ -65,6 +80,15 @@ class Settings(BaseSettings):
                 "'Name name@example.com' (SEC fair-access policy). Set it in .env "
                 "before any SEC request."
             )
+
+    def llm_endpoint_is_local(self) -> bool:
+        """True when the draft endpoint's host is loopback.
+
+        The local-first rule: the client warns before generating against anything that is
+        not localhost, so warehouse context does not leave the machine by accident.
+        """
+        host = (urlparse(self.llm_endpoint).hostname or "").lower()
+        return host in {"localhost", "127.0.0.1", "::1"}
 
 
 settings = Settings()

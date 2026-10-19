@@ -95,6 +95,81 @@ two people editing the same worksheet silently overwrote each other.
   an external model; a supported "generate a draft from the warehouse context" path is the
   next step, gated on the same Final rules so a model cannot skip the workflow.
 
+#### Local-first design proposal (LLM-assisted draft)
+
+**Guiding principles (local-focused):**
+- **Local-only by default.** Prefer self-hosted local inference (Ollama, LM Studio, vllm,
+  llama.cpp server, OpenAI-compatible endpoints on localhost). No hard dependency on cloud
+  providers; network calls disabled unless explicitly configured.
+- **Offline-capable.** Runs without internet once models are cached. No telemetry.
+- **Secrets-free.** If an endpoint requires auth (rare for localhost), store tokens in a
+  local config file outside git (`.opencode`/local only), never committed.
+- **Least privilege.** Only expose warehouse context needed to fill the worksheet (the
+  read-only context already on the page: features, scores, ratios). No write access to DB
+  from the LLM path.
+- **Gated by validation.** Any generated payload must still pass `validate_draft()` before
+  hydrating the form; a "Generate" action never auto-saves as Final. The Final rule set
+  remains enforced on save.
+- **Deterministic UX.** User explicitly initiates generation; show endpoint/model, timeout,
+  max tokens, temperature; allow cancel; never surprise the user.
+
+**Architecture (minimal, local):**
+1. **Config (local).** Add `app/llm_config.py` (or extend `src/crispdm/config.py`) with:
+   - `llm.enabled` (bool, default False)
+   - `llm.endpoint` (http URL, e.g. `http://localhost:11434/v1/chat/completions` or Ollama
+     generate/completions; default localhost)
+   - `llm.model` (str)
+   - `llm.timeout_sec` (int, default 120)
+   - `llm.max_tokens` (int, default 2000)
+   - `llm.temperature` (float, 0.0-0.5 for factual worksheet)
+   - `llm.api_key` (optional; only if local endpoint requires it; read from env or local
+     secrets file, never logged)
+2. **Local inference client (in app layer).** `app/llm_client.py` with:
+   - OpenAI-compatible Chat Completions as the baseline (works with Ollama/vllm/LM Studio)
+   - Simple retry/backpressure, timeouts, structured error messages
+   - No imports from `src` that pull heavy deps; pure http (requests/httpx)
+3. **Context builder.** Reuse existing read-only queries (profile, features, scores,
+   financials). Build a compact Markdown context (ticker, security, latest features/ratios,
+   scores, fundamentals summary) — similar to what the page already shows in Warehouse
+   context, but trimmed to fit the prompt.
+4. **Prompting (schema-constrained).** System prompt instructs: fill `app.analysis_schema`
+   fields in order, output **only** JSON matching `schema.empty_payload()` structure
+   (sections -> field ids), never invent facts, leave uncertain fields empty, include
+   `sources` per section when citing data, respect required/conditional rules, and never
+   produce a Final recommendation unless all prior steps complete (and even then only as a
+   Draft). Include schema version.
+5. **Orchestrator (view layer).** In `app/views/investment_analysis.py`, add a "Generate
+   draft (local LLM)" expander (collapsed by default) that:
+   - Shows status of local endpoint (optional health check)
+   - Lets user pick model/params if multiple configured
+   - Builds context + prompt, calls local client, parses JSON, validates with
+     `schema.validate_draft()`, hydrates form via `_hydrate()` if valid
+   - On failure: shows parse/validation errors, never overwrites existing unsaved edits
+     without confirmation; does not save
+6. **Safety guards.**
+   - **No auto-save.** Generated content only populates widgets (Draft state). User must
+     review and explicitly Save.
+   - **Gated.** Generation blocked if `llm.enabled` False or endpoint unreachable (and
+     clearly explained).
+   - **Deterministic defaults.** Temperature 0.0-0.3, max tokens bounded, schema-first
+     (JSON mode) to reduce hallucinations.
+   - **No DB writes.** LLM path never calls `store.*` directly.
+   - **Local-only enforcement.** Default endpoint is `http://localhost:*`; if user sets a
+     non-localhost endpoint, show a prominent warning and require explicit confirmation
+     (to avoid accidental cloud usage). This keeps the "local focused design" as the
+     default.
+
+**Implementation notes (incremental):**
+- Start with **design only** (this section) + config defaults disabled.
+- Add `llm_config` + `llm_client` behind a feature flag; no UI changes until flag enabled.
+- Add prompt template under `app/prompts/investment_analysis_draft.md` (or inline) that
+  references schema field ids and the "sources required" expectation.
+- Extend tests: unit test prompt construction, JSON parsing, validation rejection of
+  non-conforming output; Streamlit UI test (with mocked local endpoint) that generation
+  populates form but does not save.
+- Update docs: `docs/InvestmentAnalysisWorkflow.md` add a short "LLM-assisted draft
+  (local)" subsection describing the local-only, review-first behavior.
+
 ## Rules for future changes
 
 - Any change to sections, field ids, types or options must update
