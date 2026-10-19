@@ -8,7 +8,7 @@ that remains. The worksheet itself (`app/analysis_schema.py` +
 
 ## Why this exists
 
-The worksheet had grown to 18 steps and 140 fields. An audit of the saved-worksheet path
+The worksheet had grown to 18 steps and 158 fields. An audit of the saved-worksheet path
 surfaced a handful of correctness gaps: the most important was that a **Draft could not
 be saved at all** — every save ran the full Final rule set, so an analyst working
 step-by-step lost everything until every required field was filled. The second was that
@@ -68,14 +68,21 @@ two people editing the same worksheet silently overwrote each other.
   lives. A writer that bypasses the app is now *auditable* instead: its save lands in the
   revisions table with `saved_by` and `saved_at`.
 
-### Phase 3 — auditability (not started)
+### Phase 3 — auditability (done)
 
-- **Field-level diff.** Record which fields changed between revisions, so a reviewer can
-  see the evolution of a thesis rather than only its final state.
-- **Export metadata.** `to_markdown` does not emit status, timestamps or the operator;
-  including them makes the exported document self-identifying.
-- **Data-source citations.** The workflow requires every quantitative claim to cite a
-  source, but no field captures it. Add a citations block (or per-field annotations).
+- **Field-level diff.** `analysis_schema.diff_payloads(before, after)` returns each field
+  that changed between two payloads, with human labels and display strings, in workflow
+  order; `format_change` renders one line per change. The sidebar History panel pairs each
+  revision with its predecessor and lists what that save altered, so the evolution of a
+  thesis is visible, not only its final state.
+- **Export metadata.** `to_markdown` takes optional `status`, `saved_by` and `saved_at`
+  and emits them as a provenance header. The page passes the open row's values, so an
+  exported report identifies its status and last editor.
+- **Data-source citations.** Every section now carries a `sources` textarea (auto-added
+  like the confidence block, and explicit on the sections without one). It is optional
+  rather than required — forcing a citation to save a draft would block work in progress —
+  but it is exported in Markdown and documented in the workflow, closing the "cite your
+  sources" requirement with somewhere to put them.
 
 ### Phase 4 — assisted analysis (not started)
 

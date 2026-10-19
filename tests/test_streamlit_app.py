@@ -702,6 +702,24 @@ def test_the_sidebar_shows_the_saved_revision_history(with_token):
     assert newest == older + 1  # revision ids rise with each save
 
 
+def test_the_sidebar_history_shows_what_each_save_changed(with_token):
+    at = page("investment_analysis", operator=True).run()
+    _fill_worksheet(at)
+    button(at, "Save analysis").click().run()
+    assert any("Saved analysis" in s.value for s in at.success)
+
+    at.text_input(key="ia__universe__universe_filters").set_value("Changed universe").run()
+    button(at, "Save analysis").click().run()
+    assert any("Saved analysis" in s.value for s in at.success)
+
+    assert not at.exception, [e.value for e in at.exception]
+    captions = [caption.value for caption in at.sidebar.caption]
+    assert any(
+        "Filters applied" in line and "->" in line and "Changed universe" in line
+        for line in captions
+    ), captions
+
+
 def test_without_the_operator_token_the_save_control_is_off(without_token):
     at = page("investment_analysis").run()
     assert not at.exception, [e.value for e in at.exception]

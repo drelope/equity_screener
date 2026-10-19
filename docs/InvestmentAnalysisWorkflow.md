@@ -41,7 +41,8 @@ of fields, but a `recommendation` cannot be recorded while any required field in
 
 ### Output standards
 
-- Every analytical section ends with a **Confidence Assessment** (spec below).
+- Every analytical section ends with a **Confidence Assessment** (spec below) and a
+  `sources` field for the data behind its quantitative claims.
 - All quantitative claims cite data sources.
 - All forward-looking statements include explicit assumptions.
 - No recommendation without a corresponding risk decomposition (step 16 precedes 18).
@@ -81,6 +82,7 @@ Inputs: `reference.securities` (active flag, type, sector filters).
 |---|---|---|
 | `universe_filters` | text, **required** | Sector, market-cap and geographic filters applied |
 | `universe_rationale` | textarea | Why this is the right hunting ground |
+| `sources` | textarea | Data sources cited in this step |
 
 ### 2. Macro & credit — `macro`
 
@@ -100,6 +102,7 @@ regime features where available (`economic_credit_cycle_dividend_regime.md` fram
 | `credit_rationale` | textarea, **required** | 2-3 sentences |
 | `confidence` | select | Section confidence (spec above) |
 | `confidence_note` | textarea | Required only when `confidence` is Low |
+| `sources` | textarea | Data sources cited in this step |
 
 **Relevance:** critical for banks, REITs, preferred securities, leveraged companies and
 cyclicals.
@@ -110,7 +113,7 @@ cyclicals.
 |---|---|---|
 | `industry_outlook` | textarea, **required** | Growth drivers, structure, pricing power |
 | `competitive_landscape` | textarea | Concentration, key competitors, positioning |
-| `confidence` / `confidence_note` | | Section confidence |
+| `confidence` / `confidence_note` / `sources` | | Section confidence and data sources |
 
 ### 4. Industry structure & capital cycle — `capital_cycle`
 
@@ -123,7 +126,7 @@ cyclicals.
 | `utilization` | text | Current vs. historical average |
 | `profitability_trend` | select | Improving / Deteriorating / Stable |
 | `capital_discipline_score` | score, **required** | 1-3 poor (overbuilding, destructive competition); 4-6 moderate; 7-10 strong (rational, returns-focused) |
-| `confidence` / `confidence_note` | | Section confidence |
+| `confidence` / `confidence_note` / `sources` | | Section confidence and data sources |
 
 **Relevance:** essential for semiconductors, energy, mining, shipping, chemicals, REITs
 and industrials — many opportunities are driven by supply constraints rather than
@@ -134,14 +137,14 @@ revenue growth.
 | Field id | Type | Notes |
 |---|---|---|
 | `supply_analysis` | textarea, **required** | Capacity, entrants, constraints |
-| `confidence` / `confidence_note` | | Section confidence |
+| `confidence` / `confidence_note` / `sources` | | Section confidence and data sources |
 
 ### 6. Demand side — `demand`
 
 | Field id | Type | Notes |
 |---|---|---|
 | `demand_analysis` | textarea, **required** | Volume/price drivers, customer structure |
-| `confidence` / `confidence_note` | | Section confidence |
+| `confidence` / `confidence_note` / `sources` | | Section confidence and data sources |
 
 ### 7. Consensus expectations — `consensus`
 
@@ -156,6 +159,7 @@ Inputs: external estimate data (revenue/EPS estimates, revision breadth).
 | `revision_trend` | select | Upward / Flat / Downward |
 | `estimate_dispersion` | select | Low / Moderate / High |
 | `surprise_implication` | textarea | What the setup implies for earnings surprises |
+| `sources` | textarea | Data sources cited in this step |
 
 **Purpose:** makes expectation mismatches identifiable before thesis formation.
 
@@ -176,7 +180,7 @@ Inputs: external estimate data (revenue/EPS estimates, revision breadth).
 | `bullish_variant` | textarea, **required** | Why the market may be wrong (upside) |
 | `bearish_variant` | textarea, **required** | Why the market may be wrong (downside) |
 | `key_evidence` | textarea, **required** | One piece of evidence per line (min. 3) |
-| `confidence` / `confidence_note` | | Section confidence |
+| `confidence` / `confidence_note` / `sources` | | Section confidence and data sources |
 
 **Purpose:** forces identification of informational, analytical and behavioural edge —
 the source of excess returns. Validation requires at least three evidence lines.
@@ -190,7 +194,7 @@ Inputs: warehouse context panel (`model.features`, `model.scores`,
 |---|---|---|
 | `business_model` | textarea, **required** | How the company makes money |
 | `financial_analysis` | textarea, **required** | Growth, margins, balance sheet, cash flows |
-| `confidence` / `confidence_note` | | Section confidence |
+| `confidence` / `confidence_note` / `sources` | | Section confidence and data sources |
 
 ### 10. Earnings quality — `earnings_quality`
 
@@ -206,7 +210,7 @@ Inputs: `model.features` (cash conversion, margins) and `fundamentals.periodic_f
 | `one_time_items` | textarea | Recurring vs. one-time adjustments, itemised |
 | `quality_verdict` | select, **required** | High quality / Moderate / Low quality |
 | `red_flags` | textarea | List, if any |
-| `confidence` / `confidence_note` | | Section confidence |
+| `confidence` / `confidence_note` / `sources` | | Section confidence and data sources |
 
 **Purpose:** identifies low-quality earnings before they distort valuation.
 
@@ -222,7 +226,7 @@ Inputs: `model.features` (cash conversion, margins) and `fundamentals.periodic_f
 | `regulatory_advantage` | select | Present / Absent |
 | `moat_rating` | select, **required** | Strong / Moderate / Weak / None |
 | `durability_trend` | select | Improving / Stable / Eroding |
-| `confidence` / `confidence_note` | | Section confidence |
+| `confidence` / `confidence_note` / `sources` | | Section confidence and data sources |
 
 **Purpose:** separates compounders from cyclical trades and value traps.
 
@@ -239,7 +243,7 @@ Inputs: proxy/filing data, insider transactions (external).
 | `insider_transactions` | select | Buying / Selling / Mixed / None |
 | `compensation_alignment` | textarea | Tied to ROIC, EPS or opaque metrics |
 | `management_score` | score, **required** | 1-10 |
-| `confidence` / `confidence_note` | | Section confidence |
+| `confidence` / `confidence_note` / `sources` | | Section confidence and data sources |
 
 **Purpose:** execution risk and stewardship quality.
 
@@ -251,7 +255,7 @@ Inputs: proxy/filing data, insider transactions (external).
 | `key_assumptions` | textarea, **required** | Every forward-looking assumption |
 | `target_price` | text | Per share, with currency |
 | `margin_of_safety` | text | Vs. current price |
-| `confidence` / `confidence_note` | | Section confidence |
+| `confidence` / `confidence_note` / `sources` | | Section confidence and data sources |
 
 ### 14. Scenarios — `scenarios`
 
@@ -262,7 +266,7 @@ Inputs: proxy/filing data, insider transactions (external).
 | `bear_case` | textarea, **required** | Narrative + expected 12M return |
 | `scenario_probabilities` | text | e.g. 60 / 25 / 15 |
 | `expected_return` | text | Probability-weighted forward 12M return |
-| `confidence` / `confidence_note` | | Section confidence |
+| `confidence` / `confidence_note` / `sources` | | Section confidence and data sources |
 
 ### 15. Historical analogs — `analog`
 
@@ -272,7 +276,7 @@ Inputs: proxy/filing data, insider transactions (external).
 | `base_rate` | text | % of similar conditions produced positive returns |
 | `key_differences` | textarea | How today differs (numbered) |
 | `analog_implication` | textarea | What the base rate implies here |
-| `confidence` / `confidence_note` | | Section confidence |
+| `confidence` / `confidence_note` / `sources` | | Section confidence and data sources |
 
 **Purpose:** prevents narrative-driven conclusions; improves probabilistic thinking.
 
@@ -288,7 +292,7 @@ Inputs: proxy/filing data, insider transactions (external).
 | `liquidity_risk` | select, **required** | High / Moderate / Low |
 | `overall_risk_score` | score, **required** | 1-10 |
 | `position_sizing` | textarea, **required** | Position-sizing implication |
-| `confidence` / `confidence_note` | | Section confidence |
+| `confidence` / `confidence_note` / `sources` | | Section confidence and data sources |
 
 **Purpose:** differentiated position sizing by risk category rather than a generic
 "risk is moderate".
@@ -309,6 +313,7 @@ Inputs: proxy/filing data, insider transactions (external).
 | `position_adds` | textarea | What this position adds |
 | `concentration_risk` | textarea | Concentration risk description |
 | `correlation_assessment` | textarea | Correlation with existing holdings |
+| `sources` | textarea | Data sources cited in this step |
 
 **Purpose:** avoids unintended factor concentration at the portfolio level.
 
@@ -328,6 +333,7 @@ Inputs: proxy/filing data, insider transactions (external).
 | `forecast_uncertainty` | textarea, **required** | Confidence reason |
 | `sensitivity_assumptions` | textarea, **required** | Confidence reason |
 | `variant_conviction` | textarea, **required** | Confidence reason |
+| `sources` | textarea | Data sources for the conclusions |
 
 ---
 
@@ -388,8 +394,17 @@ lists them, so the concurrency refusal is recoverable rather than a dead end.
 
 `analysis_schema.to_markdown(payload, ticker)` renders the document form: one `##`
 heading per step in workflow order, `**Field label:** value` per non-empty field, and
-the confidence block at the end of each analytical section. This is the format pasted
-into an external LLM chat when a generated (LLM-assisted) report is wanted.
+the confidence block at the end of each analytical section. When exporting a saved
+worksheet the page also passes `status`, `saved_by` and `saved_at`, which appear as a
+provenance header beneath the title. This is the format pasted into an external LLM chat
+when a generated (LLM-assisted) report is wanted.
+
+### Revision history
+
+Every save is kept as an append-only revision (`analysis.investment_analysis_revisions`,
+V0088). `analysis_schema.diff_payloads(before, after)` lists the fields that changed
+between two revisions, and `format_change` renders one line per change; the sidebar's
+History panel uses them to show what each save altered.
 
 ---
 

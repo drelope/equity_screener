@@ -31,11 +31,11 @@ def test_the_documented_steps_match_the_schema_in_order():
 
 def test_every_field_id_matches_in_both_directions():
     text = _document()
-    documented = set(re.findall(r"^\|\s+`([a-z0-9_]+)`\s+\|", text, re.M))
-    # Most section tables document the auto-added confidence block in one combined
-    # cell rather than as two rows, so pick those ids up separately.
-    if re.search(r"`confidence`\s*/\s*`confidence_note`", text):
-        documented.update({"confidence", "confidence_note"})
+    # Field ids sit in the first cell of each table row, either alone or as several
+    # ids separated by "/" (the auto-added confidence/sources block). Collect them all.
+    documented: set[str] = set()
+    for cell in re.findall(r"^\|\s*(`[^|]+`)\s*\|", text, re.M):
+        documented.update(re.findall(r"`([a-z0-9_]+)`", cell))
     declared = {field.id for section in schema.SECTIONS for field in section.all_fields}
     assert documented == declared, {
         "only_in_document": sorted(documented - declared),

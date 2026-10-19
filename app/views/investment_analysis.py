@@ -182,18 +182,28 @@ def _sidebar(info: pd.Series) -> None:
 
 
 def _revision_history(analysis_id: int) -> None:
-    """Every save is kept (V0088), so show a Final's age and who last touched it."""
+    """Every save is kept (V0088), so show what changed and who last touched the row."""
     saved = _read(lambda conn: store.revisions(conn, analysis_id))
     with st.expander(f"History ({len(saved)})", expanded=False):
         if not saved:
             st.caption("No saved revisions yet.")
             return
-        for rev in saved:
+        for index, rev in enumerate(saved):
             st.caption(
                 f"r{rev['revision_id']} · {rev['status']} · "
                 f"{rev['recommendation'] or 'no recommendation'} · "
                 f"by {rev['saved_by']} · {ui.fmt_ts(rev['saved_at'])}"
             )
+            if index + 1 >= len(saved):
+                st.caption("  First saved version.")
+                continue
+            changes = schema.diff_payloads(saved[index + 1]["payload"], rev["payload"])
+            if not changes:
+                st.caption("  No field changed.")
+            for change in changes[:10]:
+                st.caption(f"  {schema.format_change(change)}")
+            if len(changes) > 10:
+                st.caption(f"  …and {len(changes) - 10} more field(s)")
 
 
 def _context(info: pd.Series) -> None:
@@ -314,9 +324,18 @@ def _save_actions(info: pd.Series, payload: dict) -> None:
 
 
 def _exports(payload: dict, ticker: str) -> None:
+    current = st.session_state.get(ANALYSIS_KEY)
+    row = _read(lambda conn: store.get(conn, current)) if current else None
+    provenance = {}
+    if row:
+        provenance = {
+            "status": row["status"].title(),
+            "saved_by": row["updated_by"] or row["created_by"],
+            "saved_at": ui.fmt_ts(row["updated_at"]),
+        }
     st.download_button(
         "Download Markdown",
-        schema.to_markdown(payload, ticker).encode("utf-8"),
+        schema.to_markdown(payload, ticker, **provenance).encode("utf-8"),
         file_name=f"investment_analysis_{ticker}.md",
         mime="text/markdown",
         key="ia_dl_md",

@@ -64,12 +64,14 @@ class Section:
 
     @property
     def all_fields(self) -> tuple[Field, ...]:
-        if not self.has_confidence:
-            return self.fields
-        return self.fields + (
-            Field("confidence", "Confidence level", "select", CONFIDENCE_OPTIONS, required=True),
-            Field("confidence_note", "Confidence note (required when Low)", "textarea"),
-        )
+        extra: list[Field] = []
+        if self.has_confidence:
+            extra.append(
+                Field("confidence", "Confidence level", "select", CONFIDENCE_OPTIONS, required=True)
+            )
+            extra.append(Field("confidence_note", "Confidence note (required when Low)", "textarea"))
+        extra.append(Field("sources", "Sources & citations", "textarea"))
+        return self.fields + tuple(extra)
 
     def field(self, field_id: str) -> Field | None:
         return next((f for f in self.all_fields if f.id == field_id), None)
@@ -741,14 +743,37 @@ def final_summary(payload: dict) -> dict:
     }
 
 
-def to_markdown(payload: dict, ticker: str) -> str:
-    """The canonical document form: workflow order, one ``##`` heading per step."""
+def to_markdown(
+    payload: dict,
+    ticker: str,
+    *,
+    status: str | None = None,
+    saved_by: str | None = None,
+    saved_at: str | None = None,
+) -> str:
+    """The canonical document form: workflow order, one ``##`` heading per step.
+
+    ``status``/``saved_by``/``saved_at`` are optional provenance for the header; the
+    caller passes them when exporting a saved worksheet so the document identifies itself.
+    """
     out = [
         f"# Investment analysis — {ticker}",
         "",
         f"Generated from the worksheet (schema version {payload.get('version', SCHEMA_VERSION)}).",
-        "",
     ]
+    provenance = [
+        f"{label}: {value}"
+        for label, value in (
+            ("Status", status),
+            ("Last saved by", saved_by),
+            ("Last saved", saved_at),
+        )
+        if value
+    ]
+    if provenance:
+        out.append("")
+        out.extend(f"- {line}" for line in provenance)
+    out.append("")
     for index, section in enumerate(SECTIONS, start=1):
         values = payload.get("sections", {}).get(section.id, {})
         out.append(f"## {index}. {section.title}")
@@ -802,3 +827,43 @@ def _confidence_block(section: Section, values: dict) -> list[str]:
         block.append(f"Reason: {note}")
     block += ["```", ""]
     return block
+
+
+def diff_payloads(before: dict, after: dict) -> list[dict]:
+    """Fields whose value changed between two worksheet payloads, in workflow order.
+
+    Returned entries carry human labels and display strings, not raw payload values, so
+    the caller can render a revision's changes without knowing the widget types. Selects
+    and scores read the same way they are stored.
+    """
+    changes: list[dict] = []
+    for section in SECTIONS:
+        old_values = before.get("sections", {}).get(section.id, {})
+        new_values = after.get("sections", {}).get(section.id, {})
+        for f in section.all_fields:
+            was = _display_value(old_values.get(f.id), f)
+            now = _display_value(new_values.get(f.id), f)
+            if was != now:
+                changes.append(
+                    {"section": section.title, "field": f.label, "before": was, "after": now}
+                )
+    return changes
+
+
+def format_change(change: dict, width: int = 48) -> str:
+    """One-line ``field: before -> after`` rendering of a :func:`diff_payloads` entry."""
+    before = _shorten(change["before"], width) or "(empty)"
+    after = _shorten(change["after"], width) or "(empty)"
+    return f"{change['section']} / {change['field']}: {before} -> {after}"
+
+
+def _display_value(raw, f: Field) -> str:
+    if f.kind == "score":
+        return "" if raw in (None, "") else str(raw)
+    text = "" if raw is None else str(raw).strip()
+    return "" if text == PLACEHOLDER else text
+
+
+def _shorten(text: str, width: int) -> str:
+    text = " ".join(str(text).split())
+    return text if len(text) <= width else text[: width - 1] + "…"

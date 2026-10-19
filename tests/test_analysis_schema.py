@@ -307,3 +307,68 @@ def test_markdown_export_skips_unset_fields():
     markdown = schema.to_markdown(schema.empty_payload(), "ABC")
     assert "**Credit market verdict:**" not in markdown
     assert "(unset)" in markdown  # the confidence block still shows its level line
+
+
+# --- provenance, sources and revisions --------------------------------------------
+
+
+def test_every_section_captures_its_data_sources():
+    assert all(section.field("sources") is not None for section in schema.SECTIONS)
+
+
+def test_markdown_export_includes_optional_provenance():
+    markdown = schema.to_markdown(
+        filled_payload(), "ABC", status="Final", saved_by="Dana", saved_at="2026-10-19 12:00"
+    )
+    assert "- Status: Final" in markdown
+    assert "- Last saved by: Dana" in markdown
+    assert "- Last saved: 2026-10-19 12:00" in markdown
+    assert "**Sources & citations:**" in markdown
+
+
+def test_markdown_export_omits_provenance_when_not_given():
+    assert "- Status:" not in schema.to_markdown(filled_payload(), "ABC")
+
+
+def test_diff_payloads_reports_only_changed_fields_in_workflow_order():
+    before = filled_payload()
+    after = filled_payload()
+    after["sections"]["macro"]["credit_verdict"] = "Bearish"
+    after["sections"]["final"]["thesis"] = "A different thesis. With two sentences."
+
+    changes = schema.diff_payloads(before, after)
+
+    assert [change["field"] for change in changes] == [
+        "Credit market verdict",
+        "Thesis (3 sentences maximum)",
+    ]
+    assert changes[0]["before"] == "Bullish" and changes[0]["after"] == "Bearish"
+    assert changes[1]["section"] == "Recommendation & final output"
+
+
+def test_diff_payloads_is_empty_for_identical_payloads():
+    assert schema.diff_payloads(filled_payload(), filled_payload()) == []
+
+
+def test_diff_payloads_reads_an_unset_select_as_empty():
+    before = schema.empty_payload()
+    after = schema.empty_payload()
+    after["sections"]["macro"]["credit_verdict"] = "Bearish"
+
+    (change,) = schema.diff_payloads(before, after)
+
+    assert change["before"] == "" and change["after"] == "Bearish"
+
+
+def test_format_change_summarises_and_truncates():
+    change = {
+        "section": "Valuation",
+        "field": "Target price (with currency)",
+        "before": "",
+        "after": "x" * 100,
+    }
+
+    line = schema.format_change(change, width=20)
+
+    assert line.startswith("Valuation / Target price (with currency): (empty) -> ")
+    assert line.endswith("…")
