@@ -185,3 +185,104 @@ def test_list_for_security_carries_both_audit_labels(db_conn, security):
         r for r in store.list_for_security(db_conn, security[0]) if r["analysis_id"] == analysis_id
     ]
     assert rows and rows[0]["created_by"] == BY and rows[0]["updated_by"] == "pytest-editor"
+
+
+# --- status transitions -----------------------------------------------------------
+
+
+def _demote(db_conn, analysis_id, **kwargs):
+    return store.update(
+        db_conn,
+        analysis_id,
+        payload=payload_with(),
+        thesis="",
+        recommendation=None,
+        confidence=None,
+        overall_risk_score=None,
+        status="draft",
+        updated_by="pytest-editor",
+        **kwargs,
+    )
+
+
+def test_a_final_worksheet_cannot_be_demoted_without_an_explicit_reopen(db_conn, security):
+    analysis_id = create(db_conn, security, status="final")
+
+    with pytest.raises(store.StatusTransitionError):
+        _demote(db_conn, analysis_id)
+
+    assert store.get(db_conn, analysis_id)["status"] == "final"
+
+
+def test_a_final_worksheet_can_be_reopened_as_a_draft_deliberately(db_conn, security):
+    analysis_id = create(db_conn, security, status="final")
+
+    assert _demote(db_conn, analysis_id, reopen=True) is True
+    assert store.get(db_conn, analysis_id)["status"] == "draft"
+
+
+def test_draft_to_final_needs_no_reopen_flag(db_conn, security):
+    analysis_id = create(db_conn, security)  # draft
+
+    ok = store.update(
+        db_conn,
+        analysis_id,
+        payload=payload_with(),
+        thesis="One. Two. Three.",
+        recommendation="Hold",
+        confidence="Medium",
+        overall_risk_score=5,
+        status="final",
+        updated_by="pytest-editor",
+    )
+
+    assert ok and store.get(db_conn, analysis_id)["status"] == "final"
+
+
+def test_the_transition_guard_does_not_misfire_on_an_unknown_row(db_conn):
+    assert _demote(db_conn, -1) is False
+
+
+# --- revisions --------------------------------------------------------------------
+
+
+def test_the_first_save_is_kept_as_a_revision(db_conn, security):
+    analysis_id = create(db_conn, security)
+
+    revisions = store.revisions(db_conn, analysis_id)
+    assert len(revisions) == 1
+    assert revisions[0]["status"] == "draft"
+    assert revisions[0]["saved_by"] == BY
+    assert revisions[0]["payload"] == payload_with()
+
+
+def test_each_later_save_appends_a_revision_newest_first(db_conn, security):
+    analysis_id = create(db_conn, security)
+    store.update(
+        db_conn,
+        analysis_id,
+        payload=payload_with("Second. Save. Here."),
+        thesis="Second. Save. Here.",
+        recommendation="Add",
+        confidence="High",
+        overall_risk_score=3,
+        status="final",
+        updated_by="pytest-editor",
+    )
+
+    revisions = store.revisions(db_conn, analysis_id)
+    assert [r["saved_by"] for r in revisions] == ["pytest-editor", BY]
+    assert [r["status"] for r in revisions] == ["final", "draft"]
+    assert revisions[0]["thesis"] == "Second. Save. Here."
+    assert [r["revision_id"] for r in revisions] == sorted(
+        (r["revision_id"] for r in revisions), reverse=True
+    )
+
+
+def test_revisions_are_deleted_with_their_worksheet(db_conn, security):
+    analysis_id = create(db_conn, security)
+    assert store.revisions(db_conn, analysis_id)
+
+    store.delete(db_conn, analysis_id)
+
+    assert store.revisions(db_conn, analysis_id) == []

@@ -657,6 +657,51 @@ def test_a_concurrent_edit_is_refused_rather_than_overwritten(with_token):
     assert not any("Saved analysis" in s.value for s in at.success)
 
 
+def test_a_final_cannot_be_demoted_without_ticking_the_reopen_box(with_token):
+    at = page("investment_analysis", operator=True).run()
+    _fill_worksheet(at)
+    at.selectbox(key="ia_status").set_value("Final").run()
+    button(at, "Save analysis").click().run()
+    assert any("Saved analysis" in s.value for s in at.success)
+    analysis_id = at.session_state["ia_analysis_id"]
+
+    at.selectbox(key="ia_status").set_value("Draft").run()
+    button(at, "Save analysis").click().run()
+
+    assert not at.exception, [e.value for e in at.exception]
+    assert any("explicit reopen" in e.value for e in at.error)
+
+    at.checkbox(key="ia_reopen").check().run()
+    button(at, "Save analysis").click().run()
+
+    assert not at.exception, [e.value for e in at.exception]
+    assert any("Saved analysis" in s.value for s in at.success)
+    with engine.connect() as conn:
+        status = conn.execute(
+            text("SELECT status FROM analysis.investment_analyses WHERE analysis_id = :id"),
+            {"id": analysis_id},
+        ).scalar()
+    assert status == "draft"
+
+
+def test_the_sidebar_shows_the_saved_revision_history(with_token):
+    at = page("investment_analysis", operator=True).run()
+    _fill_worksheet(at)
+    button(at, "Save analysis").click().run()
+    assert any("Saved analysis" in s.value for s in at.success)
+
+    button(at, "Save analysis").click().run()
+    assert any("Saved analysis" in s.value for s in at.success)
+
+    assert not at.exception, [e.value for e in at.exception]
+    labels = [expander.label for expander in at.sidebar.expander]
+    assert "History (2)" in labels, labels
+    revisions = [caption.value for caption in at.sidebar.caption if caption.value.startswith("r")]
+    assert len(revisions) == 2, revisions
+    newest, older = (int(line.split(" ", 1)[0][1:]) for line in revisions)
+    assert newest == older + 1  # revision ids rise with each save
+
+
 def test_without_the_operator_token_the_save_control_is_off(without_token):
     at = page("investment_analysis").run()
     assert not at.exception, [e.value for e in at.exception]

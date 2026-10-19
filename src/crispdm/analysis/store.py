@@ -24,6 +24,23 @@ def _dump(payload: dict) -> str:
     return json.dumps(payload, sort_keys=True, default=str)
 
 
+class StatusTransitionError(ValueError):
+    """A Final worksheet may not silently return to being a Draft.
+
+    Reopening a Final is a deliberate act (the recommendation was withdrawn or was
+    premature); letting a stray save demote it would erase the distinction the saved-
+    analyses list is built on.
+    """
+
+    def __init__(self, current: str, requested: str):
+        super().__init__(
+            f"a {current} worksheet can only become {requested} when the save is an "
+            "explicit reopen"
+        )
+        self.current = current
+        self.requested = requested
+
+
 def create(
     conn,
     *,
@@ -74,8 +91,24 @@ def update(
     overall_risk_score: int | None,
     status: str,
     updated_by: str,
+    reopen: bool = False,
 ) -> bool:
-    """Overwrite a worksheet's content; True when the row existed."""
+    """Overwrite a worksheet's content; True when the row existed.
+
+    The row is locked for the rest of the caller's transaction while its current status
+    is read, so a Final cannot be demoted to Draft between the check and the write.
+    Pass ``reopen=True`` for a Final returning to Draft; anything else raises
+    :class:`StatusTransitionError`.
+    """
+    locked = conn.execute(
+        text("SELECT status FROM analysis.investment_analyses WHERE analysis_id = :id FOR UPDATE"),
+        {"id": analysis_id},
+    ).first()
+    if locked is None:
+        return False
+    current_status = str(locked[0])
+    if current_status == "final" and status == "draft" and not reopen:
+        raise StatusTransitionError(current_status, status)
     row = conn.execute(
         text("""
         UPDATE analysis.investment_analyses
@@ -133,4 +166,23 @@ def delete(conn, analysis_id: int) -> bool:
             ),
             {"id": analysis_id},
         ).first()
+    )
+
+
+def revisions(conn, analysis_id: int) -> list[dict]:
+    """Saved versions of one worksheet, newest first (see V0088).
+
+    The first save and every later one land here, written by a trigger, so this is the
+    worksheet's full history rather than only the current state.
+    """
+    return _rows(
+        conn,
+        """
+        SELECT revision_id, status, schema_version, thesis, recommendation, confidence,
+               overall_risk_score, saved_by, saved_at, payload
+        FROM analysis.investment_analysis_revisions
+        WHERE analysis_id = :id
+        ORDER BY revision_id DESC
+        """,
+        {"id": analysis_id},
     )

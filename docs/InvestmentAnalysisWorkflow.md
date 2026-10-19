@@ -379,7 +379,10 @@ Saving as **Final** (`analysis_schema.validate`) enforces everything above and:
 The page shows per-step progress (`filled/total` required fields) on each section header
 and opens the first incomplete section. Concurrent saves are refused with a message
 rather than silently overwriting a newer version: each worksheet tracks its row's
-`updated_at` and re-reads it before writing.
+`updated_at` and re-reads it before writing. A **Final** worksheet returns to **Draft**
+only when the save explicitly reopens it. Every save is kept as an append-only revision
+(`analysis.investment_analysis_revisions`, migration V0088); the sidebar's History panel
+lists them, so the concurrency refusal is recoverable rather than a dead end.
 
 ### Markdown export
 

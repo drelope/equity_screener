@@ -178,6 +178,22 @@ def _sidebar(info: pd.Series) -> None:
             ui.require_controls_note()
         if current:
             st.caption(f"Editing saved analysis #{current}")
+            _revision_history(current)
+
+
+def _revision_history(analysis_id: int) -> None:
+    """Every save is kept (V0088), so show a Final's age and who last touched it."""
+    saved = _read(lambda conn: store.revisions(conn, analysis_id))
+    with st.expander(f"History ({len(saved)})", expanded=False):
+        if not saved:
+            st.caption("No saved revisions yet.")
+            return
+        for rev in saved:
+            st.caption(
+                f"r{rev['revision_id']} · {rev['status']} · "
+                f"{rev['recommendation'] or 'no recommendation'} · "
+                f"by {rev['saved_by']} · {ui.fmt_ts(rev['saved_at'])}"
+            )
 
 
 def _context(info: pd.Series) -> None:
@@ -204,14 +220,22 @@ def _summary_row(payload: dict) -> tuple[int, int]:
 
 
 def _save_actions(info: pd.Series, payload: dict) -> None:
+    current = st.session_state.get(ANALYSIS_KEY)
+    stored = _read(lambda conn: store.get(conn, current)) if current else None
     a, b, c = st.columns([2, 2, 3])
     status_label = a.selectbox("Status", STATUS_OPTIONS, key="ia_status")
+    reopen = False
+    if stored and stored["status"] == "final" and status_label == "Draft":
+        reopen = st.checkbox(
+            "Reopen this Final worksheet as a Draft",
+            key="ia_reopen",
+            help="A Final is only allowed back to Draft when the save asks for it.",
+        )
     save = b.button(
         "Save analysis", type="primary", key="ia_save", disabled=not ui.controls_enabled()
     )
     if not ui.controls_enabled():
         ui.require_controls_note()
-    current = st.session_state.get(ANALYSIS_KEY)
     if current:
         c.caption(f"Saving updates analysis #{current}")
     if not save:
@@ -222,25 +246,23 @@ def _save_actions(info: pd.Series, payload: dict) -> None:
         st.error(f"{len(errors)} field(s) need attention before this can be saved.")
         st.code("\n".join(errors[:20]), language="text")
         return
-    if current:
-        stored = _read(lambda conn: store.get(conn, current))
-        if stored is None:
-            # Deleted in another tab since this worksheet was opened: do not
-            # claim a save that never happened, and stop targeting the ghost.
-            st.session_state.pop(ANALYSIS_KEY, None)
-            st.session_state.pop(UPDATED_KEY, None)
-            st.error(
-                f"Analysis #{current} no longer exists (deleted elsewhere?). "
-                "Nothing was written; press Save again to store it as a new analysis."
-            )
-            return
-        if str(stored["updated_at"]) != str(st.session_state.get(UPDATED_KEY)):
-            # Someone saved this row since we loaded it; overwriting would lose their edit.
-            st.error(
-                f"Analysis #{current} changed in another tab since it was opened. "
-                "Reopen it from the sidebar before saving so the newer version is not lost."
-            )
-            return
+    if current and stored is None:
+        # Deleted in another tab since this worksheet was opened: do not
+        # claim a save that never happened, and stop targeting the ghost.
+        st.session_state.pop(ANALYSIS_KEY, None)
+        st.session_state.pop(UPDATED_KEY, None)
+        st.error(
+            f"Analysis #{current} no longer exists (deleted elsewhere?). "
+            "Nothing was written; press Save again to store it as a new analysis."
+        )
+        return
+    if current and str(stored["updated_at"]) != str(st.session_state.get(UPDATED_KEY)):
+        # Someone saved this row since we loaded it; overwriting would lose their edit.
+        st.error(
+            f"Analysis #{current} changed in another tab since it was opened. "
+            "Reopen it from the sidebar before saving so the newer version is not lost."
+        )
+        return
     summary = schema.final_summary(payload)
     args = {
         "payload": payload,
@@ -253,7 +275,11 @@ def _save_actions(info: pd.Series, payload: dict) -> None:
     operator = ui.operator() or "unknown"
     try:
         if current:
-            existed = _write(lambda conn: store.update(conn, current, updated_by=operator, **args))
+            existed = _write(
+                lambda conn: store.update(
+                    conn, current, updated_by=operator, reopen=reopen, **args
+                )
+            )
             if not existed:
                 # Deleted between the existence check and the write.
                 st.session_state.pop(ANALYSIS_KEY, None)
@@ -274,6 +300,9 @@ def _save_actions(info: pd.Series, payload: dict) -> None:
                     **args,
                 )
             )
+    except store.StatusTransitionError as exc:
+        st.error(f"Not saved: {exc}.")
+        return
     except SQLAlchemyError as exc:
         st.error(f"Saving failed ({type(exc).__name__}); the warehouse refused the write.")
         return

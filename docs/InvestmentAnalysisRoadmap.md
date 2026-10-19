@@ -49,17 +49,24 @@ two people editing the same worksheet silently overwrote each other.
 
 ## Remaining
 
-### Phase 2 — store-level guarantees (not started)
+### Phase 2 — store-level guarantees (done)
 
-- **Status transitions.** `store.update` currently accepts any status; a Final can be
-  demoted to Draft without review. Add a transition check (Final → Draft should require
-  an explicit intent, and the column CHECK can only see the enum).
-- **Recommendation integrity.** The `recommendation` CHECK only constrains the enum; the
-  "steps 1-17 complete" rule lives in the app. Moving it into the store (or a trigger)
-  would protect the data even if another writer bypasses the UI.
-- **Versioned payload.** Every save overwrites `payload`. Keeping an append-only revision
-  table would make the concurrency refusal recoverable ("reopen the newer version") rather
-  than a dead end.
+- **Status transitions.** A Final cannot be demoted to Draft by an ordinary save.
+  `store.update` locks the row (`SELECT ... FOR UPDATE`), reads its current status, and
+  raises `StatusTransitionError` unless the caller passes `reopen=True`. The page renders
+  a "Reopen this Final worksheet as a Draft" checkbox when, and only when, a Final row is
+  open and Draft is selected, so the intent is explicit and visible.
+- **Versioned payload.** Migration V0088 adds
+  `analysis.investment_analysis_revisions`, an append-only table written by an
+  `AFTER INSERT OR UPDATE` trigger. Every save (from the UI or any script) is kept, so the
+  concurrency refusal is recoverable and the page can show a History panel.
+- **Recommendation integrity — deliberately left in the app.** The "steps 1-17 complete
+  before a recommendation" rule is enforced by `validate_draft`/`validate`, not by a SQL
+  trigger. The required-field set is owned by `app/analysis_schema.py`; re-expressing the
+  57 required-field names in plpgsql would create a second source of truth that drifts.
+  The store package (`src/`) must not import the app, so the rule stays where the schema
+  lives. A writer that bypasses the app is now *auditable* instead: its save lands in the
+  revisions table with `saved_by` and `saved_at`.
 
 ### Phase 3 — auditability (not started)
 
