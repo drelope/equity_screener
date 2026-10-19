@@ -528,8 +528,10 @@ def dividend_section(security_id: str) -> None:
     plot = df[df.amount.notna() & (df.concept != "CommonStockDividendsPerShareCashPaid")]
     # Yahoo rows are already split-adjusted and FMP's adjusted_amount is restated by
     # the same split factors, so one series stays continuous across a feed switch or
-    # a split.
-    plot = plot.assign(per_share=plot.adjusted_amount.fillna(plot.amount))
+    # a split. A series whose adjusted_amount is entirely NULL arrives as object dtype;
+    # coerce before fillna so it stays float and pandas does not downcast object arrays.
+    per_share = pd.to_numeric(plot.adjusted_amount, errors="coerce").fillna(plot.amount)
+    plot = plot.assign(per_share=per_share)
     if not plot.empty:
         st.plotly_chart(
             px.bar(
