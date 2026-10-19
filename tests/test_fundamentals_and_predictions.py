@@ -1565,7 +1565,9 @@ def test_populate_fundamentals_paginates_in_batches(monkeypatch, capsys):
     monkeypatch.setattr(pf, "count_candidates", lambda *a, **k: len(universe))
     monkeypatch.setattr(pf, "load_candidates", fake_load)
     monkeypatch.setattr(
-        pf, "extract_periodic_financials", lambda payload, **kwargs: [{"period_end": None, "eps": 1.0}]
+        pf,
+        "extract_periodic_financials",
+        lambda payload, **kwargs: [{"period_end": None, "eps": 1.0}],
     )
     monkeypatch.setattr(
         pf,

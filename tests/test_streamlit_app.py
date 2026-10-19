@@ -27,6 +27,7 @@ def _database_ready() -> bool:
         with engine.connect() as conn:
             conn.exec_driver_sql("SELECT 1 FROM ops.tasks LIMIT 1")
             conn.exec_driver_sql("SELECT 1 FROM model.scores LIMIT 1")
+            conn.exec_driver_sql("SELECT 1 FROM analysis.investment_analyses LIMIT 1")
         return True
     except Exception:
         return False
@@ -54,6 +55,10 @@ def clean_up():
     with engine.begin() as conn:
         conn.execute(text("DELETE FROM ops.tasks WHERE requested_by = :o"), {"o": OPERATOR})
         conn.execute(text("DELETE FROM ops.schedules WHERE created_by = :o"), {"o": OPERATOR})
+        conn.execute(
+            text("DELETE FROM analysis.investment_analyses WHERE created_by = :o"),
+            {"o": OPERATOR},
+        )
 
 
 @pytest.fixture
@@ -76,7 +81,16 @@ def button(at: AppTest, label: str):
 
 
 @pytest.mark.parametrize(
-    "module", ["screener", "security", "data_explorer", "health", "operations", "integrations"]
+    "module",
+    [
+        "screener",
+        "security",
+        "data_explorer",
+        "health",
+        "operations",
+        "integrations",
+        "investment_analysis",
+    ],
 )
 def test_each_page_renders_without_an_exception(module, without_token):
     at = page(module).run()
@@ -562,6 +576,190 @@ def test_a_hostile_filter_value_is_data_not_sql(without_token):
     assert len(at.session_state["explorer_result"]["frame"]) == 0
     with engine.connect() as conn:
         assert conn.execute(text("SELECT count(*) FROM reference.securities")).scalar() > 0
+
+
+# --- the investment analysis worksheet -------------------------------------------
+
+
+def test_the_analysis_page_opens_the_ticker_chosen_on_the_screener(without_token):
+    with engine.connect() as conn:
+        ticker = conn.execute(
+            text("SELECT ticker FROM reference.securities WHERE active ORDER BY ticker LIMIT 1")
+        ).scalar()
+    at = AppTest.from_function(page_script, args=("investment_analysis",), default_timeout=TIMEOUT)
+    at.session_state["selected_ticker"] = ticker
+
+    at.run()
+
+    assert not at.exception, [e.value for e in at.exception]
+    assert at.selectbox[0].value == ticker
+    steps = [e.label for e in at.expander]
+    assert any(label.startswith("18. ") for label in steps), steps
+
+
+def test_saving_an_empty_worksheet_lists_the_missing_fields(with_token):
+    at = page("investment_analysis", operator=True).run()
+    assert not at.exception, [e.value for e in at.exception]
+
+    button(at, "Save analysis").click().run()
+
+    assert not at.exception, [e.value for e in at.exception]
+    errors = [e.value for e in at.error]
+    assert errors and "need attention" in errors[0]
+    details = " ".join(e.value for e in at.code)
+    assert "Investment universe / Filters applied" in details
+
+
+def test_without_the_operator_token_the_save_control_is_off(without_token):
+    at = page("investment_analysis").run()
+    assert not at.exception, [e.value for e in at.exception]
+
+    save = button(at, "Save analysis")
+    assert save.disabled
+    assert any("controls" in note.value.lower() for note in at.info)
+
+
+def test_go_to_analysis_switches_pages_and_carries_the_ticker(without_token):
+    with engine.connect() as conn:
+        ticker = conn.execute(
+            text("SELECT ticker FROM reference.securities WHERE active ORDER BY ticker LIMIT 1")
+        ).scalar()
+
+    def shell(ticker):
+        import streamlit as st
+
+        from app.views import investment_analysis
+
+        def home():
+            st.title("Home")
+            if st.button("Analyze here"):
+                investment_analysis.go_to_analysis(ticker)
+
+        st.navigation(
+            [
+                st.Page(home, title="Home", url_path="home", default=True),
+                st.Page(
+                    investment_analysis.render,
+                    title=investment_analysis.PAGE_TITLE,
+                    url_path=investment_analysis.PAGE_PATH,
+                ),
+            ]
+        ).run()
+
+    at = AppTest.from_function(shell, args=(ticker,), default_timeout=TIMEOUT).run()
+    assert not at.exception, [e.value for e in at.exception]
+
+    button(at, "Analyze here").click().run()
+
+    assert not at.exception, [e.value for e in at.exception]
+    assert at.title[0].value == "Investment analysis"
+    assert at.selectbox[0].value == ticker
+
+
+def test_the_security_page_offers_the_analysis_worksheet_for_its_ticker(without_token):
+    at = page("security").run()
+    assert not at.exception, [e.value for e in at.exception]
+    assert [b.label for b in at.button].count("Analyze") == 1
+
+
+def _fill_worksheet(at: AppTest) -> None:
+    """Set every worksheet widget to a valid value, located by its schema key."""
+    from app import analysis_schema as schema
+
+    def find(widgets, key):
+        return next(widget for widget in widgets if widget.key == key)
+
+    for section in schema.SECTIONS:
+        for field in section.all_fields:
+            key = f"ia__{section.id}__{field.id}"
+            if field.kind == "select":
+                find(at.selectbox, key).set_value(field.options[0])
+            elif field.kind == "score":
+                find(at.number_input, key).set_value(5)
+            elif field.kind == "textarea":
+                value = (
+                    "One evidence line.\nTwo.\nThree."
+                    if field.id == "key_evidence"
+                    else "A detailed answer for the worksheet."
+                )
+                find(at.text_area, key).set_value(value)
+            else:
+                find(at.text_input, key).set_value("A detailed answer.")
+    find(at.text_input, "ia__final__thesis").set_value("One sentence. Two. Three.")
+    at.run()
+
+
+def test_a_worksheet_can_be_filled_saved_reopened_and_deleted(with_token):
+    at = page("investment_analysis", operator=True).run()
+    assert not at.exception, [e.value for e in at.exception]
+
+    _fill_worksheet(at)
+    assert not at.exception, [e.value for e in at.exception]
+
+    button(at, "Save analysis").click().run()
+    assert not at.exception, [e.value for e in at.exception]
+    assert any("Saved analysis" in flash.value for flash in at.success)
+
+    with engine.begin() as conn:
+        saved = (
+            conn.execute(
+                text(
+                    "SELECT analysis_id, status, created_by, updated_by "
+                    "FROM analysis.investment_analyses WHERE created_by = :o"
+                ),
+                {"o": OPERATOR},
+            )
+            .mappings()
+            .first()
+        )
+    assert saved and saved["status"] == "draft"
+    assert saved["created_by"] == OPERATOR and saved["updated_by"] is None
+
+    next(b for b in at.sidebar.button if b.key == "ia_open").click().run()
+    assert not at.exception, [e.value for e in at.exception]
+    reopened = next(w for w in at.text_input if w.key == "ia__universe__universe_filters")
+    assert reopened.value == "A detailed answer."
+
+    next(b for b in at.sidebar.button if b.key == "ia_delete").click().run()
+    assert not at.exception, [e.value for e in at.exception]
+    assert any("Deleted analysis" in flash.value for flash in at.success)
+    with engine.connect() as conn:
+        left = conn.execute(
+            text("SELECT count(*) FROM analysis.investment_analyses WHERE created_by = :o"),
+            {"o": OPERATOR},
+        ).scalar()
+    assert left == 0
+
+
+def test_saving_when_the_opened_row_was_deleted_elsewhere_does_not_fake_a_save(with_token):
+    at = page("investment_analysis", operator=True).run()
+    _fill_worksheet(at)
+    button(at, "Save analysis").click().run()
+    assert not at.exception, [e.value for e in at.exception]
+    first = at.session_state["ia_analysis_id"]
+
+    # Simulate another tab deleting the row while this worksheet stayed open.
+    at.session_state["ia_analysis_id"] = 999999
+    at.run()
+    button(at, "Save analysis").click().run()
+
+    assert not at.exception, [e.value for e in at.exception]
+    assert any("no longer exists" in e.value for e in at.error)
+    assert not any("Saved analysis" in s.value for s in at.success)
+    assert "ia_analysis_id" not in at.session_state
+    assert "ia_flash" not in at.session_state
+
+    # The form is untouched, so the next save stores it as a new analysis.
+    button(at, "Save analysis").click().run()
+    assert not at.exception, [e.value for e in at.exception]
+    assert any("Saved analysis" in flash.value for flash in at.success)
+    assert at.session_state["ia_analysis_id"] != first
+    with engine.connect() as conn:
+        count = conn.execute(
+            text("SELECT count(*) FROM analysis.investment_analyses WHERE created_by = :o"),
+            {"o": OPERATOR},
+        ).scalar()
+    assert count == 2
 
 
 # --- operator gate on the operations page ----------------------------------------

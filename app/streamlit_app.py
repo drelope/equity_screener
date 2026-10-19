@@ -20,6 +20,7 @@ from app.views import (  # noqa: E402
     data_explorer,
     health,
     integrations,
+    investment_analysis,
     operations,
     screener,
     security,
@@ -62,6 +63,12 @@ navigation = st.navigation(
                 title="Data explorer",
                 icon=":material/table_view:",
                 url_path="explorer",
+            ),
+            st.Page(
+                investment_analysis.render,
+                title=investment_analysis.PAGE_TITLE,
+                icon=":material/edit_note:",
+                url_path=investment_analysis.PAGE_PATH,
             ),
         ],
         "Operations": [

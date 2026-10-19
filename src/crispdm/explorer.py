@@ -91,6 +91,12 @@ DATASETS: dict[str, Dataset] = {
             "Recorded morning verifications.",
             "verified_at",
         ),
+        Dataset(
+            "Analyses",
+            "analysis.investment_analyses",
+            "Saved investment-analysis worksheets; payload holds the JSONB form.",
+            "created_at",
+        ),
     )
 }
 

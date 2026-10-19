@@ -1,0 +1,659 @@
+"""Sections, fields and export format for the investment-analysis worksheet.
+
+This module is the single source of truth for the worksheet rendered by
+``app.views.investment_analysis``: the workflow order, each section's fields, their
+types and options, validation on save, and the Markdown/JSON export. The canonical
+workflow document (``docs/InvestmentAnalysisWorkflow.md``) is written to match it —
+when the two disagree, this code wins and the document is corrected.
+
+Payload shape (stored verbatim in ``analysis.investment_analyses.payload``)::
+
+    {"version": 1, "sections": {"<section_id>": {"<field_id>": value, ...}, ...}}
+"""
+
+from __future__ import annotations
+
+import json
+import re
+from dataclasses import dataclass, field
+
+SCHEMA_VERSION = 1
+
+#: Unset value of every select widget; validation rejects it on required fields and
+#: it is stored as an empty string in the payload.
+PLACEHOLDER = "(not set)"
+
+CONFIDENCE_OPTIONS = ("High", "Medium", "Low")
+RISK_OPTIONS = ("High", "Moderate", "Low")
+YES_NO = ("Present", "Absent")
+MARGIN_OPTIONS = ("Expanding", "Flat", "Compressing")
+
+KINDS = ("text", "textarea", "select", "score")
+
+_SENTENCE_END = re.compile(r"[.!?](?:\s|$)")
+
+
+@dataclass(frozen=True)
+class Field:
+    """One worksheet input. ``kind`` selects the widget and the stored type."""
+
+    id: str
+    label: str
+    kind: str = "text"
+    options: tuple[str, ...] = ()
+    required: bool = False
+    help: str = ""
+
+    def __post_init__(self) -> None:
+        if self.kind not in KINDS:
+            raise ValueError(f"{self.id}: unknown kind {self.kind!r}")
+        if self.kind == "select" and not self.options:
+            raise ValueError(f"{self.id}: a select needs options")
+
+
+@dataclass(frozen=True)
+class Section:
+    """One workflow step. ``has_confidence`` appends the section's confidence block."""
+
+    id: str
+    title: str
+    fields: tuple[Field, ...] = field(default_factory=tuple)
+    has_confidence: bool = True
+    intro: str = ""
+
+    @property
+    def all_fields(self) -> tuple[Field, ...]:
+        if not self.has_confidence:
+            return self.fields
+        return self.fields + (
+            Field("confidence", "Confidence level", "select", CONFIDENCE_OPTIONS, required=True),
+            Field("confidence_note", "Confidence note (required when Low)", "textarea"),
+        )
+
+    def field(self, field_id: str) -> Field | None:
+        return next((f for f in self.all_fields if f.id == field_id), None)
+
+
+def _f(field_id: str, label: str, kind: str = "text", **kwargs) -> Field:
+    return Field(field_id, label, kind, **kwargs)
+
+
+CONFIDENCE_NOTE_REQUIRED = "a Low confidence level needs a confidence note"
+
+
+SECTIONS: tuple[Section, ...] = (
+    Section(
+        "universe",
+        "Investment universe",
+        (
+            _f(
+                "universe_filters",
+                "Filters applied",
+                required=True,
+                help="Sector, market-cap and geographic filters",
+            ),
+            _f("universe_rationale", "Why this universe", "textarea"),
+        ),
+        has_confidence=False,
+        intro="Define the hunting ground before looking at anything.",
+    ),
+    Section(
+        "macro",
+        "Macro & credit",
+        (
+            _f(
+                "macro_backdrop",
+                "Backdrop",
+                "textarea",
+                required=True,
+                help="Growth, inflation, rates and the prevailing regime",
+            ),
+            _f("ig_spreads", "Investment grade spreads vs. historical average"),
+            _f("hy_spreads", "High yield spreads vs. historical average"),
+            _f(
+                "cds_trend",
+                "CDS spread trend",
+                "select",
+                options=("Improving", "Flat", "Deteriorating"),
+            ),
+            _f("default_rates", "Default rates (current vs. trend)"),
+            _f("distressed_ratio", "Distressed debt ratio"),
+            _f("refinancing_wall", "Refinancing wall (near-term maturities)"),
+            _f(
+                "credit_verdict",
+                "Credit market verdict",
+                "select",
+                options=("Bullish", "Neutral", "Bearish"),
+                required=True,
+            ),
+            _f("credit_rationale", "Credit verdict rationale", "textarea", required=True),
+        ),
+        intro="Critical for banks, REITs, preferred securities, leveraged companies and cyclicals.",
+    ),
+    Section(
+        "industry",
+        "Industry analysis",
+        (
+            _f("industry_outlook", "Outlook", "textarea", required=True),
+            _f("competitive_landscape", "Competitive landscape", "textarea"),
+        ),
+    ),
+    Section(
+        "capital_cycle",
+        "Industry structure & capital cycle",
+        (
+            _f("capacity_growth", "Capacity growth (X% YoY, trend)"),
+            _f(
+                "competitor_capex",
+                "Competitor capex trend",
+                "select",
+                options=("Increasing", "Decreasing", "Stable"),
+            ),
+            _f("supply_changes", "Supply additions / removals"),
+            _f("barriers", "Barriers to entry", "select", options=RISK_OPTIONS, required=True),
+            _f("utilization", "Utilization (current vs. historical average)"),
+            _f(
+                "profitability_trend",
+                "Industry profitability trend",
+                "select",
+                options=("Improving", "Deteriorating", "Stable"),
+            ),
+            _f(
+                "capital_discipline_score",
+                "Capital discipline score (1-10)",
+                "score",
+                required=True,
+                help="1-3 poor (overbuilding, destructive competition); 4-6 moderate; "
+                "7-10 strong (rational, returns-focused)",
+            ),
+        ),
+        intro="Essential for semiconductors, energy, mining, shipping, chemicals, REITs "
+        "and industrials: supply constraints drive many opportunities more than "
+        "revenue growth.",
+    ),
+    Section(
+        "supply",
+        "Supply side",
+        (_f("supply_analysis", "Supply-side analysis", "textarea", required=True),),
+    ),
+    Section(
+        "demand",
+        "Demand side",
+        (_f("demand_analysis", "Demand-side analysis", "textarea", required=True),),
+    ),
+    Section(
+        "consensus",
+        "Consensus expectations",
+        (
+            _f("fy_revenue_est", "Current FY revenue estimate"),
+            _f("fy_eps_est", "Current FY EPS estimate"),
+            _f("next_fy_revenue_est", "Next FY revenue estimate"),
+            _f("next_fy_eps_est", "Next FY EPS estimate"),
+            _f(
+                "revision_trend",
+                "Estimate revision trend",
+                "select",
+                options=("Upward", "Flat", "Downward"),
+            ),
+            _f(
+                "estimate_dispersion",
+                "Estimate dispersion",
+                "select",
+                options=("Low", "Moderate", "High"),
+            ),
+            _f("surprise_implication", "Implication for earnings surprise", "textarea"),
+        ),
+        has_confidence=False,
+        intro="Makes expectation mismatches identifiable before thesis formation.",
+    ),
+    Section(
+        "variant",
+        "Variant perception (highest priority)",
+        (
+            _f("consensus_revenue_growth", "Consensus: revenue growth"),
+            _f("consensus_eps_growth", "Consensus: EPS growth"),
+            _f("consensus_margins", "Consensus: margins", "select", options=MARGIN_OPTIONS),
+            _f("consensus_capital_allocation", "Consensus: capital allocation"),
+            _f("consensus_multiple", "Consensus: valuation multiple"),
+            _f("my_revenue_growth", "My view: revenue growth"),
+            _f("my_eps_growth", "My view: EPS growth"),
+            _f("my_margins", "My view: margins", "select", options=MARGIN_OPTIONS),
+            _f("my_capital_allocation", "My view: capital allocation"),
+            _f("my_multiple", "My view: valuation multiple"),
+            _f(
+                "bullish_variant",
+                "Why the market may be wrong (bullish)",
+                "textarea",
+                required=True,
+            ),
+            _f(
+                "bearish_variant",
+                "Why the market may be wrong (bearish)",
+                "textarea",
+                required=True,
+            ),
+            _f(
+                "key_evidence",
+                "Key evidence (one per line, minimum three)",
+                "textarea",
+                required=True,
+            ),
+        ),
+        intro="Forces identification of informational, analytical and behavioural edge — "
+        "the source of excess returns.",
+    ),
+    Section(
+        "company",
+        "Company deep-dive",
+        (
+            _f("business_model", "Business model", "textarea", required=True),
+            _f("financial_analysis", "Financial analysis", "textarea", required=True),
+        ),
+        intro="Read the warehouse context panel first: features, scores and fundamentals.",
+    ),
+    Section(
+        "earnings_quality",
+        "Earnings quality",
+        (
+            _f("cash_conversion", "Cash conversion (CFO / net income, vs. historical)"),
+            _f("accrual_ratio", "Accrual ratio ((NI - CFO) / total assets)"),
+            _f("sbc_pct", "SBC as % of revenue"),
+            _f("gaap_gap", "GAAP vs. non-GAAP gap"),
+            _f("working_capital", "Working capital impact (source / use of cash)"),
+            _f("one_time_items", "Recurring vs. one-time adjustments", "textarea"),
+            _f(
+                "quality_verdict",
+                "Verdict",
+                "select",
+                options=("High quality", "Moderate", "Low quality"),
+                required=True,
+            ),
+            _f("red_flags", "Red flags", "textarea"),
+        ),
+        intro="Identifies low-quality earnings before they distort valuation.",
+    ),
+    Section(
+        "moat",
+        "Competitive advantage",
+        (
+            _f("network_effects", "Network effects", "select", options=YES_NO),
+            _f("scale_advantage", "Scale advantage", "select", options=YES_NO),
+            _f("brand_strength", "Brand strength", "select", options=YES_NO),
+            _f("switching_costs", "Switching costs", "select", options=RISK_OPTIONS),
+            _f("cost_leadership", "Cost leadership", "select", options=YES_NO),
+            _f("regulatory_advantage", "Regulatory advantage", "select", options=YES_NO),
+            _f(
+                "moat_rating",
+                "Moat rating",
+                "select",
+                options=("Strong", "Moderate", "Weak", "None"),
+                required=True,
+            ),
+            _f(
+                "durability_trend",
+                "Durability trend",
+                "select",
+                options=("Improving", "Stable", "Eroding"),
+            ),
+        ),
+        intro="Separates compounders from cyclical trades and value traps.",
+    ),
+    Section(
+        "management",
+        "Management assessment",
+        (
+            _f("track_record", "Track record (delivery vs. promises)", "textarea"),
+            _f("capital_allocation_history", "Capital allocation history", "textarea"),
+            _f("guidance_accuracy", "Guidance accuracy (beat/miss pattern)"),
+            _f("insider_ownership", "Insider ownership (%)"),
+            _f(
+                "insider_transactions",
+                "Insider transactions (12M)",
+                "select",
+                options=("Buying", "Selling", "Mixed", "None"),
+            ),
+            _f("compensation_alignment", "Compensation alignment", "textarea"),
+            _f("management_score", "Management score (1-10)", "score", required=True),
+        ),
+        intro="Execution risk and stewardship quality.",
+    ),
+    Section(
+        "valuation",
+        "Valuation",
+        (
+            _f("valuation_methods", "Methods and arithmetic", "textarea", required=True),
+            _f(
+                "key_assumptions",
+                "Key assumptions",
+                "textarea",
+                required=True,
+                help="Every forward-looking statement needs an explicit assumption",
+            ),
+            _f("target_price", "Target price (with currency)"),
+            _f("margin_of_safety", "Margin of safety vs. current price"),
+        ),
+    ),
+    Section(
+        "scenarios",
+        "Scenarios",
+        (
+            _f("base_case", "Base case", "textarea", required=True),
+            _f("bull_case", "Bull case", "textarea", required=True),
+            _f("bear_case", "Bear case", "textarea", required=True),
+            _f("scenario_probabilities", "Probabilities (base / bull / bear)"),
+            _f("expected_return", "Probability-weighted forward 12M return"),
+        ),
+    ),
+    Section(
+        "analog",
+        "Historical analogs",
+        (
+            _f(
+                "similar_setups",
+                "Similar historical setups (markdown table, 3+ rows)",
+                "textarea",
+                required=True,
+                help="Columns: date | conditions | forward 12M return | outcome",
+            ),
+            _f("base_rate", "Base rate (% positive returns)"),
+            _f("key_differences", "Key differences today", "textarea"),
+            _f("analog_implication", "Implication for the current setup", "textarea"),
+        ),
+        intro="Prevents narrative-driven conclusions; improves probabilistic thinking.",
+    ),
+    Section(
+        "risk",
+        "Risk decomposition",
+        (
+            _f("business_risk", "Business risk", "select", options=RISK_OPTIONS, required=True),
+            _f("valuation_risk", "Valuation risk", "select", options=RISK_OPTIONS, required=True),
+            _f(
+                "balance_sheet_risk",
+                "Balance-sheet risk",
+                "select",
+                options=RISK_OPTIONS,
+                required=True,
+            ),
+            _f("macro_risk", "Macro risk", "select", options=RISK_OPTIONS, required=True),
+            _f("regulatory_risk", "Regulatory risk", "select", options=RISK_OPTIONS, required=True),
+            _f("liquidity_risk", "Liquidity risk", "select", options=RISK_OPTIONS, required=True),
+            _f("overall_risk_score", "Overall risk score (1-10)", "score", required=True),
+            _f("position_sizing", "Position sizing implication", "textarea", required=True),
+        ),
+        intro="Enables differentiated position sizing by risk category rather than a "
+        "generic 'risk is moderate'.",
+    ),
+    Section(
+        "portfolio",
+        "Portfolio integration",
+        (
+            _f("factor_growth", "Growth", "select", options=RISK_OPTIONS),
+            _f("factor_value", "Value", "select", options=RISK_OPTIONS),
+            _f("factor_quality", "Quality", "select", options=RISK_OPTIONS),
+            _f(
+                "factor_momentum", "Momentum", "select", options=("Positive", "Neutral", "Negative")
+            ),
+            _f("factor_low_volatility", "Low volatility", "select", options=RISK_OPTIONS),
+            _f("factor_size", "Size", "select", options=("Large", "Mid", "Small")),
+            _f("factor_rate_duration", "Interest rate duration", "select", options=RISK_OPTIONS),
+            _f("factor_usd_exposure", "USD exposure", "select", options=RISK_OPTIONS),
+            _f("existing_tilts", "Existing portfolio tilts", "textarea"),
+            _f("position_adds", "What this position adds", "textarea"),
+            _f("concentration_risk", "Concentration risk", "textarea"),
+            _f("correlation_assessment", "Correlation assessment", "textarea"),
+        ),
+        has_confidence=False,
+        intro="Avoids unintended factor concentration at the portfolio level.",
+    ),
+    Section(
+        "final",
+        "Recommendation & final output",
+        (
+            _f("thesis", "Thesis (3 sentences maximum)", required=True),
+            _f(
+                "recommendation",
+                "Recommendation",
+                "select",
+                options=("Buy", "Add", "Hold", "Trim", "Sell"),
+                required=True,
+            ),
+            _f("variant_summary", "Variant perception summary", "textarea", required=True),
+            _f("risk_summary", "Risk decomposition summary", "textarea", required=True),
+            _f("position_recommendation", "Position sizing recommendation", required=True),
+            _f(
+                "catalyst_timeline",
+                "Catalyst timeline (what changes the view)",
+                "textarea",
+                required=True,
+            ),
+            _f(
+                "kill_switch",
+                "Kill switch (what invalidates the thesis)",
+                "textarea",
+                required=True,
+            ),
+            _f(
+                "confidence_overall",
+                "Overall confidence level",
+                "select",
+                options=CONFIDENCE_OPTIONS,
+                required=True,
+            ),
+            _f("data_quality", "Confidence reason: data quality", "textarea", required=True),
+            _f(
+                "forecast_uncertainty",
+                "Confidence reason: forecast uncertainty",
+                "textarea",
+                required=True,
+            ),
+            _f(
+                "sensitivity_assumptions",
+                "Confidence reason: sensitivity to assumptions",
+                "textarea",
+                required=True,
+            ),
+            _f(
+                "variant_conviction",
+                "Confidence reason: variant perception conviction",
+                "textarea",
+                required=True,
+            ),
+        ),
+        has_confidence=False,
+        intro="No recommendation without a risk decomposition; no conclusion before "
+        "steps 1-17 are complete.",
+    ),
+)
+
+SECTION_BY_ID = {section.id: section for section in SECTIONS}
+
+
+def empty_payload() -> dict:
+    """A blank payload with every select unset and every text field empty."""
+    sections: dict[str, dict] = {}
+    for section in SECTIONS:
+        values: dict[str, str | int | None] = {}
+        for f in section.all_fields:
+            if f.kind == "select":
+                values[f.id] = ""
+            elif f.kind == "score":
+                values[f.id] = None
+            else:
+                values[f.id] = ""
+        sections[section.id] = values
+    return {"version": SCHEMA_VERSION, "sections": sections}
+
+
+def get_value(payload: dict, section_id: str, field_id: str):
+    return payload.get("sections", {}).get(section_id, {}).get(field_id)
+
+
+def completion(payload: dict) -> tuple[int, int]:
+    """Filled required fields vs. total required fields, across the whole worksheet.
+
+    The conditional confidence note is left to :func:`validate`: it is only required
+    when a section records Low confidence, so counting it here would keep the progress
+    bar incomplete on an otherwise finished worksheet.
+    """
+    filled = total = 0
+    for section in SECTIONS:
+        for f in section.all_fields:
+            if f.required:
+                total += 1
+                if _present(payload, section, f):
+                    filled += 1
+    return filled, total
+
+
+def _present(payload: dict, section: Section, f: Field) -> bool:
+    value = get_value(payload, section.id, f.id)
+    if f.kind == "score":
+        return value is not None
+    return bool(str(value).strip()) and str(value).strip() != PLACEHOLDER
+
+
+def _label(section: Section, f: Field) -> str:
+    return f"{section.title} / {f.label}"
+
+
+def validate(payload: dict) -> list[str]:
+    """Every rule that must hold before the worksheet can be saved. Empty = valid."""
+    errors: list[str] = []
+    sections = payload.get("sections")
+    if not isinstance(sections, dict):
+        return ["the payload has no sections"]
+    for section in SECTIONS:
+        values = sections.get(section.id)
+        if not isinstance(values, dict):
+            errors.append(f"{section.title}: section is missing")
+            continue
+        confidence = str(values.get("confidence", "")).strip()
+        for f in section.all_fields:
+            raw = values.get(f.id)
+            where = _label(section, f)
+            if f.kind == "select":
+                text = "" if raw is None else str(raw).strip()
+                if text == PLACEHOLDER:
+                    text = ""
+                if text and text not in f.options:
+                    errors.append(f"{where}: {text!r} is not one of the options")
+                elif f.required and not text:
+                    errors.append(f"{where}: required")
+            elif f.kind == "score":
+                if raw is None or raw == "":
+                    if f.required:
+                        errors.append(f"{where}: required")
+                elif not isinstance(raw, int) or not 1 <= raw <= 10:
+                    errors.append(f"{where}: must be a whole number from 1 to 10")
+            else:
+                text = "" if raw is None else str(raw).strip()
+                if f.required and not text:
+                    errors.append(f"{where}: required")
+        if section.has_confidence:
+            if confidence == "Low" and not str(values.get("confidence_note") or "").strip():
+                errors.append(f"{section.title}: {CONFIDENCE_NOTE_REQUIRED}")
+    errors.extend(_rule_evidence(sections))
+    errors.extend(_rule_thesis(sections))
+    return errors
+
+
+def _rule_evidence(sections: dict) -> list[str]:
+    lines = _lines(sections, "variant", "key_evidence")
+    if lines and len(lines) < 3:
+        return ["Variant perception / Key evidence: needs at least three lines"]
+    return []
+
+
+def _rule_thesis(sections: dict) -> list[str]:
+    thesis = str(sections.get("final", {}).get("thesis") or "").strip()
+    if thesis and len(_SENTENCE_END.findall(thesis)) > 3:
+        return ["Recommendation / Thesis: must be three sentences or fewer"]
+    return []
+
+
+def _lines(sections: dict, section_id: str, field_id: str) -> list[str]:
+    raw = sections.get(section_id, {}).get(field_id) or ""
+    return [line.strip() for line in str(raw).splitlines() if line.strip()]
+
+
+def to_json(payload: dict) -> str:
+    return json.dumps(payload, indent=2, sort_keys=True, default=str)
+
+
+def final_summary(payload: dict) -> dict:
+    """The four denormalised columns of ``analysis.investment_analyses``.
+
+    Read from the final section; a missing or partial section yields empty/None values
+    so the caller can save an unfinished worksheet as a draft.
+    """
+    final = payload.get("sections", {}).get("final", {})
+    risk = get_value(payload, "risk", "overall_risk_score")
+    return {
+        "thesis": str(final.get("thesis") or ""),
+        "recommendation": str(final.get("recommendation") or "") or None,
+        "confidence": str(final.get("confidence_overall") or "") or None,
+        "overall_risk_score": int(risk) if isinstance(risk, int) else None,
+    }
+
+
+def to_markdown(payload: dict, ticker: str) -> str:
+    """The canonical document form: workflow order, one ``##`` heading per step."""
+    out = [
+        f"# Investment analysis — {ticker}",
+        "",
+        f"Generated from the worksheet (schema version {payload.get('version', SCHEMA_VERSION)}).",
+        "",
+    ]
+    for index, section in enumerate(SECTIONS, start=1):
+        values = payload.get("sections", {}).get(section.id, {})
+        out.append(f"## {index}. {section.title}")
+        out.append("")
+        if section.intro:
+            out.append(f"_{section.intro}_")
+            out.append("")
+        for f in section.all_fields:
+            if f.kind == "score":
+                value = values.get(f.id)
+                text = "" if value in (None, "") else str(value)
+            else:
+                text = str(values.get(f.id) or "").strip()
+            if text in ("", PLACEHOLDER):
+                continue
+            if f.kind == "textarea" and "\n" in text:
+                out.append(f"**{f.label}:**")
+                out.append("")
+                out.append(text)
+                out.append("")
+            else:
+                out.append(f"**{f.label}:** {text}")
+                out.append("")
+        out.extend(_confidence_block(section, values))
+        out.append("---")
+        out.append("")
+    return "\n".join(out).rstrip() + "\n"
+
+
+def _confidence_block(section: Section, values: dict) -> list[str]:
+    if section.id == "final":
+        level = values.get("confidence_overall") or "(unset)"
+        reasons = [
+            ("Data quality", "data_quality"),
+            ("Forecast uncertainty", "forecast_uncertainty"),
+            ("Sensitivity to assumptions", "sensitivity_assumptions"),
+            ("Variant perception conviction", "variant_conviction"),
+        ]
+        block = ["```text", f"Confidence Level: {level}", "Reasons:"]
+        for label, field_id in reasons:
+            value = str(values.get(field_id) or "").strip() or "(unset)"
+            block.append(f"- {label}: {value}")
+        block += ["```", ""]
+        return block
+    if not section.has_confidence:
+        return []
+    level = values.get("confidence") or "(unset)"
+    block = ["```text", f"Confidence Level: {level}"]
+    note = str(values.get("confidence_note") or "").strip()
+    if note:
+        block.append(f"Reason: {note}")
+    block += ["```", ""]
+    return block

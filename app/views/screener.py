@@ -286,7 +286,17 @@ def table(view, metric_columns) -> None:
     if rows:
         ticker = str(shown.iloc[rows[0]]["ticker"])
         st.session_state[SELECTED_KEY] = ticker
-        st.info(f"{ticker} selected. Open **Security detail** in the sidebar to see it.")
+        left, right = st.columns([4, 1])
+        left.info(f"{ticker} selected. Open **Security detail**, or start the worksheet below.")
+        if right.button(
+            "Analyze",
+            key="screener_analyze",
+            help="Open the investment-analysis worksheet for this ticker",
+        ):
+            # Imported here: the worksheet imports this module for SELECTED_KEY.
+            from app.views.investment_analysis import go_to_analysis  # noqa: PLC0415
+
+            go_to_analysis()
     st.download_button(
         "Download this table as CSV",
         shown.to_csv(index=False).encode("utf-8"),

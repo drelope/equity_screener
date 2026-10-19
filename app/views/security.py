@@ -912,8 +912,18 @@ def render() -> None:
     index = tickers.index(chosen) if chosen in tickers else 0
     # No widget key: a keyed selectbox keeps its own state and would ignore a ticker
     # picked on the Screener after the first render.
-    ticker = st.selectbox("Ticker", tickers, index=index)
+    pick, action = st.columns([4, 1])
+    ticker = pick.selectbox("Ticker", tickers, index=index)
     st.session_state[SELECTED_KEY] = ticker
+    if action.button(
+        "Analyze",
+        key="security_analyze",
+        help="Open the investment-analysis worksheet for this ticker",
+    ):
+        # Imported here: the worksheet imports this module for its context-panel helpers.
+        from app.views.investment_analysis import go_to_analysis  # noqa: PLC0415
+
+        go_to_analysis()
 
     found = profile(ticker)
     if found.empty:
