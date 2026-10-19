@@ -94,6 +94,38 @@ def parse_as_of(argv):
     return None
 
 
+def superseded_prune_decision(as_of_arg, argv):
+    """Whether to drop superseded prediction runs at the scored date, and why.
+
+    ``--prune-superseded`` is opt-in for the nightly, whose frame is stable from
+    run to run: the stale runs agree with the current one on coverage, add
+    nothing but history, and are kept as the audit trail.
+
+    A replay is not stable. ``--as-of`` rebuilds the date's scores to whatever
+    frame resolves *today*, and ``prune_stale_run_rows`` always drops the scores
+    outside it -- but the superseded prediction runs cover the old, larger frame
+    and would otherwise survive. ``model.current_predictions`` resolves to the
+    newest run per security, so it would report the union of the old and new
+    frames while ``model.scores`` holds only the new, and the two quietly
+    disagree on how many securities the date scores. Replaying therefore prunes
+    by default; ``--keep-superseded`` restores the nightly behaviour when the
+    stale rows are genuinely wanted.
+
+    Kept separate from ``main`` so the decision is reachable without a database.
+
+    Returns ``(prune, reason)``; ``reason`` is a message to print, or ``None``.
+    """
+    if "--prune-superseded" in argv:
+        return True, None
+    if as_of_arg is not None and "--keep-superseded" not in argv:
+        return (
+            True,
+            "pruning superseded prediction rows at the replayed date so "
+            "current_predictions stays in step with scores; pass --keep-superseded to retain them",
+        )
+    return False, None
+
+
 def main():
     """Score the latest feature date into model.scores, predictions and rankings.
 
@@ -111,19 +143,25 @@ def main():
     # created_at distinguishes them: a query without an ORDER BY gets whichever the
     # planner returns, so "the" prediction for a security is arbitrary.
     #
-    # Pruning is opt-in rather than automatic. These rows are the audit trail of
-    # which model produced which number, and how long to keep it is a retention
-    # decision rather than an implementation detail, so the default is to add to the
-    # history and report on it. Pass --prune-superseded to drop the superseded runs
-    # for the date just scored, keeping the one just written.
-    prune_superseded = "--prune-superseded" in sys.argv
-
+    # For the nightly, pruning is opt-in rather than automatic. Its frame is
+    # stable from run to run, so the stale runs add nothing but history and are
+    # the audit trail of which model produced which number -- how long to keep it
+    # is a retention decision, not an implementation detail. Pass
+    # --prune-superseded to drop them for the date just scored.
+    #
+    # A historical replay must not be opt-in, though: its frame has changed, so
+    # the stale runs disagree with the new scores on coverage. See
+    # superseded_prune_decision.
+    #
     # Each security's most recent feature row within the carry-forward window,
-    # not one global as_of_date. See src.crispdm/feature_window.py for why.
+    # not one global as_of_date. See src/crispdm/feature_window.py for why.
     #
     # --as-of pivots the window on a past date so a scoring-policy change can be
     # replayed over history; the nightly passes None and pivots on the newest row.
     as_of_arg = parse_as_of(sys.argv)
+    prune_superseded, prune_reason = superseded_prune_decision(as_of_arg, sys.argv)
+    if prune_reason:
+        print(f"{as_of_arg}: {prune_reason}")
     carry_days = carry_forward_days()
     df = read_df(scoring_features_sql(), params={"carry_days": carry_days, "as_of": as_of_arg})
     if not df.empty:

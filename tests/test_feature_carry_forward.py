@@ -321,6 +321,46 @@ class TestAsOfArgument:
             score_rank.parse_as_of(["x", "--as-of=not-a-date"])
 
 
+class TestSupersededPruneDecision:
+    """A replay must prune superseded predictions; the nightly opts in.
+
+    ``current_predictions`` resolves to the newest run per security. When a
+    replay shrinks a date's frame, the superseded runs still cover the old one,
+    so without a prune the view reports more securities than ``scores`` holds and
+    the two disagree. The decision is separate from ``main`` so it is testable
+    without a database.
+    """
+
+    def test_nightly_default_keeps_the_audit_trail(self):
+        assert score_rank.superseded_prune_decision(None, ["score_rank.py"]) == (False, None)
+
+    def test_nightly_prunes_only_when_asked(self):
+        assert score_rank.superseded_prune_decision(
+            None, ["score_rank.py", "--prune-superseded"]
+        ) == (True, None)
+
+    def test_a_replay_prunes_by_default(self):
+        from datetime import date
+
+        prune, reason = score_rank.superseded_prune_decision(
+            date(2026, 9, 29), ["score_rank.py", "--as-of", "2026-09-29"]
+        )
+        assert prune is True
+        assert reason, "the default must say why it overrode the opt-in"
+
+    def test_keep_superseded_opts_a_replay_out(self):
+        from datetime import date
+
+        assert score_rank.superseded_prune_decision(
+            date(2026, 9, 29),
+            ["score_rank.py", "--as-of", "2026-09-29", "--keep-superseded"],
+        ) == (False, None)
+
+    def test_main_honours_the_decision(self):
+        source = inspect.getsource(score_rank.main)
+        assert "prune_superseded, prune_reason = superseded_prune_decision(" in source
+
+
 class TestExplicitAsOfBinds:
     def test_score_rank_binds_as_of_into_the_query(self):
         source = inspect.getsource(score_rank)
