@@ -35,7 +35,9 @@ contract between this document, the worksheet form and the stored JSON payload
 18. Reach a recommendation
 
 **Hard constraint:** do not form conclusions (step 18) before data retrieval for steps
-1-17 is complete.
+1-17 is complete. The worksheet enforces this: a **Draft** can be saved with any subset
+of fields, but a `recommendation` cannot be recorded while any required field in steps
+1-17 is still empty.
 
 ### Output standards
 
@@ -43,6 +45,8 @@ contract between this document, the worksheet form and the stored JSON payload
 - All quantitative claims cite data sources.
 - All forward-looking statements include explicit assumptions.
 - No recommendation without a corresponding risk decomposition (step 16 precedes 18).
+- Work may be saved as a **Draft** at any time; only a **Final** save requires the full
+  worksheet.
 
 ---
 
@@ -353,12 +357,29 @@ Inputs: proxy/filing data, insider transactions (external).
 
 ### Validation rules (enforced on save)
 
-1. Every **required** field is present and non-empty (after strip).
+Saving as **Draft** (`analysis_schema.validate_draft`) enforces the structural rules plus
+the sequence gate:
+
+1. The payload has a `sections` object and every section present.
 2. Every select value is either `""` (unset) or one of its declared options.
 3. Scores are integers in 1-10.
-4. `confidence == "Low"` on a section requires a non-empty `confidence_note`.
-5. `variant.key_evidence` has at least three non-empty lines.
-6. `final.thesis` has at most three sentences (three `.`, `!` or `?` terminators).
+4. At least one field is filled (an entirely empty worksheet is refused).
+5. No `recommendation` is recorded while steps 1-17 are incomplete.
+
+Saving as **Final** (`analysis_schema.validate`) enforces everything above and:
+
+6. Every **required** field is present and non-empty (after strip).
+7. `confidence == "Low"` on a section requires a non-empty `confidence_note`.
+8. `variant.key_evidence` has at least three non-empty lines.
+9. `final.thesis` has at most three sentences (three `.`, `!` or `?` terminators).
+10. `scenarios.scenario_probabilities`, once it contains digits, is exactly three
+    numbers summing to 100.
+11. `analog.base_rate`, once it contains digits, is a single percentage from 0 to 100.
+
+The page shows per-step progress (`filled/total` required fields) on each section header
+and opens the first incomplete section. Concurrent saves are refused with a message
+rather than silently overwriting a newer version: each worksheet tracks its row's
+`updated_at` and re-reads it before writing.
 
 ### Markdown export
 

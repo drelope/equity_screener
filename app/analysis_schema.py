@@ -31,6 +31,7 @@ MARGIN_OPTIONS = ("Expanding", "Flat", "Compressing")
 KINDS = ("text", "textarea", "select", "score")
 
 _SENTENCE_END = re.compile(r"[.!?](?:\s|$)")
+_NUMBER = re.compile(r"-?\d+(?:\.\d+)?")
 
 
 @dataclass(frozen=True)
@@ -491,25 +492,46 @@ def get_value(payload: dict, section_id: str, field_id: str):
 def completion(payload: dict) -> tuple[int, int]:
     """Filled required fields vs. total required fields, across the whole worksheet.
 
-    The conditional confidence note is left to :func:`validate`: it is only required
-    when a section records Low confidence, so counting it here would keep the progress
-    bar incomplete on an otherwise finished worksheet.
+    The conditional confidence note is left to :func:`validate`/:func:`validate_draft`:
+    it is only required when a section records Low confidence, so counting it here would
+    keep the progress bar incomplete on an otherwise finished worksheet.
     """
     filled = total = 0
     for section in SECTIONS:
+        values = _values(payload, section)
         for f in section.all_fields:
             if f.required:
                 total += 1
-                if _present(payload, section, f):
+                if _present_in(values, f):
                     filled += 1
     return filled, total
 
 
-def _present(payload: dict, section: Section, f: Field) -> bool:
-    value = get_value(payload, section.id, f.id)
+def section_completion(payload: dict) -> dict[str, tuple[int, int]]:
+    """Filled vs. total required fields for each section, keyed by section id."""
+    out: dict[str, tuple[int, int]] = {}
+    for section in SECTIONS:
+        required = [f for f in section.all_fields if f.required]
+        values = _values(payload, section)
+        filled = sum(1 for f in required if _present_in(values, f))
+        out[section.id] = (filled, len(required))
+    return out
+
+
+def _values(payload: dict, section: Section) -> dict:
+    values = payload.get("sections", {}).get(section.id, {})
+    return values if isinstance(values, dict) else {}
+
+
+def _present_in(values: dict, f: Field) -> bool:
+    value = values.get(f.id)
     if f.kind == "score":
         return value is not None
     return bool(str(value).strip()) and str(value).strip() != PLACEHOLDER
+
+
+def _present(payload: dict, section: Section, f: Field) -> bool:
+    return _present_in(_values(payload, section), f)
 
 
 def _label(section: Section, f: Field) -> str:
@@ -517,7 +539,44 @@ def _label(section: Section, f: Field) -> str:
 
 
 def validate(payload: dict) -> list[str]:
-    """Every rule that must hold before the worksheet can be saved. Empty = valid."""
+    """Every rule that must hold before the worksheet can be saved as Final. Empty = valid."""
+    errors = _structural_errors(payload)
+    sections = payload.get("sections")
+    if not isinstance(sections, dict):
+        return errors
+    errors.extend(_required_errors(sections))
+    errors.extend(_conditional_errors(sections))
+    return errors
+
+
+def validate_draft(payload: dict) -> list[str]:
+    """The lighter rule set for saving incomplete work as a draft.
+
+    A draft only needs a well-formed payload, at least one filled field, and — because a
+    recommendation is a conclusion — steps 1-17 complete before the recommendation is set.
+    The required-field and analytical-quality rules are deferred to :func:`validate`.
+    """
+    errors = _structural_errors(payload)
+    sections = payload.get("sections")
+    if not isinstance(sections, dict):
+        return errors
+    if not _has_any_value(payload):
+        errors.append("the worksheet is empty; fill in at least one field before saving")
+        return errors
+    errors.extend(_recommendation_errors(sections))
+    return errors
+
+
+def prior_steps_complete(payload: dict) -> bool:
+    """True when every required field outside the final section is filled."""
+    sections = payload.get("sections")
+    if not isinstance(sections, dict):
+        return False
+    return not _incomplete_prior_steps(sections)
+
+
+def _structural_errors(payload: dict) -> list[str]:
+    """Payload-shape problems: independent of whether the worksheet is a draft or final."""
     errors: list[str] = []
     sections = payload.get("sections")
     if not isinstance(sections, dict):
@@ -527,7 +586,6 @@ def validate(payload: dict) -> list[str]:
         if not isinstance(values, dict):
             errors.append(f"{section.title}: section is missing")
             continue
-        confidence = str(values.get("confidence", "")).strip()
         for f in section.all_fields:
             raw = values.get(f.id)
             where = _label(section, f)
@@ -537,24 +595,87 @@ def validate(payload: dict) -> list[str]:
                     text = ""
                 if text and text not in f.options:
                     errors.append(f"{where}: {text!r} is not one of the options")
-                elif f.required and not text:
-                    errors.append(f"{where}: required")
-            elif f.kind == "score":
-                if raw is None or raw == "":
-                    if f.required:
-                        errors.append(f"{where}: required")
-                elif not isinstance(raw, int) or not 1 <= raw <= 10:
+            elif f.kind == "score" and raw not in (None, ""):
+                if not isinstance(raw, int) or not 1 <= raw <= 10:
                     errors.append(f"{where}: must be a whole number from 1 to 10")
+    return errors
+
+
+def _required_errors(sections: dict) -> list[str]:
+    """Every required field present and non-empty."""
+    errors: list[str] = []
+    for section in SECTIONS:
+        values = sections.get(section.id)
+        if not isinstance(values, dict):
+            continue
+        for f in section.all_fields:
+            if not f.required:
+                continue
+            raw = values.get(f.id)
+            where = _label(section, f)
+            if f.kind == "score":
+                if raw is None or raw == "":
+                    errors.append(f"{where}: required")
             else:
                 text = "" if raw is None else str(raw).strip()
-                if f.required and not text:
+                if text == PLACEHOLDER or not text:
                     errors.append(f"{where}: required")
-        if section.has_confidence:
-            if confidence == "Low" and not str(values.get("confidence_note") or "").strip():
-                errors.append(f"{section.title}: {CONFIDENCE_NOTE_REQUIRED}")
+    return errors
+
+
+def _conditional_errors(sections: dict) -> list[str]:
+    """Cross-field rules, only meaningful once the analyst has entered the data."""
+    errors: list[str] = []
+    for section in SECTIONS:
+        if not section.has_confidence:
+            continue
+        values = sections.get(section.id)
+        if not isinstance(values, dict):
+            continue
+        confidence = str(values.get("confidence", "")).strip()
+        if confidence == "Low" and not str(values.get("confidence_note") or "").strip():
+            errors.append(f"{section.title}: {CONFIDENCE_NOTE_REQUIRED}")
     errors.extend(_rule_evidence(sections))
     errors.extend(_rule_thesis(sections))
+    errors.extend(_rule_probabilities(sections))
+    errors.extend(_rule_base_rate(sections))
     return errors
+
+
+def _recommendation_errors(sections: dict) -> list[str]:
+    """The hard constraint: no recommendation before steps 1-17 are complete."""
+    recommendation = str(sections.get("final", {}).get("recommendation") or "").strip()
+    if not recommendation:
+        return []
+    incomplete = _incomplete_prior_steps(sections)
+    if not incomplete:
+        return []
+    return [
+        "Recommendation / Recommendation: cannot be set until steps 1-17 are complete "
+        f"(still incomplete: {', '.join(incomplete)})"
+    ]
+
+
+def _incomplete_prior_steps(sections: dict) -> list[str]:
+    missing: list[str] = []
+    for section in SECTIONS:
+        if section.id == "final":
+            continue
+        values = sections.get(section.id)
+        if not isinstance(values, dict):
+            missing.append(section.title)
+            continue
+        if any(f.required and not _present_in(values, f) for f in section.all_fields):
+            missing.append(section.title)
+    return missing
+
+
+def _has_any_value(payload: dict) -> bool:
+    for section in SECTIONS:
+        values = _values(payload, section)
+        if any(_present_in(values, f) for f in section.all_fields):
+            return True
+    return False
 
 
 def _rule_evidence(sections: dict) -> list[str]:
@@ -568,6 +689,30 @@ def _rule_thesis(sections: dict) -> list[str]:
     thesis = str(sections.get("final", {}).get("thesis") or "").strip()
     if thesis and len(_SENTENCE_END.findall(thesis)) > 3:
         return ["Recommendation / Thesis: must be three sentences or fewer"]
+    return []
+
+
+def _rule_probabilities(sections: dict) -> list[str]:
+    raw = str(sections.get("scenarios", {}).get("scenario_probabilities") or "").strip()
+    if not _NUMBER.search(raw):
+        return []
+    numbers = [float(n) for n in _NUMBER.findall(raw)]
+    where = "Scenarios / Probabilities (base / bull / bear)"
+    if len(numbers) != 3:
+        return [f"{where}: enter exactly three numbers (base / bull / bear)"]
+    if abs(sum(numbers) - 100.0) > 0.01:
+        return [f"{where}: the three numbers must sum to 100"]
+    return []
+
+
+def _rule_base_rate(sections: dict) -> list[str]:
+    raw = str(sections.get("analog", {}).get("base_rate") or "").strip()
+    if not _NUMBER.search(raw):
+        return []
+    numbers = [float(n) for n in _NUMBER.findall(raw)]
+    where = "Historical analogs / Base rate (% positive returns)"
+    if len(numbers) != 1 or not 0.0 <= numbers[0] <= 100.0:
+        return [f"{where}: enter a single percentage between 0 and 100"]
     return []
 
 

@@ -23,6 +23,7 @@ from src.crispdm.analysis import store
 PENDING_KEY = "ia_pending"
 TICKER_KEY = "ia_ticker"
 ANALYSIS_KEY = "ia_analysis_id"
+UPDATED_KEY = "ia_updated_at"
 FLASH_KEY = "ia_flash"
 STATUS_OPTIONS = ("Draft", "Final")
 
@@ -124,6 +125,7 @@ def _sidebar(info: pd.Series) -> None:
         if st.button("New analysis", key="ia_new"):
             _clear_form()
             st.session_state.pop(ANALYSIS_KEY, None)
+            st.session_state.pop(UPDATED_KEY, None)
             st.session_state.pop(FLASH_KEY, None)
             st.rerun()
         st.divider()
@@ -144,6 +146,7 @@ def _sidebar(info: pd.Series) -> None:
                     "payload": detail["payload"],
                     "analysis_id": detail["analysis_id"],
                     "status": detail["status"],
+                    "updated_at": detail["updated_at"],
                 }
                 st.rerun()
             else:
@@ -164,6 +167,7 @@ def _sidebar(info: pd.Series) -> None:
                     # The open worksheet is gone; keep the form from editing a ghost.
                     _clear_form()
                     st.session_state.pop(ANALYSIS_KEY, None)
+                    st.session_state.pop(UPDATED_KEY, None)
                 st.session_state[FLASH_KEY] = (
                     f"Deleted analysis #{target}."
                     if existed
@@ -212,11 +216,31 @@ def _save_actions(info: pd.Series, payload: dict) -> None:
         c.caption(f"Saving updates analysis #{current}")
     if not save:
         return
-    errors = schema.validate(payload)
+    # A Draft may be partial; a Final must satisfy every rule, including the sequence gate.
+    errors = schema.validate(payload) if status_label == "Final" else schema.validate_draft(payload)
     if errors:
         st.error(f"{len(errors)} field(s) need attention before this can be saved.")
         st.code("\n".join(errors[:20]), language="text")
         return
+    if current:
+        stored = _read(lambda conn: store.get(conn, current))
+        if stored is None:
+            # Deleted in another tab since this worksheet was opened: do not
+            # claim a save that never happened, and stop targeting the ghost.
+            st.session_state.pop(ANALYSIS_KEY, None)
+            st.session_state.pop(UPDATED_KEY, None)
+            st.error(
+                f"Analysis #{current} no longer exists (deleted elsewhere?). "
+                "Nothing was written; press Save again to store it as a new analysis."
+            )
+            return
+        if str(stored["updated_at"]) != str(st.session_state.get(UPDATED_KEY)):
+            # Someone saved this row since we loaded it; overwriting would lose their edit.
+            st.error(
+                f"Analysis #{current} changed in another tab since it was opened. "
+                "Reopen it from the sidebar before saving so the newer version is not lost."
+            )
+            return
     summary = schema.final_summary(payload)
     args = {
         "payload": payload,
@@ -231,9 +255,9 @@ def _save_actions(info: pd.Series, payload: dict) -> None:
         if current:
             existed = _write(lambda conn: store.update(conn, current, updated_by=operator, **args))
             if not existed:
-                # Deleted in another tab since this worksheet was opened: do not
-                # claim a save that never happened, and stop targeting the ghost.
+                # Deleted between the existence check and the write.
                 st.session_state.pop(ANALYSIS_KEY, None)
+                st.session_state.pop(UPDATED_KEY, None)
                 st.error(
                     f"Analysis #{current} no longer exists (deleted elsewhere?). "
                     "Nothing was written; press Save again to store it as a new analysis."
@@ -253,7 +277,9 @@ def _save_actions(info: pd.Series, payload: dict) -> None:
     except SQLAlchemyError as exc:
         st.error(f"Saving failed ({type(exc).__name__}); the warehouse refused the write.")
         return
+    saved = _read(lambda conn: store.get(conn, saved_id))
     st.session_state[ANALYSIS_KEY] = saved_id
+    st.session_state[UPDATED_KEY] = saved["updated_at"] if saved else None
     st.session_state[FLASH_KEY] = f"Saved analysis #{saved_id}."
     st.rerun()
 
@@ -311,9 +337,11 @@ def render() -> None:
         _clear_form()
         st.session_state[TICKER_KEY] = ticker
         st.session_state.pop(ANALYSIS_KEY, None)
+        st.session_state.pop(UPDATED_KEY, None)
     if pending:
         _hydrate(pending["payload"])
         st.session_state[ANALYSIS_KEY] = pending["analysis_id"]
+        st.session_state[UPDATED_KEY] = pending.get("updated_at")
         # Forced, not defaulted: opening another worksheet must adopt its status.
         st.session_state["ia_status"] = str(pending.get("status", "draft")).title()
         version = pending["payload"].get("version")
@@ -327,14 +355,28 @@ def render() -> None:
     _sidebar(info)
     _context(info)
 
+    payload = _payload_from_state()
+    counts = schema.section_completion(payload)
+    first_incomplete = next(
+        (s.id for s in schema.SECTIONS if counts[s.id][0] < counts[s.id][1]), None
+    )
+    prior_ok = schema.prior_steps_complete(payload)
     for step, section in enumerate(schema.SECTIONS, start=1):
-        with st.expander(f"{step}. {section.title}", expanded=False):
+        filled, total = counts[section.id]
+        label = f"{step}. {section.title}"
+        if total:
+            label += f" ({filled}/{total})"
+        with st.expander(label, expanded=(section.id == first_incomplete)):
             if section.intro:
                 st.caption(section.intro)
+            if section.id == "final" and not prior_ok:
+                st.warning(
+                    "Steps 1-17 are incomplete; a recommendation cannot be saved until "
+                    "their required fields are filled."
+                )
             for field in section.all_fields:
                 _render_field(section, field)
 
-    payload = _payload_from_state()
     _summary_row(payload)
     _save_actions(info, payload)
     _exports(payload, ticker)

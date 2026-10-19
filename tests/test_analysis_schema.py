@@ -147,6 +147,106 @@ def test_a_missing_section_is_reported():
     assert any("Risk decomposition: section is missing" in e for e in schema.validate(payload))
 
 
+# --- draft vs final ---------------------------------------------------------------
+
+
+def test_an_empty_worksheet_cannot_be_saved_even_as_a_draft():
+    errors = schema.validate_draft(schema.empty_payload())
+    assert errors and "empty" in errors[0]
+
+
+def test_a_partial_worksheet_saves_as_a_draft_but_not_as_final():
+    payload = schema.empty_payload()
+    payload["sections"]["universe"]["universe_filters"] = "US large-cap dividend payers"
+    assert schema.validate_draft(payload) == []
+    assert schema.validate(payload)  # still missing dozens of required fields
+
+
+def test_a_draft_may_not_record_a_recommendation_before_steps_one_to_seventeen():
+    payload = schema.empty_payload()
+    payload["sections"]["final"]["recommendation"] = "Buy"
+    errors = schema.validate_draft(payload)
+    assert any("steps 1-17" in error for error in errors)
+
+
+def test_a_draft_recommendation_is_allowed_once_prior_steps_are_complete():
+    payload = filled_payload()
+    del payload["sections"]["final"]["thesis"]  # the final step itself may be unfinished
+    assert schema.prior_steps_complete(payload)
+    assert schema.validate_draft(payload) == []
+
+
+def test_draft_validation_still_rejects_a_malformed_select_value():
+    payload = schema.empty_payload()
+    payload["sections"]["risk"]["business_risk"] = "Catastrophic"
+    assert any("Catastrophic" in error for error in schema.validate_draft(payload))
+
+
+def test_draft_and_final_share_the_same_structural_errors():
+    payload = schema.empty_payload()
+    del payload["sections"]["risk"]
+    for errors in (schema.validate_draft(payload), schema.validate(payload)):
+        assert any("Risk decomposition: section is missing" in e for e in errors)
+
+
+# --- section progress -------------------------------------------------------------
+
+
+def test_section_completion_counts_required_fields_per_section():
+    counts = schema.section_completion(filled_payload())
+    for section in schema.SECTIONS:
+        filled, total = counts[section.id]
+        assert filled == total
+    empty = schema.section_completion(schema.empty_payload())
+    assert all(filled == 0 for filled, _ in empty.values())
+
+
+def test_prior_steps_complete_ignores_the_final_section():
+    payload = schema.empty_payload()
+    for section in schema.SECTIONS:
+        if section.id == "final":
+            continue
+        for field in section.all_fields:
+            if not field.required:
+                continue
+            if field.kind == "score":
+                payload["sections"][section.id][field.id] = 5
+            elif field.kind == "select":
+                payload["sections"][section.id][field.id] = field.options[0]
+            else:
+                payload["sections"][section.id][field.id] = "answered"
+    assert schema.prior_steps_complete(payload)
+    assert not schema.prior_steps_complete(schema.empty_payload())
+
+
+# --- cross-field rules ------------------------------------------------------------
+
+
+def test_scenario_probabilities_must_be_three_numbers_summing_to_one_hundred():
+    payload = filled_payload()
+    payload["sections"]["scenarios"]["scenario_probabilities"] = "50 / 30 / 20"
+    assert schema.validate(payload) == []
+    payload["sections"]["scenarios"]["scenario_probabilities"] = "50 / 30 / 10"
+    assert any("sum to 100" in e for e in schema.validate(payload))
+    payload["sections"]["scenarios"]["scenario_probabilities"] = "50 / 50"
+    assert any("exactly three" in e for e in schema.validate(payload))
+
+
+def test_base_rate_must_be_a_percentage():
+    payload = filled_payload()
+    payload["sections"]["analog"]["base_rate"] = "62%"
+    assert schema.validate(payload) == []
+    payload["sections"]["analog"]["base_rate"] = "140"
+    assert any("between 0 and 100" in e for e in schema.validate(payload))
+
+
+def test_cross_field_rules_ignore_free_text_without_numbers():
+    payload = filled_payload()
+    payload["sections"]["analog"]["base_rate"] = "not measured yet"
+    payload["sections"]["scenarios"]["scenario_probabilities"] = "to be determined"
+    assert schema.validate(payload) == []
+
+
 # --- completion and summary -------------------------------------------------------
 
 

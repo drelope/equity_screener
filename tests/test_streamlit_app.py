@@ -601,6 +601,7 @@ def test_saving_an_empty_worksheet_lists_the_missing_fields(with_token):
     at = page("investment_analysis", operator=True).run()
     assert not at.exception, [e.value for e in at.exception]
 
+    at.selectbox(key="ia_status").set_value("Final").run()
     button(at, "Save analysis").click().run()
 
     assert not at.exception, [e.value for e in at.exception]
@@ -608,6 +609,52 @@ def test_saving_an_empty_worksheet_lists_the_missing_fields(with_token):
     assert errors and "need attention" in errors[0]
     details = " ".join(e.value for e in at.code)
     assert "Investment universe / Filters applied" in details
+
+
+def test_an_empty_draft_is_refused(with_token):
+    at = page("investment_analysis", operator=True).run()
+    assert at.selectbox(key="ia_status").value == "Draft"
+
+    button(at, "Save analysis").click().run()
+
+    assert not at.exception, [e.value for e in at.exception]
+    details = " ".join(e.value for e in at.code)
+    assert "worksheet is empty" in details
+
+
+def test_a_draft_may_not_recommend_before_the_prior_steps_are_done(with_token):
+    at = page("investment_analysis", operator=True).run()
+    at.selectbox(key="ia__final__recommendation").set_value("Buy").run()
+
+    button(at, "Save analysis").click().run()
+
+    assert not at.exception, [e.value for e in at.exception]
+    details = " ".join(e.value for e in at.code)
+    assert "steps 1-17" in details
+
+
+def test_a_concurrent_edit_is_refused_rather_than_overwritten(with_token):
+    at = page("investment_analysis", operator=True).run()
+    _fill_worksheet(at)
+    button(at, "Save analysis").click().run()
+    assert any("Saved analysis" in s.value for s in at.success)
+    analysis_id = at.session_state["ia_analysis_id"]
+
+    # Simulate another tab saving the same row after this one loaded it.
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                "UPDATE analysis.investment_analyses "
+                "SET updated_at = now() + interval '1 hour' WHERE analysis_id = :id"
+            ),
+            {"id": analysis_id},
+        )
+
+    button(at, "Save analysis").click().run()
+
+    assert not at.exception, [e.value for e in at.exception]
+    assert any("changed in another tab" in e.value for e in at.error)
+    assert not any("Saved analysis" in s.value for s in at.success)
 
 
 def test_without_the_operator_token_the_save_control_is_off(without_token):
