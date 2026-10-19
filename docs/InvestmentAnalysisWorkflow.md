@@ -414,13 +414,16 @@ not listed, so the record is the sequence of calls that were made.
 
 ### LLM-assisted draft (local)
 
-A local model can prefill a **Draft** from the warehouse context (`app/llm_client.py`).
-It is off by default and points at a loopback OpenAI-compatible endpoint (Ollama, vllm,
-LM Studio, the llama.cpp server), so nothing leaves the machine. Generation only returns a
-payload that passes `validate_draft`; it never saves, and a Final recommendation is still
-governed by the normal on-save rules. Configure it with `LLM_ENABLED`, `LLM_ENDPOINT`,
-`LLM_MODEL` and the related `LLM_*` settings; a non-localhost endpoint needs an explicit
-opt-in before any context is sent.
+A local model can prefill a **Draft** from the warehouse context (`app/llm_client.py`),
+through a "Generate draft (local LLM)" panel that appears on the worksheet only when the
+client is enabled. It is off by default and points at a loopback OpenAI-compatible endpoint
+(Ollama, vllm, LM Studio, the llama.cpp server), so nothing leaves the machine. The panel
+builds a compact digest of the same read-only context the page already shows, sends it,
+and places the returned payload in the form for review; it never saves. Generation only
+returns a payload that passes `validate_draft`, so a model cannot skip the workflow and a
+Final recommendation is still governed by the normal on-save rules. Configure it with
+`LLM_ENABLED`, `LLM_ENDPOINT`, `LLM_MODEL` and the related `LLM_*` settings; a non-localhost
+endpoint needs an explicit opt-in checkbox before any context is sent.
 
 ---
 

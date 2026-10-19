@@ -851,6 +851,45 @@ def _fill_worksheet(at: AppTest) -> None:
     at.run()
 
 
+def test_generating_a_local_draft_prefills_the_form_without_saving(with_token, monkeypatch):
+    from app import analysis_schema as schema
+    from app import llm_client
+    from src.crispdm.config import settings
+
+    monkeypatch.setattr(settings, "llm_enabled", True)
+    monkeypatch.setattr(settings, "llm_endpoint", "http://localhost:11434/v1/chat/completions")
+    generated = schema.empty_payload()
+    generated["sections"]["universe"]["universe_filters"] = "Generated universe filter"
+    monkeypatch.setattr(llm_client, "generate_draft", lambda context, **kw: generated)
+
+    at = page("investment_analysis", operator=True).run()
+    assert not at.exception, [e.value for e in at.exception]
+
+    button(at, "Generate").click().run()
+    assert not at.exception, [e.value for e in at.exception]
+    assert any("Generated a draft" in flash.value for flash in at.success)
+
+    prefilled = next(w for w in at.text_input if w.key == "ia__universe__universe_filters")
+    assert prefilled.value == "Generated universe filter"
+
+    with engine.connect() as conn:
+        count = conn.execute(
+            text("SELECT count(*) FROM analysis.investment_analyses WHERE created_by = :o"),
+            {"o": OPERATOR},
+        ).scalar()
+    assert count == 0, "generation must never save"
+
+
+def test_the_generate_control_is_hidden_until_the_local_draft_is_enabled(without_token, monkeypatch):
+    from src.crispdm.config import settings
+
+    monkeypatch.setattr(settings, "llm_enabled", False)
+    at = page("investment_analysis", operator=True).run()
+
+    assert not at.exception, [e.value for e in at.exception]
+    assert "Generate" not in [b.label for b in at.button]
+
+
 def test_a_worksheet_can_be_filled_saved_reopened_and_deleted(with_token):
     at = page("investment_analysis", operator=True).run()
     assert not at.exception, [e.value for e in at.exception]

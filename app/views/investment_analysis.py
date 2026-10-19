@@ -15,10 +15,11 @@ import streamlit as st
 from sqlalchemy.exc import SQLAlchemyError
 
 from app import analysis_schema as schema
-from app import ui
+from app import llm_client, ui
 from app.views.screener import SELECTED_KEY
 from app.views.security import feature_section, financials_section, profile, score_section
 from src.crispdm.analysis import store
+from src.crispdm.config import settings
 
 PENDING_KEY = "ia_pending"
 TICKER_KEY = "ia_ticker"
@@ -221,6 +222,130 @@ def _context(info: pd.Series) -> None:
             financials_section(info.security_id)
 
 
+def _context_markdown(info: pd.Series) -> str:
+    """A compact, read-only digest of the warehouse context for the draft prompt.
+
+    Reads only what the Warehouse context panel already shows (engineered features,
+    point-in-time ratios and reported fundamentals), formatted for a prompt rather than a
+    screen, so the local model cannot see anything the analyst could not.
+    """
+    lines = [
+        f"# {info.ticker} — {str(info.get('security_name') or '').strip()}",
+        f"Security type: {info.get('security_type') or 'unknown'}",
+    ]
+    features = ui.query(
+        "SELECT as_of_date, dividend_yield, dividend_growth, earnings_payout, fcf_payout, "
+        "volatility_252d, momentum_252d FROM model.features "
+        "WHERE security_id = CAST(:sid AS uuid) ORDER BY as_of_date DESC LIMIT 1",
+        {"sid": info.security_id},
+    )
+    if not features.empty:
+        row = features.iloc[0]
+        lines += ["", f"## Engineered features (as of {row['as_of_date']})"]
+        lines += [
+            f"- {label}: {_context_number(row.get(column), percent=(column in _PERCENT_FEATURES))}"
+            for column, label in (
+                ("dividend_yield", "Dividend yield"),
+                ("dividend_growth", "Dividend growth"),
+                ("earnings_payout", "Earnings payout"),
+                ("fcf_payout", "FCF payout"),
+                ("volatility_252d", "Volatility (252d)"),
+                ("momentum_252d", "Momentum (252d)"),
+            )
+        ]
+    ratios = ui.query(
+        "SELECT as_of_date, gross_margin, operating_margin, net_margin, fcf_margin, "
+        "cash_conversion, net_debt_to_ebitda, current_ratio, debt_to_equity, pe_ratio, "
+        "earnings_yield, fcf_yield, price_to_book FROM model.features "
+        "WHERE security_id = CAST(:sid AS uuid) ORDER BY as_of_date DESC LIMIT 1",
+        {"sid": info.security_id},
+    )
+    if not ratios.empty:
+        row = ratios.iloc[0]
+        lines += ["", f"## Point-in-time ratios (as of {row['as_of_date']})"]
+        lines += [
+            f"- {label}: {_context_number(row.get(column), percent=(column in _PERCENT_RATIOS))}"
+            for column, label in (
+                ("gross_margin", "Gross margin"),
+                ("operating_margin", "Operating margin"),
+                ("net_margin", "Net margin"),
+                ("fcf_margin", "FCF margin"),
+                ("cash_conversion", "Cash conversion"),
+                ("net_debt_to_ebitda", "Net debt/EBITDA"),
+                ("current_ratio", "Current ratio"),
+                ("debt_to_equity", "Debt/equity"),
+                ("pe_ratio", "P/E"),
+                ("earnings_yield", "Earnings yield"),
+                ("fcf_yield", "FCF yield"),
+                ("price_to_book", "Price/book"),
+            )
+        ]
+    fundamentals = ui.query(
+        "SELECT period_end, fiscal_period, revenue, net_income, free_cash_flow "
+        "FROM fundamentals.periodic_financials WHERE security_id = CAST(:sid AS uuid) "
+        "AND period_end <= CURRENT_DATE ORDER BY period_end DESC LIMIT 4",
+        {"sid": info.security_id},
+    )
+    if not fundamentals.empty:
+        lines += ["", "## Recent reported fundamentals"]
+        for _, row in fundamentals.iterrows():
+            lines.append(
+                f"- {row['period_end']} ({row['fiscal_period']}): revenue "
+                f"{_context_number(row.get('revenue'))}, net income "
+                f"{_context_number(row.get('net_income'))}, FCF "
+                f"{_context_number(row.get('free_cash_flow'))}"
+            )
+    return "\n".join(lines)
+
+
+_PERCENT_FEATURES = {"dividend_yield", "dividend_growth", "earnings_payout", "fcf_payout"}
+_PERCENT_RATIOS = {"gross_margin", "operating_margin", "net_margin", "fcf_margin", "earnings_yield"}
+
+
+def _context_number(value, *, percent: bool = False) -> str:
+    if value is None or pd.isna(value):
+        return "N/A"
+    if percent:
+        return f"{float(value):.1%}"
+    return f"{float(value):,.2f}"
+
+
+def _generate_section(info: pd.Series) -> None:
+    """Optional prefill from a local model; only ever fills a Draft, never saves."""
+    if not llm_client.is_enabled():
+        return
+    with st.expander("Generate draft (local LLM)", expanded=False):
+        st.caption(
+            "Prefill this worksheet from the warehouse context with a local model. The "
+            "result is validated as a Draft and placed in the form for you to review; it "
+            "is never saved automatically, and a Final still goes through every save rule."
+        )
+        if not ui.controls_enabled():
+            ui.require_controls_note()
+        allow_remote = False
+        if not settings.llm_endpoint_is_local():
+            st.warning(
+                f"The configured endpoint ({settings.llm_endpoint}) is not localhost; "
+                "generating sends the warehouse context off this machine."
+            )
+            allow_remote = st.checkbox("Send context to this non-local endpoint", key="ia_llm_remote")
+        if not st.button(
+            "Generate", key="ia_llm_generate", disabled=not ui.controls_enabled()
+        ):
+            return
+        try:
+            with st.spinner("Asking the local model for a draft..."):
+                payload = llm_client.generate_draft(
+                    _context_markdown(info), allow_remote=allow_remote
+                )
+        except llm_client.LLMError as exc:
+            st.error(f"Not generated: {exc}")
+            return
+        _hydrate(payload)
+        st.session_state[FLASH_KEY] = "Generated a draft; review it, then Save."
+        st.rerun()
+
+
 def _summary_row(payload: dict) -> tuple[int, int]:
     filled, total = schema.completion(payload)
     st.progress(
@@ -402,6 +527,7 @@ def render() -> None:
 
     _sidebar(info)
     _context(info)
+    _generate_section(info)
 
     payload = _payload_from_state()
     counts = schema.section_completion(payload)
