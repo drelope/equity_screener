@@ -38,6 +38,7 @@ from src.crispdm.openbb_client import (
     discounted_cash_flow,
     filings,
     financial_statements,
+    statement_key,
 )
 from src.crispdm.stage import stage_exit_code
 
@@ -64,27 +65,9 @@ def load_securities(conn, tickers=None, limit=None):
     return conn.execute(text(sql), params).mappings().all()
 
 
-def _statement_key(row):
-    """(period_end, fiscal_period, fiscal_year, filing_date) or None when unkeyable."""
-    period_end = pd.to_datetime(row.get("period_ending"), errors="coerce")
-    filing_date = pd.to_datetime(row.get("filing_date"), errors="coerce")
-    if pd.isna(period_end) or pd.isna(filing_date):
-        return None
-    try:
-        fiscal_year = int(row.get("fiscal_year"))
-    except (TypeError, ValueError):
-        fiscal_year = None
-    return (
-        period_end.date(),
-        str(row.get("fiscal_period") or ""),
-        fiscal_year,
-        filing_date.date(),
-    )
-
-
 def upsert_statement(conn, security_id, statement, row):
     """Upsert one FMP statement row; returns 1 when it was keyed, 0 when skipped."""
-    key = _statement_key(row)
+    key = statement_key(row)
     if key is None:
         return 0
     period_end, fiscal_period, fiscal_year, filing_date = key

@@ -168,7 +168,18 @@ def test_openbb_statements_falls_back_to_a_live_read(monkeypatch):
     monkeypatch.setattr(
         api_main.openbb_client,
         "financial_statements",
-        lambda *args, **kwargs: pd.DataFrame([{"revenue": 1}]),
+        lambda *args, **kwargs: pd.DataFrame(
+            [
+                {
+                    "period_ending": "2025-09-27",
+                    "fiscal_period": "FY",
+                    "fiscal_year": 2025,
+                    "filing_date": "2025-10-31",
+                    "reported_currency": "USD",
+                    "revenue": 1,
+                }
+            ]
+        ),
     )
 
     response = TestClient(app).get(
@@ -176,7 +187,39 @@ def test_openbb_statements_falls_back_to_a_live_read(monkeypatch):
     )
 
     assert response.status_code == 200
-    assert response.json()["items"][0]["revenue"] == 1
+    item = response.json()["items"][0]
+    assert item["period_end"] == "2025-09-27"
+    assert item["fiscal_period"] == "FY"
+    assert item["fiscal_year"] == 2025
+    assert item["filing_date"] == "2025-10-31"
+    assert item["reported_currency"] == "USD"
+    assert item["metrics"]["revenue"] == 1
+    assert "period_ending" not in item
+
+
+def test_openbb_statements_live_drops_unkeyable_rows(monkeypatch):
+    monkeypatch.setenv("API_KEY", "test-key")
+    monkeypatch.setattr(api_main, "_security_id", lambda ticker: "sid")
+    monkeypatch.setattr(api_main, "read_df", lambda sql, params: pd.DataFrame())
+    monkeypatch.setattr(
+        api_main.openbb_client,
+        "financial_statements",
+        lambda *args, **kwargs: pd.DataFrame(
+            [
+                {"period_ending": "2025-09-27", "filing_date": None, "revenue": 1},
+                {
+                    "period_ending": "2025-09-27",
+                    "filing_date": "2025-10-31",
+                    "revenue": 2,
+                },
+            ]
+        ),
+    )
+
+    response = TestClient(app).get("/openbb/statements/TEST", headers={"X-API-Key": "test-key"})
+
+    items = response.json()["items"]
+    assert [item["metrics"]["revenue"] for item in items] == [2]
 
 
 def test_openbb_statements_reject_an_unknown_statement(monkeypatch):

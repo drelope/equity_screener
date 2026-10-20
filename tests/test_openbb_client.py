@@ -588,3 +588,28 @@ def test_discounted_cash_flow_a_non_429_error_returns_none(monkeypatch):
         raise HTTPError(url, 403, "Forbidden", {}, io.BytesIO(b""))
 
     assert openbb_client.discounted_cash_flow("AAPL", opener=opener) is None
+
+
+def test_statement_key_shapes_a_live_row_like_a_stored_one():
+    from datetime import date
+
+    key = openbb_client.statement_key(
+        {
+            "period_ending": "2025-09-27",
+            "fiscal_period": "FY",
+            "fiscal_year": 2025,
+            "filing_date": "2025-10-31",
+        }
+    )
+
+    assert key == (date(2025, 9, 27), "FY", 2025, date(2025, 10, 31))
+
+
+def test_statement_key_needs_both_dates_and_tolerates_a_bad_fiscal_year():
+    assert openbb_client.statement_key({"period_ending": "2025-09-27"}) is None
+    assert openbb_client.statement_key({"filing_date": "2025-10-31"}) is None
+
+    key = openbb_client.statement_key(
+        {"period_ending": "2025-09-27", "filing_date": "2025-10-31", "fiscal_year": "n/a"}
+    )
+    assert key[2] is None

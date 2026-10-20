@@ -583,6 +583,30 @@ def financial_statements(symbol, statement="income", limit=None):
     return _df(target(**kw))
 
 
+def statement_key(row):
+    """The ``raw.fmp_statements`` key of one FMP statement row, or None when unkeyable.
+
+    Returns ``(period_end, fiscal_period, fiscal_year, filing_date)``: the date the
+    period ended, FMP's fiscal label, the fiscal year (None when unparseable) and the
+    date FMP accepted the filing. The ETL upsert and the API's live fallback both key
+    with this, so a live read is shaped exactly like a stored row.
+    """
+    period_end = pd.to_datetime(row.get("period_ending"), errors="coerce")
+    filing_date = pd.to_datetime(row.get("filing_date"), errors="coerce")
+    if pd.isna(period_end) or pd.isna(filing_date):
+        return None
+    try:
+        fiscal_year = int(row.get("fiscal_year"))
+    except (TypeError, ValueError):
+        fiscal_year = None
+    return (
+        period_end.date(),
+        str(row.get("fiscal_period") or ""),
+        fiscal_year,
+        filing_date.date(),
+    )
+
+
 def discounted_cash_flow(symbol, opener=None):
     """FMP's own discounted-cash-flow estimate for one symbol.
 

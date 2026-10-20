@@ -373,6 +373,33 @@ def fundamentals(ticker: str) -> dict[str, Any]:
     return {"ticker": ticker, "ratios": ratios_data, "valuation": valuation_data}
 
 
+def _statement_items(frame: pd.DataFrame) -> list[dict[str, Any]]:
+    """Shape a live FMP statement frame like the stored ``raw.fmp_statements`` rows.
+
+    The stored path returns keyed columns plus the full payload under ``metrics``;
+    a live read would otherwise hand back OpenBB's flat ``period_ending`` row and
+    change the response shape between the two sources. Unkeyable rows are dropped,
+    exactly as the ETL upsert drops them.
+    """
+    items = []
+    for row in frame.to_dict("records"):
+        key = openbb_client.statement_key(row)
+        if key is None:
+            continue
+        period_end, fiscal_period, fiscal_year, filing_date = key
+        items.append(
+            {
+                "period_end": period_end,
+                "fiscal_period": fiscal_period,
+                "fiscal_year": fiscal_year,
+                "filing_date": filing_date,
+                "reported_currency": row.get("reported_currency"),
+                "metrics": {name: _json_value(value) for name, value in row.items()},
+            }
+        )
+    return items
+
+
 @app.get("/openbb/statements/{ticker}", dependencies=[Depends(require_api_key)])
 def openbb_statements(
     ticker: str,
@@ -397,7 +424,7 @@ def openbb_statements(
         return {
             "ticker": ticker,
             "statement": statement,
-            "items": _records(openbb_client.financial_statements(ticker, statement, limit)),
+            "items": _statement_items(openbb_client.financial_statements(ticker, statement, limit)),
         }
     return {"ticker": ticker, "statement": statement, "items": _records(frame)}
 
