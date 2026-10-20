@@ -546,6 +546,19 @@ def _has_fmp_key():
     return bool(_fmp_key())
 
 
+def _fred_key():
+    credentials = getattr(getattr(obb, "user", None), "credentials", None)
+    key = getattr(credentials, "fred_api_key", None)
+    if hasattr(key, "get_secret_value"):
+        key = key.get_secret_value()
+    return key or None
+
+
+def _has_fred_key():
+    """True when a FRED key is loaded on the OpenBB session."""
+    return bool(_fred_key())
+
+
 def _fmp_provider():
     """The provider to pin for an explicit FMP call; an explicit setting still wins."""
     return settings.openbb_provider or "fmp"
@@ -662,3 +675,75 @@ def filings(symbol, limit=None):
         kw["limit"] = limit
     _fmp_throttle()
     return _df(obb.equity.fundamental.filings(**kw))
+
+
+# --- Macro economic inputs (docs/GlobalMacroStrategy.md) ---------------------------
+#
+# The provider is pinned to "fmp"/"fred" rather than honoring an explicit
+# settings.openbb_provider: every observation is recorded in raw.macro_series
+# with source = FMP or FRED, so provenance must not drift to a provider we
+# never vetted.
+
+
+def macro_treasury_rates(start_date=None, end_date=None):
+    """UST constant-maturity rates from FMP: a wide frame of percent rates.
+
+    Columns are ``month_1`` .. ``year_30`` (5.12 means 5.12%), indexed by date;
+    ``src.crispdm.macro_inputs.TENOR_COLUMNS`` maps them to series ids.
+    """
+    _fmp_throttle()
+    return _df(
+        obb.fixedincome.government.treasury_rates(
+            provider="fmp", start_date=start_date, end_date=end_date
+        )
+    )
+
+
+def macro_equity_history(symbols, start_date=None, end_date=None):
+    """Daily history for FMP equity/spot symbols (XAUUSD, XAGUSD)."""
+    _fmp_throttle()
+    return _df(
+        obb.equity.price.historical(
+            provider="fmp", symbol=symbols, start_date=start_date, end_date=end_date
+        )
+    )
+
+
+def macro_etf_history(symbols, start_date=None, end_date=None):
+    """Daily history for benchmark/proxy ETFs (PFF, PGX, SDY, HYG, USO, ...)."""
+    _fmp_throttle()
+    return _df(
+        obb.etf.historical(provider="fmp", symbol=symbols, start_date=start_date, end_date=end_date)
+    )
+
+
+def macro_etf_sectors(symbol):
+    """Sector weights for one benchmark ETF (the memo's concentration caveat)."""
+    _fmp_throttle()
+    return _df(obb.etf.sectors(provider="fmp", symbol=symbol))
+
+
+def macro_risk_premium():
+    """Country equity risk premia from FMP (the ``United States`` row feeds the memo)."""
+    _fmp_throttle()
+    return _df(obb.economy.risk_premium(provider="fmp"))
+
+
+def macro_fred(symbols, start_date=None, end_date=None):
+    """Wide frame of FRED series by date, one column per requested series id.
+
+    FRED carries what FMP does not: SOFR, the RRP balance, ICE BofA OAS,
+    breakevens, TIPS real yields and daily WTI/Brent/Henry Hub spot prices.
+    Returns an empty frame when no FRED key is configured so a caller can tell
+    "no key" from "no data".
+    """
+    if not _has_fred_key():
+        return pd.DataFrame()
+    return _df(
+        obb.economy.fred_series(
+            provider="fred",
+            symbol=list(symbols),
+            start_date=start_date,
+            end_date=end_date,
+        )
+    )

@@ -11,7 +11,7 @@ from typing import Any
 import pandas as pd
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, status
 
-from src.crispdm import openbb_client, sec_client
+from src.crispdm import macro_inputs, openbb_client, sec_client
 from src.crispdm.config import settings
 from src.crispdm.db import read_df
 
@@ -462,6 +462,77 @@ def openbb_filings(ticker: str, limit: int = Query(default=100, ge=1, le=1000)) 
             "items": _records(openbb_client.filings(ticker, limit=limit)),
         }
     return {"ticker": ticker, "items": _records(frame)}
+
+
+def _macro_entry(entry: dict[str, Any]) -> dict[str, Any]:
+    """Encode dates/values the way ``_records`` shapes stored rows."""
+    encoded = dict(entry)
+    as_of = encoded.get("as_of")
+    if as_of is not None and not isinstance(as_of, str):
+        encoded["as_of"] = as_of.isoformat()
+    encoded["value"] = _json_value(encoded.get("value"))
+    return encoded
+
+
+def _benchmark_blocks(sector_records: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Per-benchmark sector breakdown + financials weight (the memo's proxy caveat)."""
+    financials = macro_inputs.financials_weight(sector_records)
+    blocks = []
+    for symbol in macro_inputs.SECTOR_SYMBOLS:
+        sectors = {
+            str(row["sector"]): float(row["value"])
+            for row in sector_records
+            if str(row.get("symbol", "")).upper() == symbol and row.get("value") is not None
+        }
+        blocks.append(
+            {
+                "symbol": symbol,
+                "financials_weight": financials.get(symbol),
+                "sectors": dict(sorted(sectors.items(), key=lambda item: -item[1])),
+            }
+        )
+    return blocks
+
+
+@app.get("/openbb/macro/inputs", dependencies=[Depends(require_api_key)])
+def openbb_macro_inputs(
+    markdown: bool = Query(
+        default=False,
+        description="Also render the memo's Inputs block (docs/GlobalMacroStrategy.md).",
+    ),
+) -> dict[str, Any]:
+    """Economic inputs for the macro memo: stored series, or a live fetch when none are stored.
+
+    Every entry is labelled Observed or UNVERIFIED with an as-of stamp and its
+    provider source, so an assumed level can never pass for an observed one.
+    """
+    frame = read_df(
+        "SELECT DISTINCT ON (series_id) series_id, observation_date, value, unit, source "
+        "FROM raw.macro_series ORDER BY series_id, observation_date DESC"
+    )
+    sectors = read_df(
+        "SELECT symbol, sector, weight AS value FROM raw.macro_etf_sectors "
+        "ORDER BY symbol, weight DESC"
+    )
+    if frame.empty and sectors.empty:
+        rows, sector_list, _stats = macro_inputs.collect_rows(include_sectors=True)
+        latest = macro_inputs.latest_from_rows(rows)
+        sector_records = sector_list
+    else:
+        latest = macro_inputs.latest_from_rows(_records(frame))
+        sector_records = _records(sectors)
+    inputs = macro_inputs.build_inputs(latest)
+    as_of = macro_inputs.as_of_stamp(latest)
+    body: dict[str, Any] = {
+        "as_of": as_of,
+        "inputs": [_macro_entry(entry) for entry in inputs],
+        "benchmarks": _benchmark_blocks(sector_records),
+    }
+    if markdown:
+        body["markdown"] = macro_inputs.render_markdown(
+            inputs, as_of, macro_inputs.financials_weight(sector_records)
+        )
+    return body
 
 
 @app.get("/metrics/enriched/{ticker}", dependencies=[Depends(require_api_key)])

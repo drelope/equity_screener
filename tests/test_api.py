@@ -295,3 +295,91 @@ def test_openbb_filings_reads_stored_rows(monkeypatch):
 
     assert response.status_code == 200
     assert response.json()["items"][0]["report_type"] == "10-K"
+
+
+def test_openbb_macro_inputs_reads_stored_series_and_renders_markdown(monkeypatch):
+    monkeypatch.setenv("API_KEY", "test-key")
+    frames = {
+        "raw.macro_series": pd.DataFrame(
+            [
+                {
+                    "series_id": "UST_2Y",
+                    "observation_date": "2026-10-20",
+                    "value": 4.79,
+                    "unit": "percent",
+                    "source": "FMP",
+                },
+                {
+                    "series_id": "VIX",
+                    "observation_date": "2026-10-20",
+                    "value": 17.31,
+                    "unit": "index points",
+                    "source": "FMP",
+                },
+            ]
+        ),
+        "raw.macro_etf_sectors": pd.DataFrame(
+            [{"symbol": "PFF", "sector": "Financial Services", "value": 0.4705}]
+        ),
+    }
+
+    def fake_read_df(sql, params=None):
+        for table, frame in frames.items():
+            if table in sql:
+                return frame
+        return pd.DataFrame()
+
+    monkeypatch.setattr(api_main, "read_df", fake_read_df)
+
+    response = TestClient(app).get(
+        "/openbb/macro/inputs?markdown=true", headers={"X-API-Key": "test-key"}
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["as_of"] == "2026-10-20"
+    entries = {entry["id"]: entry for entry in body["inputs"]}
+    assert entries["UST_2Y"]["status"] == "Observed"
+    assert entries["UST_2Y"]["value"] == 4.79
+    assert entries["UST_2Y"]["as_of"] == "2026-10-20"
+    assert entries["MOVE"]["status"] == "UNVERIFIED"
+    assert entries["2s10s"]["status"] == "UNVERIFIED"
+    assert body["benchmarks"][0]["symbol"] == "PFF"
+    assert body["benchmarks"][0]["financials_weight"] == 0.4705
+    assert "**Curve / rates**" in body["markdown"]
+    assert "`UST_2Y` 4.79% **Observed** (FMP, 2026-10-20)" in body["markdown"]
+
+
+def test_openbb_macro_inputs_falls_back_to_a_live_fetch_when_nothing_is_stored(monkeypatch):
+    monkeypatch.setenv("API_KEY", "test-key")
+    monkeypatch.setattr(api_main, "read_df", lambda sql, params=None: pd.DataFrame())
+    live_rows = [
+        {
+            "series_id": "SOFR",
+            "observation_date": date(2026, 10, 20),
+            "value": 3.87,
+            "unit": "percent",
+            "source": "FRED",
+            "provider": "economy.fred_series",
+        }
+    ]
+    monkeypatch.setattr(
+        api_main.macro_inputs,
+        "collect_rows",
+        lambda **kwargs: (
+            live_rows,
+            [],
+            {"attempted": 1, "written": 0, "skipped": 0, "errors": 0, "empty": 0},
+        ),
+    )
+
+    response = TestClient(app).get("/openbb/macro/inputs", headers={"X-API-Key": "test-key"})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["as_of"] == "2026-10-20"
+    entries = {entry["id"]: entry for entry in body["inputs"]}
+    assert entries["SOFR"]["status"] == "Observed"
+    assert entries["SOFR"]["source"] == "FRED"
+    assert entries["HY_OAS"]["status"] == "UNVERIFIED"
+    assert "markdown" not in body

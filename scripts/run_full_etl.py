@@ -20,6 +20,9 @@ Stages (in dependency order):
                                          + clean.corporate_action
     5e. populate_fmp_fundamentals -> raw.fmp_statements + raw.fmp_dcf + raw.fmp_filings
                                      (FMP supporting data; skipped cleanly without an FMP key)
+    5f. populate_macro_inputs     -> raw.macro_series + raw.macro_etf_sectors
+                                     (FMP + FRED economic inputs for the macro memo;
+                                     skipped cleanly without a key)
     6. populate_fundamentals     -> fundamentals.periodic_financials (offline, stored XBRL)
     7. build_features            -> model.features (offline, last --feature-days only)
     8. score_rank                -> model.scores + model.predictions + model.rankings
@@ -328,6 +331,19 @@ def main():
         "nightly still succeeds without them.",
     )
     parser.add_argument(
+        "--skip-macro-inputs",
+        action="store_true",
+        help="Skip stage 5f (raw.macro_series / raw.macro_etf_sectors). Supporting "
+        "data for docs/GlobalMacroStrategy.md only, never a model input, so the "
+        "nightly still succeeds without them.",
+    )
+    parser.add_argument(
+        "--macro-lookback-days",
+        type=int,
+        default=60,
+        help="Observation window per macro series in stage 5f (default: 60).",
+    )
+    parser.add_argument(
         "--run-labels",
         action="store_true",
         help="Stage 8: populate target_sustainable_dividend from future dividend "
@@ -430,6 +446,7 @@ def main():
     fmp_fundamentals_args = list(base)
     if args.limit is not None:
         fmp_fundamentals_args += ["--limit", str(args.limit)]
+    macro_inputs_args = list(base) + ["--lookback-days", str(args.macro_lookback_days)]
 
     started_at = datetime.now(timezone.utc)
     stages = {}
@@ -618,6 +635,17 @@ def main():
             "scripts.populate_fmp_fundamentals",
             fmp_fundamentals_args,
             args.skip_fmp_fundamentals,
+        ):
+            all_ok = False
+
+        # Stage 5f: macro economic inputs (raw.macro_series, macro_etf_sectors)
+        # for the Inputs block of the macro strategy memo. Same supporting-data
+        # contract as 5e: one call per provider source, skipped cleanly when no
+        # FMP/FRED key is configured, never read by the feature build.
+        if all_ok and not stage(
+            "scripts.populate_macro_inputs",
+            macro_inputs_args,
+            args.skip_macro_inputs,
         ):
             all_ok = False
 

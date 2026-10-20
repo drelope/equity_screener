@@ -55,6 +55,13 @@ service is also available through Docker Compose, published on
 `127.0.0.1:8000`; Compose refuses to start it unless `API_KEY` is set (see
 [Compose services](#compose-services)).
 
+`/openbb/macro/inputs` serves the economic inputs for
+`docs/GlobalMacroStrategy.md` from `raw.macro_series` (falling back to a live
+FMP/FRED fetch when nothing is stored). Every entry carries
+`Observed`/`UNVERIFIED` plus an as-of stamp and source, so an assumed level is
+never presented as observed; add `?markdown=true` to also get the memo's Inputs
+block rendered with values substituted.
+
 If SEC has no Company Facts dataset for an issuer, `/facts/{ticker}` returns
 HTTP `404` with error code `SEC_COMPANYFACTS_UNAVAILABLE` and the normalized
 CIK. This is an expected unavailable-data response, not an API outage.
@@ -374,6 +381,15 @@ python -m scripts.populate_clean_company_profile
 # supporting data for the analysis worksheet, and `fundamentals.periodic_financials`
 # stays SEC XBRL only. Requires an FMP key; skip with --skip-fmp-fundamentals.
 python -m scripts.populate_fmp_fundamentals
+
+# Stage 5f — Economic inputs for docs/GlobalMacroStrategy.md. The UST curve,
+# VIX, spot metals, ETF closes and ETF sector weights come from FMP; SOFR, RRP,
+# ICE BofA OAS, breakevens, TIPS real yields and daily WTI/Brent/Henry Hub come
+# from FRED. Stored in raw.macro_series / raw.macro_etf_sectors with per-row
+# source provenance; supporting data only, never a model feature source.
+# --lookback-days controls the window (default 60); --skip-fmp/--skip-fred
+# narrow the sources; a missing key skips its series rather than failing.
+python -m scripts.populate_macro_inputs
 
 # Stage 6 — Offline derived financials over stored XBRL (no network)
 python -m scripts.populate_fundamentals
@@ -949,6 +965,8 @@ The `c2_c3_leverage_exempt` tag marks `issue_type = EQUITY` and `sector_key = re
 | `raw.fmp_statements` | FMP income/balance/cash statements via OpenBB's FMP provider (supporting data for the worksheet; never a model feature source) | PK `(security_id, statement, period_end, fiscal_period, filing_date)`, `fiscal_year`, `reported_currency`, `metrics` (JSONB), `content_hash` |
 | `raw.fmp_dcf` | FMP discounted-cash-flow estimate, read directly from FMP's REST API because OpenBB 4.7.2 has no DCF command; `dcf` is intrinsic value/share, `stock_price` the then-current quote (margin of safety = `dcf/stock_price - 1`) | PK `(security_id, as_of_date)`, `dcf`, `stock_price`, `reported_currency` |
 | `raw.fmp_filings` | FMP company-filings index, a second SEC-filings source alongside the direct SEC client | PK `(security_id, filing_date, report_type, report_url)`, `filing_url`, `accepted_date` |
+| `raw.macro_series` | Economic inputs for `docs/GlobalMacroStrategy.md`: UST tenors and VIX (FMP), spot gold/silver (FMP), benchmark/proxy ETF closes (FMP), and SOFR, RRP, ICE BofA OAS, breakevens, TIPS real yields, daily WTI/Brent/Henry Hub (FRED). Supporting data only; never a model feature source. Series registry and derived inputs live in `src/crispdm/macro_inputs.py` | PK `(series_id, observation_date)`, `value`, `unit`, `source` (`FMP`/`FRED`), `provider` (OpenBB route) |
+| `raw.macro_etf_sectors` | Sector weights of the proxy benchmark ETFs (PFF, PGX, SDY) so a proxy's concentration — especially the financials weight — can be stated before use, as the memo requires | PK `(symbol, sector)`, `weight` (fraction of fund assets), `source` |
 
 The issuer-level payload tables (`raw.companyfacts`, `raw.company_taxonomy`,
 `raw.sec_submissions`) are keyed by `cik`: the SEC submissions and companyfacts
