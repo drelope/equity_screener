@@ -1,3 +1,4 @@
+from datetime import date
 from unittest.mock import patch
 
 import pandas as pd
@@ -128,3 +129,126 @@ def test_the_rate_ceiling_is_per_client(monkeypatch):
     assert first.get("/companies/", headers=headers).status_code == 200
     assert first.get("/companies/", headers=headers).status_code == 429
     assert second.get("/companies/", headers=headers).status_code == 200
+
+
+def test_openbb_statements_reads_stored_rows(monkeypatch):
+    monkeypatch.setenv("API_KEY", "test-key")
+    monkeypatch.setattr(api_main, "_security_id", lambda ticker: "sid")
+    captured = {}
+
+    def fake_read_df(sql, params):
+        captured["sql"] = sql
+        return pd.DataFrame(
+            [
+                {
+                    "period_end": "2025-12-31",
+                    "fiscal_period": "FY",
+                    "fiscal_year": 2025,
+                    "filing_date": "2026-02-01",
+                    "reported_currency": "USD",
+                    "metrics": {"revenue": 100},
+                }
+            ]
+        )
+
+    monkeypatch.setattr(api_main, "read_df", fake_read_df)
+    response = TestClient(app).get("/openbb/statements/TEST", headers={"X-API-Key": "test-key"})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["statement"] == "income"
+    assert body["items"][0]["metrics"]["revenue"] == 100
+    assert "raw.fmp_statements" in captured["sql"]
+
+
+def test_openbb_statements_falls_back_to_a_live_read(monkeypatch):
+    monkeypatch.setenv("API_KEY", "test-key")
+    monkeypatch.setattr(api_main, "_security_id", lambda ticker: "sid")
+    monkeypatch.setattr(api_main, "read_df", lambda sql, params: pd.DataFrame())
+    monkeypatch.setattr(
+        api_main.openbb_client,
+        "financial_statements",
+        lambda *args, **kwargs: pd.DataFrame([{"revenue": 1}]),
+    )
+
+    response = TestClient(app).get(
+        "/openbb/statements/TEST?statement=balance", headers={"X-API-Key": "test-key"}
+    )
+
+    assert response.status_code == 200
+    assert response.json()["items"][0]["revenue"] == 1
+
+
+def test_openbb_statements_reject_an_unknown_statement(monkeypatch):
+    monkeypatch.setenv("API_KEY", "test-key")
+
+    response = TestClient(app).get(
+        "/openbb/statements/TEST?statement=cashflow", headers={"X-API-Key": "test-key"}
+    )
+
+    assert response.status_code == 422
+
+
+def test_openbb_dcf_reads_the_stored_vintage(monkeypatch):
+    monkeypatch.setenv("API_KEY", "test-key")
+    monkeypatch.setattr(api_main, "_security_id", lambda ticker: "sid")
+    monkeypatch.setattr(
+        api_main,
+        "read_df",
+        lambda sql, params: pd.DataFrame(
+            [
+                {
+                    "as_of_date": "2026-10-20",
+                    "dcf": 135.6,
+                    "stock_price": 340.7,
+                    "reported_currency": None,
+                }
+            ]
+        ),
+    )
+
+    response = TestClient(app).get("/openbb/dcf/TEST", headers={"X-API-Key": "test-key"})
+
+    assert response.status_code == 200
+    assert response.json()["items"][0]["dcf"] == 135.6
+
+
+def test_openbb_dcf_falls_back_to_a_live_read(monkeypatch):
+    monkeypatch.setenv("API_KEY", "test-key")
+    monkeypatch.setattr(api_main, "_security_id", lambda ticker: "sid")
+    monkeypatch.setattr(api_main, "read_df", lambda sql, params: pd.DataFrame())
+    monkeypatch.setattr(
+        api_main.openbb_client,
+        "discounted_cash_flow",
+        lambda symbol: {"as_of_date": date(2026, 10, 20), "dcf": 135.6},
+    )
+
+    response = TestClient(app).get("/openbb/dcf/TEST", headers={"X-API-Key": "test-key"})
+
+    assert response.status_code == 200
+    assert response.json()["items"][0]["dcf"] == 135.6
+
+
+def test_openbb_filings_reads_stored_rows(monkeypatch):
+    monkeypatch.setenv("API_KEY", "test-key")
+    monkeypatch.setattr(api_main, "_security_id", lambda ticker: "sid")
+    monkeypatch.setattr(
+        api_main,
+        "read_df",
+        lambda sql, params: pd.DataFrame(
+            [
+                {
+                    "filing_date": "2026-01-01",
+                    "report_type": "10-K",
+                    "report_url": "http://x",
+                    "filing_url": None,
+                    "accepted_date": None,
+                }
+            ]
+        ),
+    )
+
+    response = TestClient(app).get("/openbb/filings/TEST", headers={"X-API-Key": "test-key"})
+
+    assert response.status_code == 200
+    assert response.json()["items"][0]["report_type"] == "10-K"

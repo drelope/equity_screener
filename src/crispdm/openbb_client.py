@@ -526,3 +526,115 @@ def stock_summary(symbol):
         logger.warning("yfinance quote lookup failed for %s: %s", symbol, exc)
 
     return data
+
+
+#: FMP financial statement types mapped to the OpenBB command path returning each.
+FMP_STATEMENT_COMMANDS = {
+    "income": ("equity", "fundamental", "income"),
+    "balance": ("equity", "fundamental", "balance"),
+    "cash": ("equity", "fundamental", "cash"),
+}
+
+#: FMP's discounted-cash-flow endpoint. OpenBB 4.7.2 exposes no DCF command in any
+#: provider, so the estimate is read directly, the same pattern as
+#: ``_fmp_rest_dividends``.
+FMP_DCF_URL = "https://financialmodelingprep.com/stable/discounted-cash-flow"
+
+
+def _has_fmp_key():
+    """True when an FMP key is loaded on the OpenBB session."""
+    return bool(_fmp_key())
+
+
+def _fmp_provider():
+    """The provider to pin for an explicit FMP call; an explicit setting still wins."""
+    return settings.openbb_provider or "fmp"
+
+
+def _number(value):
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return None if pd.isna(number) else number
+
+
+def financial_statements(symbol, statement="income", limit=None):
+    """Reported income, balance-sheet or cash-flow statement from FMP.
+
+    ``statement`` is one of ``income``, ``balance`` or ``cash`` (the keys of
+    ``FMP_STATEMENT_COMMANDS``). Returns one row per fiscal period with FMP's
+    snake_case column names. Each call is paced by ``_fmp_throttle`` so a
+    full-universe run stays under FMP's per-minute budget.
+    """
+    try:
+        path = FMP_STATEMENT_COMMANDS[statement]
+    except KeyError:
+        raise ValueError(
+            f"unknown FMP statement {statement!r}; expected one of {sorted(FMP_STATEMENT_COMMANDS)}"
+        ) from None
+    target = obb
+    for part in path:
+        target = getattr(target, part)
+    kw = {"symbol": symbol, "provider": _fmp_provider()}
+    if limit:
+        kw["limit"] = limit
+    _fmp_throttle()
+    return _df(target(**kw))
+
+
+def discounted_cash_flow(symbol, opener=None):
+    """FMP's own discounted-cash-flow estimate for one symbol.
+
+    OpenBB 4.7.2 has no DCF command in any provider, so the estimate is read from
+    FMP directly, paced and retried on a 429 like ``_fmp_rest_dividends``. Returns
+    a dict with ``as_of_date``, ``dcf``, ``stock_price`` and ``reported_currency``,
+    or None when no FMP key is configured or FMP cannot be read, so a caller can
+    tell "no estimate" from "no key".
+    """
+    key = _fmp_key()
+    if not key:
+        return None
+    url = f"{FMP_DCF_URL}?{urlencode({'symbol': symbol, 'apikey': key})}"
+    opener = opener or urlopen
+    payload = None
+    for attempt in range(FMP_RATE_LIMIT_RETRIES + 1):
+        _fmp_throttle()
+        try:
+            with opener(url, timeout=30) as response:
+                payload = json.load(response)
+            break
+        except HTTPError as exc:
+            if exc.code != 429 or attempt == FMP_RATE_LIMIT_RETRIES:
+                logger.debug("FMP DCF HTTP %s for %s", exc.code, symbol)
+                return None
+            time.sleep(60)
+        except OSError as exc:
+            logger.debug("FMP DCF unreachable for %s: %s", symbol, exc)
+            return None
+    if not isinstance(payload, (list, dict)):
+        return None
+    rows = payload if isinstance(payload, list) else [payload]
+    row = rows[0] if rows else {}
+    as_of = pd.to_datetime(row.get("date"), errors="coerce")
+    return {
+        "as_of_date": None if pd.isna(as_of) else as_of.date(),
+        "dcf": _number(row.get("dcf")),
+        "stock_price": _number(row.get("Stock Price", row.get("stock_price"))),
+        "reported_currency": row.get("reported_currency") or row.get("currency"),
+    }
+
+
+def filings(symbol, limit=None):
+    """FMP's company filings for one symbol.
+
+    A second SEC-filings source alongside the direct SEC submissions already stored
+    in ``raw.sec_submissions``; the ``provider`` column records which one answered.
+    Returns FMP's columns (``filing_date``, ``report_type``, ``report_url``,
+    ``filing_url``, ``accepted_date``).
+    """
+    kw = {"symbol": symbol, "provider": _fmp_provider()}
+    if limit:
+        kw["limit"] = limit
+    _fmp_throttle()
+    return _df(obb.equity.fundamental.filings(**kw))

@@ -171,6 +171,18 @@ def _cik(ticker: str) -> int:
     return int(entry["cik_str"])
 
 
+def _security_id(ticker: str) -> str:
+    """The active reference.securities id for a ticker, or 404 when unknown."""
+    frame = read_df(
+        "SELECT security_id FROM reference.securities "
+        "WHERE upper(ticker) = :ticker AND active = TRUE LIMIT 1",
+        {"ticker": ticker},
+    )
+    if frame.empty:
+        raise HTTPException(status_code=404, detail=f"No active security for {ticker}")
+    return str(frame.iloc[0]["security_id"])
+
+
 def _openbb_call(*paths: str, ticker: str) -> list[dict[str, Any]]:
     target: Any = openbb_client.obb
     try:
@@ -359,6 +371,70 @@ def fundamentals(ticker: str) -> dict[str, Any]:
     ratios_data = ratios(ticker)["items"]
     valuation_data = valuation(ticker)["items"]
     return {"ticker": ticker, "ratios": ratios_data, "valuation": valuation_data}
+
+
+@app.get("/openbb/statements/{ticker}", dependencies=[Depends(require_api_key)])
+def openbb_statements(
+    ticker: str,
+    statement: str = Query(
+        default="income",
+        pattern="^(income|balance|cash)$",
+        description="FMP statement type: income, balance or cash.",
+    ),
+    limit: int = Query(default=10, ge=1, le=100),
+) -> dict[str, Any]:
+    """FMP statements for one ticker: stored rows, or a live read when none are stored."""
+    ticker = _ticker(ticker)
+    security_id = _security_id(ticker)
+    frame = read_df(
+        "SELECT period_end, fiscal_period, fiscal_year, filing_date, reported_currency, metrics "
+        "FROM raw.fmp_statements WHERE security_id = CAST(:sid AS uuid) "
+        "AND statement = :statement "
+        "ORDER BY period_end DESC, filing_date DESC LIMIT :limit",
+        {"sid": security_id, "statement": statement, "limit": limit},
+    )
+    if frame.empty:
+        return {
+            "ticker": ticker,
+            "statement": statement,
+            "items": _records(openbb_client.financial_statements(ticker, statement, limit)),
+        }
+    return {"ticker": ticker, "statement": statement, "items": _records(frame)}
+
+
+@app.get("/openbb/dcf/{ticker}", dependencies=[Depends(require_api_key)])
+def openbb_dcf(ticker: str) -> dict[str, Any]:
+    """FMP's discounted-cash-flow estimate: the stored vintage, or a live read."""
+    ticker = _ticker(ticker)
+    security_id = _security_id(ticker)
+    frame = read_df(
+        "SELECT as_of_date, dcf, stock_price, reported_currency FROM raw.fmp_dcf "
+        "WHERE security_id = CAST(:sid AS uuid) ORDER BY as_of_date DESC LIMIT 1",
+        {"sid": security_id},
+    )
+    if not frame.empty:
+        return {"ticker": ticker, "items": _records(frame)}
+    live = openbb_client.discounted_cash_flow(ticker)
+    return {"ticker": ticker, "items": [live] if live else []}
+
+
+@app.get("/openbb/filings/{ticker}", dependencies=[Depends(require_api_key)])
+def openbb_filings(ticker: str, limit: int = Query(default=100, ge=1, le=1000)) -> dict[str, Any]:
+    """FMP company filings: stored rows, or a live read when none are stored."""
+    ticker = _ticker(ticker)
+    security_id = _security_id(ticker)
+    frame = read_df(
+        "SELECT filing_date, report_type, report_url, filing_url, accepted_date "
+        "FROM raw.fmp_filings WHERE security_id = CAST(:sid AS uuid) "
+        "ORDER BY filing_date DESC LIMIT :limit",
+        {"sid": security_id, "limit": limit},
+    )
+    if frame.empty:
+        return {
+            "ticker": ticker,
+            "items": _records(openbb_client.filings(ticker, limit=limit)),
+        }
+    return {"ticker": ticker, "items": _records(frame)}
 
 
 @app.get("/metrics/enriched/{ticker}", dependencies=[Depends(require_api_key)])

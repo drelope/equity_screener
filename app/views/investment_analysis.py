@@ -17,7 +17,13 @@ from sqlalchemy.exc import SQLAlchemyError
 from app import analysis_schema as schema
 from app import llm_client, ui
 from app.views.screener import SELECTED_KEY
-from app.views.security import feature_section, financials_section, profile, score_section
+from app.views.security import (
+    feature_section,
+    financials_section,
+    fmp_section,
+    profile,
+    score_section,
+)
 from src.crispdm.analysis import store
 from src.crispdm.config import settings
 
@@ -213,13 +219,15 @@ def _context(info: pd.Series) -> None:
             "Read-only inputs for steps 9-13: engineered features, score history, "
             "point-in-time ratios and reported fundamentals."
         )
-        tabs = st.tabs(["Features", "Scores", "Ratios"])
+        tabs = st.tabs(["Features", "Scores", "Ratios", "FMP"])
         with tabs[0]:
             feature_section(info.security_id)
         with tabs[1]:
             score_section(info.security_id)
         with tabs[2]:
             financials_section(info.security_id)
+        with tabs[3]:
+            fmp_section(info.security_id)
 
 
 def _context_markdown(info: pd.Series) -> str:
@@ -295,11 +303,62 @@ def _context_markdown(info: pd.Series) -> str:
                 f"{_context_number(row.get('net_income'))}, FCF "
                 f"{_context_number(row.get('free_cash_flow'))}"
             )
+    fmp = ui.query(
+        "SELECT statement, period_end, fiscal_period, metrics FROM raw.fmp_statements "
+        "WHERE security_id = CAST(:sid AS uuid) "
+        "ORDER BY statement, period_end DESC, filing_date DESC",
+        {"sid": info.security_id},
+    )
+    if not fmp.empty:
+        lines += ["", "## FMP reported statements (supporting, not a model input)"]
+        for _, row in fmp.drop_duplicates(subset=["statement"], keep="first").iterrows():
+            metrics = row["metrics"] or {}
+            detail = ", ".join(
+                f"{label} {_context_number(metrics.get(key))}"
+                for key, label in _FMP_CONTEXT_METRICS.get(row["statement"], ())
+            )
+            lines.append(
+                f"- {row['statement'].title()} {row['period_end']} "
+                f"({row['fiscal_period']}): {detail}"
+            )
+    dcf = ui.query(
+        "SELECT as_of_date, dcf, stock_price FROM raw.fmp_dcf "
+        "WHERE security_id = CAST(:sid AS uuid) ORDER BY as_of_date DESC LIMIT 1",
+        {"sid": info.security_id},
+    )
+    if not dcf.empty:
+        row = dcf.iloc[0]
+        margin = ""
+        if pd.notna(row["dcf"]) and pd.notna(row["stock_price"]) and float(row["stock_price"]):
+            margin = f" (margin of safety {float(row['dcf']) / float(row['stock_price']) - 1:.1%})"
+        lines.append(
+            f"- FMP DCF {row['as_of_date']}: intrinsic {_context_number(row['dcf'])}{margin}"
+        )
     return "\n".join(lines)
 
 
 _PERCENT_FEATURES = {"dividend_yield", "dividend_growth", "earnings_payout", "fcf_payout"}
 _PERCENT_RATIOS = {"gross_margin", "operating_margin", "net_margin", "fcf_margin", "earnings_yield"}
+#: The FMP statement line items the draft prompt shows, per statement type. Kept to
+#: the few figures the worksheet's company deep-dive and valuation steps read.
+_FMP_CONTEXT_METRICS = {
+    "income": (
+        ("revenue", "revenue"),
+        ("gross_profit", "gross profit"),
+        ("total_operating_income", "operating income"),
+        ("bottom_line_net_income", "net income"),
+    ),
+    "balance": (
+        ("total_assets", "assets"),
+        ("total_liabilities", "liabilities"),
+        ("total_debt", "debt"),
+        ("total_equity_non_controlling_interests", "equity"),
+    ),
+    "cash": (
+        ("operating_cash_flow", "operating cash flow"),
+        ("free_cash_flow", "free cash flow"),
+    ),
+}
 
 
 def _context_number(value, *, percent: bool = False) -> str:
@@ -328,10 +387,10 @@ def _generate_section(info: pd.Series) -> None:
                 f"The configured endpoint ({settings.llm_endpoint}) is not localhost; "
                 "generating sends the warehouse context off this machine."
             )
-            allow_remote = st.checkbox("Send context to this non-local endpoint", key="ia_llm_remote")
-        if not st.button(
-            "Generate", key="ia_llm_generate", disabled=not ui.controls_enabled()
-        ):
+            allow_remote = st.checkbox(
+                "Send context to this non-local endpoint", key="ia_llm_remote"
+            )
+        if not st.button("Generate", key="ia_llm_generate", disabled=not ui.controls_enabled()):
             return
         try:
             with st.spinner("Asking the local model for a draft..."):
@@ -411,9 +470,7 @@ def _save_actions(info: pd.Series, payload: dict) -> None:
     try:
         if current:
             existed = _write(
-                lambda conn: store.update(
-                    conn, current, updated_by=operator, reopen=reopen, **args
-                )
+                lambda conn: store.update(conn, current, updated_by=operator, reopen=reopen, **args)
             )
             if not existed:
                 # Deleted between the existence check and the write.

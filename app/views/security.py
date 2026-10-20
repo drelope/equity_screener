@@ -676,6 +676,96 @@ def fundamentals_section(security_id: str) -> None:
     )
 
 
+FMP_STATEMENT_LABELS = {
+    "income": (
+        ("revenue", "Revenue"),
+        ("gross_profit", "Gross profit"),
+        ("total_operating_income", "Operating income"),
+        ("bottom_line_net_income", "Net income"),
+        ("diluted_earnings_per_share", "Diluted EPS"),
+    ),
+    "balance": (
+        ("cash_and_cash_equivalents", "Cash"),
+        ("total_current_assets", "Current assets"),
+        ("total_assets", "Total assets"),
+        ("total_current_liabilities", "Current liabilities"),
+        ("total_liabilities", "Total liabilities"),
+        ("total_debt", "Total debt"),
+        ("total_equity_non_controlling_interests", "Total equity"),
+    ),
+    "cash": (
+        ("operating_cash_flow", "Operating cash flow"),
+        ("capital_expenditure", "Capex"),
+        ("free_cash_flow", "Free cash flow"),
+        ("common_dividends_paid", "Common dividends"),
+        ("repurchase_of_common_equity", "Buybacks"),
+    ),
+}
+
+
+def _fmp_metric_text(value) -> str:
+    """A statement line item: cents for per-share figures, compact dollars otherwise."""
+    if not _present(value):
+        return "N/A"
+    value = float(value)
+    if abs(value) < 1000:
+        return f"${value:,.2f}"
+    return _fmt_market_cap(value)
+
+
+def fmp_section(security_id: str) -> None:
+    """FMP supporting fundamentals: latest statement per type, the DCF estimate, filings.
+
+    Read from raw.fmp_* (gathered by scripts.populate_fmp_fundamentals). Supporting
+    data for the worksheet, never a model input, so a blank here does not affect scoring.
+    """
+    st.subheader("FMP fundamentals")
+    df = ui.query(
+        "SELECT statement, period_end, fiscal_period, filing_date, metrics "
+        "FROM raw.fmp_statements WHERE security_id = CAST(:sid AS uuid) "
+        "ORDER BY statement, period_end DESC, filing_date DESC",
+        {"sid": security_id},
+    )
+    if df.empty:
+        st.caption("No FMP statements stored for this security.")
+    else:
+        latest = df.drop_duplicates(subset=["statement"], keep="first")
+        for _, row in latest.iterrows():
+            st.markdown(
+                f"**{str(row['statement']).title()}** — {row['period_end']} "
+                f"({row['fiscal_period']})"
+            )
+            metrics = row["metrics"] or {}
+            labels = FMP_STATEMENT_LABELS.get(row["statement"], ())
+            cells = st.columns(max(1, len(labels)))
+            for cell, (key, label) in zip(cells, labels):
+                cell.metric(label, _fmp_metric_text(metrics.get(key)))
+            st.write("")
+    dcf = ui.query(
+        "SELECT as_of_date, dcf, stock_price FROM raw.fmp_dcf "
+        "WHERE security_id = CAST(:sid AS uuid) ORDER BY as_of_date DESC LIMIT 1",
+        {"sid": security_id},
+    )
+    if not dcf.empty:
+        row = dcf.iloc[0]
+        margin = None
+        if _present(row["dcf"]) and _present(row["stock_price"]) and float(row["stock_price"]):
+            margin = float(row["dcf"]) / float(row["stock_price"]) - 1
+        st.markdown("**DCF (FMP)**")
+        left, right = st.columns(2)
+        left.metric("Intrinsic value", _fmp_metric_text(row["dcf"]))
+        right.metric("Margin of safety", "N/A" if margin is None else f"{margin:.1%}")
+    filings = ui.query(
+        "SELECT count(*) AS n, max(filing_date) AS latest FROM raw.fmp_filings "
+        "WHERE security_id = CAST(:sid AS uuid)",
+        {"sid": security_id},
+    )
+    if not filings.empty and filings.iloc[0]["n"]:
+        st.caption(
+            f"FMP filings: {int(filings.iloc[0]['n'])} stored, latest {filings.iloc[0]['latest']}"
+        )
+
+
 def recommendation_section(security_id: str) -> None:
     """The saved calls for this security, one row per change, newest first.
 
@@ -1003,7 +1093,15 @@ def render() -> None:
     issuer_section(info.cik, info.ticker)
 
     tabs = st.tabs(
-        ["Price", "Dividends", "Scores", "Features", "Financials", "Fundamentals", "Recommendations"]
+        [
+            "Price",
+            "Dividends",
+            "Scores",
+            "Features",
+            "Financials",
+            "Fundamentals",
+            "Recommendations",
+        ]
     )
     sid = info.security_id
     with tabs[0]:

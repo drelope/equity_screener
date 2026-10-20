@@ -485,3 +485,106 @@ def test_a_missing_or_broken_credentials_file_is_harmless(tmp_path):
 
     assert openbb_client.load_credentials(tmp_path / "absent.json", _credentials()) == []
     assert openbb_client.load_credentials(broken, _credentials()) == []
+
+
+def _fmp_tree(answers=None):
+    """Patch obb with the statement/filings commands; answers maps command -> frame/error."""
+    from types import SimpleNamespace
+
+    answers = answers or {}
+    calls = []
+
+    def make(name):
+        def call(**kwargs):
+            calls.append((name, kwargs))
+            answer = answers.get(name)
+            if isinstance(answer, Exception):
+                raise answer
+            return _Response(answer)
+
+        return call
+
+    fake = SimpleNamespace(
+        equity=SimpleNamespace(
+            fundamental=SimpleNamespace(
+                income=make("income"),
+                balance=make("balance"),
+                cash=make("cash"),
+                filings=make("filings"),
+            )
+        ),
+        user=SimpleNamespace(credentials=SimpleNamespace(fmp_api_key="k")),
+    )
+    return fake, calls
+
+
+def test_financial_statements_use_the_fmp_provider(monkeypatch):
+    fake, calls = _fmp_tree({"income": EVENTS})
+    monkeypatch.setattr(openbb_client, "obb", fake)
+    monkeypatch.setattr(openbb_client.settings, "openbb_provider", None)
+
+    frame = openbb_client.financial_statements("KO", statement="income", limit=3)
+
+    assert calls == [("income", {"symbol": "KO", "provider": "fmp", "limit": 3})]
+    assert not frame.empty
+
+
+def test_financial_statements_reject_an_unknown_type():
+    with pytest.raises(ValueError, match="unknown FMP statement"):
+        openbb_client.financial_statements("KO", statement="cashflow")
+
+
+def test_filings_use_the_fmp_provider(monkeypatch):
+    fake, calls = _fmp_tree({"filings": EVENTS})
+    monkeypatch.setattr(openbb_client, "obb", fake)
+    monkeypatch.setattr(openbb_client.settings, "openbb_provider", None)
+
+    openbb_client.filings("KO", limit=5)
+
+    assert calls == [("filings", {"symbol": "KO", "provider": "fmp", "limit": 5})]
+
+
+def test_discounted_cash_flow_reads_fmp_directly(monkeypatch):
+    import io
+    import json
+    from datetime import date
+
+    monkeypatch.setattr(openbb_client, "_fmp_key", lambda: "k")
+    monkeypatch.setattr(openbb_client, "_fmp_calls", openbb_client.deque())
+    urls = []
+
+    def opener(url, timeout):
+        urls.append(url)
+        return io.BytesIO(
+            json.dumps(
+                [{"symbol": "AAPL", "date": "2026-10-20", "dcf": 135.6, "Stock Price": 340.7}]
+            ).encode()
+        )
+
+    result = openbb_client.discounted_cash_flow("AAPL", opener=opener)
+
+    assert result == {
+        "as_of_date": date(2026, 10, 20),
+        "dcf": 135.6,
+        "stock_price": 340.7,
+        "reported_currency": None,
+    }
+    assert "symbol=AAPL" in urls[0] and "apikey=k" in urls[0]
+
+
+def test_discounted_cash_flow_without_a_key_returns_none(monkeypatch):
+    monkeypatch.setattr(openbb_client, "_fmp_key", lambda: None)
+    assert openbb_client.discounted_cash_flow("AAPL") is None
+
+
+def test_discounted_cash_flow_a_non_429_error_returns_none(monkeypatch):
+    import io
+    from urllib.error import HTTPError
+
+    monkeypatch.setattr(openbb_client, "_fmp_key", lambda: "k")
+    monkeypatch.setattr(openbb_client, "_fmp_calls", openbb_client.deque())
+
+    def opener(url, timeout):
+        raise HTTPError(url, 403, "Forbidden", {}, io.BytesIO(b""))
+
+    assert openbb_client.discounted_cash_flow("AAPL", opener=opener) is None

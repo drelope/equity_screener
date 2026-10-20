@@ -369,6 +369,12 @@ python -m scripts.populate_clean_ticker_profile
 # Epoch fields become UTC dates/timestamps; omitted compensation remains NULL.
 python -m scripts.populate_clean_company_profile
 
+# Stage 5e — Supporting fundamentals from FMP (financial statements, DCF
+# estimate, filings). Deliberately NOT a model feature source: `raw.fmp_*` is
+# supporting data for the analysis worksheet, and `fundamentals.periodic_financials`
+# stays SEC XBRL only. Requires an FMP key; skip with --skip-fmp-fundamentals.
+python -m scripts.populate_fmp_fundamentals
+
 # Stage 6 — Offline derived financials over stored XBRL (no network)
 python -m scripts.populate_fundamentals
 
@@ -940,6 +946,9 @@ The `c2_c3_leverage_exempt` tag marks `issue_type = EQUITY` and `sector_key = re
 | `raw.company_classification` | Compact per-CIK cache of `classify_companyfacts()`; persisted by stage 0 and consumed by stages 1/3 so the full companyfacts JSON is downloaded at most once per run | `cik` PK, `ticker`, `company_name`, `security_types` (JSONB), `security_facts` (JSONB), `dividend_facts` (JSONB), `dividend`, `status`, `content_hash` |
 | `raw.sec_submissions` | SEC submissions history, fetched once per issuer CIK | `cik` PK, `company_name`, `raw_payload` (JSONB), `content_hash`, `provider` |
 | `raw.sec_documents` | Extracted filing documents and per-security XBRL concept groups | `document_id` PK, `security_id` FK (one row per security), `accession_no`, `form_type`, `primary_document`, `concept_groups` (JSONB), `content_hash`, `raw_text`. Unique partial index `ux_sec_documents_security(security_id)`; `concept_groups` refreshed by `populate_sec_documents` |
+| `raw.fmp_statements` | FMP income/balance/cash statements via OpenBB's FMP provider (supporting data for the worksheet; never a model feature source) | PK `(security_id, statement, period_end, fiscal_period, filing_date)`, `fiscal_year`, `reported_currency`, `metrics` (JSONB), `content_hash` |
+| `raw.fmp_dcf` | FMP discounted-cash-flow estimate, read directly from FMP's REST API because OpenBB 4.7.2 has no DCF command; `dcf` is intrinsic value/share, `stock_price` the then-current quote (margin of safety = `dcf/stock_price - 1`) | PK `(security_id, as_of_date)`, `dcf`, `stock_price`, `reported_currency` |
+| `raw.fmp_filings` | FMP company-filings index, a second SEC-filings source alongside the direct SEC client | PK `(security_id, filing_date, report_type, report_url)`, `filing_url`, `accepted_date` |
 
 The issuer-level payload tables (`raw.companyfacts`, `raw.company_taxonomy`,
 `raw.sec_submissions`) are keyed by `cik`: the SEC submissions and companyfacts

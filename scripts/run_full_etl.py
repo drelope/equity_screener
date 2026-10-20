@@ -18,6 +18,8 @@ Stages (in dependency order):
     5c. populate_clean_ticker_profile -> clean.ticker_profile (one normalized CIK/ticker row)
     5d. populate_clean_company_profile -> clean.company_profile + clean.company_officer
                                          + clean.corporate_action
+    5e. populate_fmp_fundamentals -> raw.fmp_statements + raw.fmp_dcf + raw.fmp_filings
+                                     (FMP supporting data; skipped cleanly without an FMP key)
     6. populate_fundamentals     -> fundamentals.periodic_financials (offline, stored XBRL)
     7. build_features            -> model.features (offline, last --feature-days only)
     8. score_rank                -> model.scores + model.predictions + model.rankings
@@ -318,6 +320,14 @@ def main():
         "--skip-profiles", action="store_true", help="Do not refresh raw.ticker_profile in stage 3"
     )
     parser.add_argument(
+        "--skip-fmp-fundamentals",
+        action="store_true",
+        help="Skip stage 5e (raw.fmp_statements / raw.fmp_dcf / raw.fmp_filings). "
+        "Only safe when the FMP key is not configured or the analysis worksheet "
+        "is not used: these tables are supporting data, not a model input, so the "
+        "nightly still succeeds without them.",
+    )
+    parser.add_argument(
         "--run-labels",
         action="store_true",
         help="Stage 8: populate target_sustainable_dividend from future dividend "
@@ -417,6 +427,9 @@ def main():
     contract_terms_args = list(base)
     if args.limit is not None:
         contract_terms_args += ["--max", str(args.limit)]
+    fmp_fundamentals_args = list(base)
+    if args.limit is not None:
+        fmp_fundamentals_args += ["--limit", str(args.limit)]
 
     started_at = datetime.now(timezone.utc)
     stages = {}
@@ -594,6 +607,18 @@ def main():
             all_ok = False
 
         if all_ok and not stage("scripts.populate_clean_company_profile", []):
+            all_ok = False
+
+        # Stage 5e: FMP supporting fundamentals (statements, DCF, filings). Runs
+        # after the reference/clean stages so every target security exists, and
+        # before the derived stages because it is provider data, not derived. It
+        # is a supporting-data stage: without an FMP key it skips cleanly and the
+        # nightly still succeeds.
+        if all_ok and not stage(
+            "scripts.populate_fmp_fundamentals",
+            fmp_fundamentals_args,
+            args.skip_fmp_fundamentals,
+        ):
             all_ok = False
 
         if all_ok and not stage("scripts.populate_fundamentals", [], args.skip_derived):
