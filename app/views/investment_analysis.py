@@ -406,6 +406,41 @@ def _generate_section(info: pd.Series) -> None:
         st.rerun()
 
 
+def _autofill_section(info: pd.Series) -> None:
+    """Fill steps 1-18 from OpenBB data (FMP first, then yfinance); never saves."""
+    with st.expander("Auto-complete from FMP / yfinance", expanded=False):
+        st.caption(
+            "Fill every worksheet field from reported company data and analyst estimates. "
+            "FMP is tried first and yfinance is used where FMP is unavailable. The values "
+            "are deterministic heuristics over that data, not forecasts: each step's "
+            "Sources field names the endpoints, and Data quality lists what could not be "
+            "read. The result is placed in the form for review and is never saved."
+        )
+        if not ui.controls_enabled():
+            ui.require_controls_note()
+        if not st.button(
+            "Auto-complete",
+            key="ia_autofill",
+            disabled=not ui.controls_enabled(),
+        ):
+            return
+        from app import analysis_autofill as autofill  # local: imports OpenBB, so on demand
+
+        try:
+            with st.spinner("Reading FMP, then yfinance..."):
+                data = autofill.fetch_company(info.ticker)
+                payload = autofill.build_payload(info.ticker, data, macro=autofill.load_macro())
+        except Exception as exc:  # noqa: BLE001 - show the failure, keep the form usable
+            st.error(f"Not auto-completed ({type(exc).__name__}): {exc}")
+            return
+        _hydrate(payload)
+        st.session_state[FLASH_KEY] = (
+            "Auto-completed the worksheet from FMP/yfinance; review every heuristic before "
+            "saving. Nothing has been written."
+        )
+        st.rerun()
+
+
 def _summary_row(payload: dict) -> tuple[int, int]:
     filled, total = schema.completion(payload)
     st.progress(
@@ -585,6 +620,7 @@ def render() -> None:
 
     _sidebar(info)
     _context(info)
+    _autofill_section(info)
     _generate_section(info)
 
     payload = _payload_from_state()

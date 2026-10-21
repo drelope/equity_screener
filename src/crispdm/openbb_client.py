@@ -677,6 +677,69 @@ def filings(symbol, limit=None):
     return _df(obb.equity.fundamental.filings(**kw))
 
 
+# --- Equity data for the investment-analysis autofill ------------------------------
+#
+# The worksheet's "Auto-complete" control reads the same profile/fundamental/estimate
+# commands an analyst would inspect, trying FMP first and yfinance where that provider
+# implements the command. Each command is pinned to the provider being tried, so a
+# missing FMP key or a premium-only FMP endpoint degrades to Yahoo instead of failing
+# the whole worksheet.
+
+#: Autofill command -> (OpenBB path, providers that implement it, in preference order).
+EQUITY_COMMANDS = {
+    "profile": (("equity", "profile"), ("fmp", "yfinance")),
+    "consensus": (("equity", "estimates", "consensus"), ("fmp", "yfinance")),
+    "price_target": (("equity", "estimates", "price_target"), ("fmp",)),
+    "ratios": (("equity", "fundamental", "ratios"), ("fmp",)),
+    "metrics": (("equity", "fundamental", "metrics"), ("fmp",)),
+    "income": (("equity", "fundamental", "income"), ("fmp", "yfinance")),
+    "balance": (("equity", "fundamental", "balance"), ("fmp", "yfinance")),
+    "cash": (("equity", "fundamental", "cash"), ("fmp", "yfinance")),
+    "insider": (("equity", "ownership", "insider_trading"), ("fmp",)),
+    "peers": (("equity", "compare", "peers"), ("fmp",)),
+    "quote": (("equity", "price", "quote"), ("fmp", "yfinance")),
+    "prices": (("equity", "price", "historical"), ("fmp", "yfinance")),
+}
+
+
+def equity_command(command, symbol, **kwargs):
+    """Read one equity command from the first provider that returns data.
+
+    Returns ``(provider, frame)`` so the caller can record provenance. ``command`` is a
+    key of :data:`EQUITY_COMMANDS`; an explicit ``OPENBB_PROVIDER`` setting still pins a
+    single provider. Raises the last provider error only when every provider fails, so a
+    premium-only FMP endpoint falls through to yfinance rather than aborting the run.
+    """
+    try:
+        path, providers = EQUITY_COMMANDS[command]
+    except KeyError:
+        raise ValueError(
+            f"unknown equity command {command!r}; expected one of {sorted(EQUITY_COMMANDS)}"
+        ) from None
+    if settings.openbb_provider:
+        providers = (settings.openbb_provider,)
+    target = obb
+    for part in path:
+        target = getattr(target, part)
+    last_error = None
+    for provider in providers:
+        if provider == "fmp":
+            _fmp_throttle()
+        try:
+            frame = _df(target(symbol=symbol, provider=provider, **kwargs))
+        except Exception as exc:  # noqa: BLE001 - try the next provider
+            last_error = exc
+            logger.debug("%s %s failed for %s: %s", command, provider, symbol, exc)
+            continue
+        if frame is not None and not frame.empty:
+            frame = frame.copy()
+            frame.attrs["provider"] = provider
+            return provider, frame
+    if last_error is not None:
+        raise last_error
+    return providers[-1], pd.DataFrame()
+
+
 # --- Macro economic inputs (docs/GlobalMacroStrategy.md) ---------------------------
 #
 # The provider is pinned to "fmp"/"fred" rather than honoring an explicit

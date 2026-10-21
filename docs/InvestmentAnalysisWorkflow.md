@@ -430,6 +430,30 @@ Final recommendation is still governed by the normal on-save rules. Configure it
 `LLM_ENABLED`, `LLM_ENDPOINT`, `LLM_MODEL` and the related `LLM_*` settings; a non-localhost
 endpoint needs an explicit opt-in checkbox before any context is sent.
 
+### Data autofill (FMP, then yfinance)
+
+The **Auto-complete from FMP / yfinance** panel (`app/analysis_autofill.py`) fills every
+field in steps 1-18 from OpenBB data. It tries FMP first and falls back to yfinance where
+FMP does not implement the command or returns nothing, so a missing key or a premium-only
+endpoint degrades instead of blocking the worksheet. The commands read are the company
+profile and quote, analyst consensus and price targets, financial ratios and key metrics,
+the income/balance/cash-flow statements, insider transactions, the peer set and four years
+of price history.
+
+The values are deterministic heuristics over that reported data, not forecasts. Forward
+FY revenue and EPS are derived by holding the latest reported growth rate when live forward
+estimates are unavailable (FMP's are premium-only, and yfinance's consensus has no forward
+revenue or EPS figures).
+The historical-analog table uses the security's own prior 12M windows rather than a peer
+sample. Each step's **Sources** field names the provider that answered every command, and
+the final **Data quality** note lists anything that failed, so inferred values are not
+mistaken for observations.
+
+The panel requires the operator token and only ever places a payload in the form: it
+never writes to the warehouse. The returned worksheet passes `validate` (including the
+steps 1-17 gate), but every heuristic must be reviewed and edited before the call is saved
+as a Final.
+
 ---
 
 *This document mirrors `app/analysis_schema.py`; keep both in sync.*

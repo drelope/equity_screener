@@ -1124,3 +1124,40 @@ def test_a_token_that_is_too_short_never_enables_the_controls(monkeypatch):
     at = shell().run()
     assert any("Controls are off" in c.value for c in at.sidebar.caption)
     assert not at.sidebar.button
+
+
+def test_auto_complete_prefills_the_form_without_saving(with_token, monkeypatch):
+    from app import analysis_autofill as autofill
+    from app import analysis_schema as schema
+
+    payload = schema.empty_payload()
+    payload["sections"]["universe"]["universe_filters"] = "Auto-generated universe filter"
+    monkeypatch.setattr(
+        autofill, "fetch_company", lambda ticker: autofill.CompanyData(ticker=ticker)
+    )
+    monkeypatch.setattr(autofill, "build_payload", lambda ticker, data, macro=None: payload)
+    monkeypatch.setattr(autofill, "load_macro", lambda: {})
+
+    at = page("investment_analysis", operator=True).run()
+    assert not at.exception, [e.value for e in at.exception]
+
+    button(at, "Auto-complete").click().run()
+    assert not at.exception, [e.value for e in at.exception]
+    assert any("Auto-completed" in flash.value for flash in at.success)
+
+    prefilled = next(w for w in at.text_input if w.key == "ia__universe__universe_filters")
+    assert prefilled.value == "Auto-generated universe filter"
+
+    with engine.connect() as conn:
+        count = conn.execute(
+            text("SELECT count(*) FROM analysis.investment_analyses WHERE created_by = :o"),
+            {"o": OPERATOR},
+        ).scalar()
+    assert count == 0, "auto-complete must never save"
+
+
+def test_auto_complete_is_off_without_the_operator_token(without_token):
+    at = page("investment_analysis").run()
+
+    assert not at.exception, [e.value for e in at.exception]
+    assert button(at, "Auto-complete").disabled
