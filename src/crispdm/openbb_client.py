@@ -683,7 +683,8 @@ def filings(symbol, limit=None):
 # commands an analyst would inspect, trying FMP first and yfinance where that provider
 # implements the command. Each command is pinned to the provider being tried, so a
 # missing FMP key or a premium-only FMP endpoint degrades to Yahoo instead of failing
-# the whole worksheet.
+# the whole worksheet. Options chains and the VIX/VIX3M history are supporting data
+# only: no installed FMP provider implements them, so they are yfinance-only.
 
 #: Autofill command -> (OpenBB path, providers that implement it, in preference order).
 EQUITY_COMMANDS = {
@@ -699,16 +700,19 @@ EQUITY_COMMANDS = {
     "peers": (("equity", "compare", "peers"), ("fmp",)),
     "quote": (("equity", "price", "quote"), ("fmp", "yfinance")),
     "prices": (("equity", "price", "historical"), ("fmp", "yfinance")),
+    "options": (("derivatives", "options", "chains"), ("yfinance",)),
+    "index_prices": (("equity", "price", "historical"), ("yfinance",)),
 }
 
 
 def equity_command(command, symbol, **kwargs):
-    """Read one equity command from the first provider that returns data.
+    """Read one autofill command from the first provider that returns data.
 
     Returns ``(provider, frame)`` so the caller can record provenance. ``command`` is a
-    key of :data:`EQUITY_COMMANDS`; an explicit ``OPENBB_PROVIDER`` setting still pins a
-    single provider. Raises the last provider error only when every provider fails, so a
-    premium-only FMP endpoint falls through to yfinance rather than aborting the run.
+    key of :data:`EQUITY_COMMANDS`; an explicit ``OPENBB_PROVIDER`` setting pins a single
+    provider when that provider implements the command. Raises the last provider error
+    only when every provider fails, so a premium-only FMP endpoint falls through to
+    yfinance rather than aborting the run.
     """
     try:
         path, providers = EQUITY_COMMANDS[command]
@@ -716,7 +720,7 @@ def equity_command(command, symbol, **kwargs):
         raise ValueError(
             f"unknown equity command {command!r}; expected one of {sorted(EQUITY_COMMANDS)}"
         ) from None
-    if settings.openbb_provider:
+    if settings.openbb_provider and settings.openbb_provider in providers:
         providers = (settings.openbb_provider,)
     target = obb
     for part in path:

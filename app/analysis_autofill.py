@@ -47,16 +47,21 @@ class CompanyData:
     peers: list[dict] = field(default_factory=list)
     price_target: list[dict] = field(default_factory=list)
     prices: list[dict] = field(default_factory=list)
+    options: list[dict] = field(default_factory=list)
+    index_options: list[dict] = field(default_factory=list)
+    vix_term: dict = field(default_factory=dict)
+    options_requested: bool = False
     providers: dict[str, str] = field(default_factory=dict)
     failures: dict[str, str] = field(default_factory=dict)
 
 
-def fetch_company(ticker, *, command=None, today=None) -> CompanyData:
+def fetch_company(ticker, *, command=None, today=None, include_options=False) -> CompanyData:
     """Read every command the worksheet autofill needs for ``ticker``.
 
     ``command`` is injectable for tests (``client.equity_command`` by default). A command
     that fails is recorded in ``failures`` and the rest of the worksheet still builds, so
-    one premium-only endpoint cannot block steps 1-17.
+    one premium-only endpoint cannot block steps 1-17. Options positioning is opt-in:
+    it adds a chain read plus SPY/VIX proxies and never changes the recommendation.
     """
     command = command or client.equity_command
     today = pd.Timestamp(today or pd.Timestamp.now()).normalize()
@@ -94,6 +99,45 @@ def fetch_company(ticker, *, command=None, today=None) -> CompanyData:
         data.prices = _price_rows(rows)
     elif error:
         data.failures["prices"] = error
+
+    if include_options:
+        data.options_requested = True
+        provider, rows, error = _read(command, "options", ticker)
+        if provider is not None:
+            data.providers["options"] = provider
+            data.options = rows
+        elif error:
+            data.failures["options"] = error
+
+        provider, rows, error = _read(command, "options", "SPY")
+        if provider is not None:
+            data.providers["index_options"] = provider
+            data.index_options = rows
+        elif error:
+            data.failures["index_options"] = error
+
+        closes = {}
+        for symbol, key in (("^VIX", "vix"), ("^VIX3M", "vix3m")):
+            provider, rows, error = _read(
+                command,
+                "index_prices",
+                symbol,
+                start_date=str((today - pd.Timedelta(days=30)).date()),
+                end_date=str(today.date()),
+            )
+            if provider is not None:
+                prices = _price_rows(rows)
+                if prices:
+                    data.providers[f"index_{key}"] = provider
+                    closes[key] = prices[-1]
+            elif error:
+                data.failures[f"index_{key}"] = error
+        if "vix" in closes and "vix3m" in closes:
+            data.vix_term = {
+                "vix": closes["vix"]["close"],
+                "vix3m": closes["vix3m"]["close"],
+                "as_of": str(closes["vix"]["date"].date()),
+            }
     return data
 
 
@@ -138,6 +182,329 @@ def _price_rows(rows) -> list[dict]:
         if date is not None and close is not None:
             prices.append({"date": pd.Timestamp(date), "close": close})
     return sorted(prices, key=lambda item: item["date"])
+
+
+# --- options positioning (opt-in, supporting evidence only) ------------------------
+
+OPTIONS_NOT_REQUESTED = (
+    "Not requested (enable options positioning before auto-completing the worksheet)."
+)
+OPTIONS_UNAVAILABLE = "N/A - no options data was returned for this security."
+
+
+def _option_contracts(rows, today, *, min_dte=7, max_dte=120) -> list[dict]:
+    """Normalise an OpenBB options chain, dropping the contracts that distort metrics."""
+    contracts = []
+    for row in rows or []:
+        kind = str(row.get("option_type") or "").strip().lower()
+        if kind not in ("call", "put"):
+            continue
+        expiry = pd.to_datetime(row.get("expiration"), errors="coerce")
+        dte = _num(row.get("dte"))
+        if dte is None and not pd.isna(expiry):
+            dte = (expiry.normalize() - today).days
+        if dte is None:
+            continue
+        dte = int(dte)
+        if not min_dte <= dte <= max_dte:
+            continue
+        strike = _num(row.get("strike"))
+        if strike is None or strike <= 0:
+            continue
+        iv = _num(row.get("implied_volatility"))
+        # yfinance returns implausible values (often > 100%) for same-day contracts.
+        if iv is not None and not 0.01 <= iv <= 3.0:
+            iv = None
+        bid, ask = _num(row.get("bid")), _num(row.get("ask"))
+        mid = (bid + ask) / 2 if bid and ask and ask >= bid > 0 else None
+        contracts.append(
+            {
+                "is_call": kind == "call",
+                "dte": dte,
+                "expiry": None if pd.isna(expiry) else expiry.date(),
+                "strike": strike,
+                "iv": iv,
+                "bid": bid,
+                "ask": ask,
+                "mid": mid,
+                "last": _num(row.get("last_trade_price")),
+                "volume": _num(row.get("volume")) or 0.0,
+                "oi": _num(row.get("open_interest")) or 0.0,
+                "underlying": _num(row.get("underlying_price")),
+            }
+        )
+    return contracts
+
+
+def _median(values):
+    values = sorted(value for value in values if value is not None)
+    if not values:
+        return None
+    middle = len(values) // 2
+    if len(values) % 2:
+        return values[middle]
+    return (values[middle - 1] + values[middle]) / 2
+
+
+def _put_call_ratio(contracts):
+    near = [contract for contract in contracts if contract["dte"] <= 60] or contracts
+    calls = [contract for contract in near if contract["is_call"]]
+    puts = [contract for contract in near if not contract["is_call"]]
+    call_volume = sum(contract["volume"] for contract in calls)
+    put_volume = sum(contract["volume"] for contract in puts)
+    call_oi = sum(contract["oi"] for contract in calls)
+    put_oi = sum(contract["oi"] for contract in puts)
+    return (
+        put_volume / call_volume if call_volume else None,
+        put_oi / call_oi if call_oi else None,
+    )
+
+
+def _expiries(contracts):
+    return sorted({contract["dte"] for contract in contracts})
+
+
+def _front_back(contracts):
+    dtes = _expiries(contracts)
+    if not dtes:
+        return None, None
+    front = dtes[0]
+    back = min(dtes, key=lambda dte: abs(dte - 90))
+    if back <= front:
+        back = dtes[-1] if dtes[-1] > front else None
+    return front, back
+
+
+def _atm_iv(contracts, dte, spot):
+    group = [
+        contract for contract in contracts if contract["dte"] == dte and contract["iv"] is not None
+    ]
+    if not group or spot is None or spot <= 0:
+        return None
+    strike = min({contract["strike"] for contract in group}, key=lambda value: abs(value - spot))
+    ivs = [contract["iv"] for contract in group if contract["strike"] == strike]
+    return sum(ivs) / len(ivs) if ivs else None
+
+
+def _atm_straddle(contracts, dte, spot):
+    group = [contract for contract in contracts if contract["dte"] == dte]
+    if not group or spot is None or spot <= 0:
+        return None
+    strike = min({contract["strike"] for contract in group}, key=lambda value: abs(value - spot))
+    prices = []
+    for is_call in (True, False):
+        leg = [
+            contract
+            for contract in group
+            if contract["strike"] == strike and contract["is_call"] == is_call
+        ]
+        if not leg:
+            return None
+        price = leg[0]["mid"] if leg[0]["mid"] is not None else leg[0]["last"]
+        if price is None:
+            return None
+        prices.append(price)
+    return sum(prices)
+
+
+def _norm_cdf(value):
+    return 0.5 * (1.0 + math.erf(value / math.sqrt(2.0)))
+
+
+def _option_delta(contract, spot, rate):
+    iv = contract["iv"]
+    if iv is None or spot is None or spot <= 0 or contract["strike"] <= 0:
+        return None
+    years = max(contract["dte"], 1) / 365.0
+    volatility = iv * math.sqrt(years)
+    if volatility <= 0:
+        return None
+    d1 = (math.log(spot / contract["strike"]) + (rate + 0.5 * iv * iv) * years) / volatility
+    return _norm_cdf(d1) if contract["is_call"] else _norm_cdf(d1) - 1.0
+
+
+def _skew(contracts, dte, spot, rate):
+    group = [
+        contract for contract in contracts if contract["dte"] == dte and contract["iv"] is not None
+    ]
+    puts = [
+        (contract, _option_delta(contract, spot, rate))
+        for contract in group
+        if not contract["is_call"]
+    ]
+    calls = [
+        (contract, _option_delta(contract, spot, rate)) for contract in group if contract["is_call"]
+    ]
+    puts = [(contract, delta) for contract, delta in puts if delta is not None]
+    calls = [(contract, delta) for contract, delta in calls if delta is not None]
+    if not puts or not calls:
+        return None, None, None
+    put, _ = min(puts, key=lambda item: abs(item[1] + 0.25))
+    call, _ = min(calls, key=lambda item: abs(item[1] - 0.25))
+    return put["iv"], call["iv"], put["iv"] - call["iv"]
+
+
+def _option_liquidity(contracts):
+    near = [contract for contract in contracts if contract["dte"] <= 60] or contracts
+    total_oi = sum(contract["oi"] for contract in near)
+    strikes = len({contract["strike"] for contract in near})
+    spreads = [
+        (contract["ask"] - contract["bid"]) / contract["mid"]
+        for contract in near
+        if contract["mid"]
+        and contract["bid"] is not None
+        and contract["ask"] is not None
+        and contract["ask"] > contract["bid"]
+    ]
+    return total_oi, strikes, _median(spreads)
+
+
+def _options_block(data, price, today, macro) -> dict:
+    """Options metrics as worksheet text.
+
+    The block is deliberately descriptive: it never feeds ``_risk``, ``_risk_score``,
+    ``_recommendation`` or the factor scores, so adding options cannot change the call.
+    """
+    if not data.options_requested:
+        blank = OPTIONS_NOT_REQUESTED
+        return {
+            "status": "Unavailable",
+            "macro_pcr": blank,
+            "macro_vix": blank,
+            "implied_move": blank,
+            "positioning": blank,
+            "iv": blank,
+            "skew": blank,
+            "term": blank,
+            "liquidity": blank,
+        }
+
+    contracts = _option_contracts(data.options, today)
+    index_contracts = _option_contracts(data.index_options, today)
+    index_pcr_volume, index_pcr_oi = _put_call_ratio(index_contracts)
+    if index_contracts:
+        macro_pcr = (
+            f"SPY proxy: {_decimal(index_pcr_volume)} volume PCR / "
+            f"{_decimal(index_pcr_oi)} open-interest PCR (contracts up to 60 DTE)."
+        )
+    else:
+        macro_pcr = "N/A - index options unavailable."
+
+    vix = _num(data.vix_term.get("vix"))
+    vix3m = _num(data.vix_term.get("vix3m"))
+    if vix is not None and vix3m is not None:
+        slope = vix3m - vix
+        shape = "contango" if slope > 0 else "backwardation" if slope < 0 else "flat"
+        macro_vix = (
+            f"VIX {vix:.2f} vs VIX3M {vix3m:.2f} ({slope:+.2f}; {shape}) as of "
+            f"{data.vix_term.get('as_of')}."
+        )
+    else:
+        macro_vix = "N/A - VIX/VIX3M history unavailable."
+
+    result = {
+        "status": "Unavailable",
+        "macro_pcr": macro_pcr,
+        "macro_vix": macro_vix,
+        "implied_move": OPTIONS_UNAVAILABLE,
+        "positioning": OPTIONS_UNAVAILABLE,
+        "iv": OPTIONS_UNAVAILABLE,
+        "skew": OPTIONS_UNAVAILABLE,
+        "term": OPTIONS_UNAVAILABLE,
+        "liquidity": OPTIONS_UNAVAILABLE,
+    }
+    if not contracts:
+        return result
+
+    spot = _median([contract["underlying"] for contract in contracts])
+    if spot is None or spot <= 0:
+        spot = price
+    front, back = _front_back(contracts)
+    rate = (_macro_value(macro, "UST_10Y") or 4.0) / 100.0
+    atm_front = _atm_iv(contracts, front, spot) if front is not None else None
+    atm_back = _atm_iv(contracts, back, spot) if back is not None else None
+    realized = _volatility(data.prices)
+    iv_ratio = _ratio(atm_front, realized)
+    straddle = _atm_straddle(contracts, front, spot) if front is not None else None
+    pcr_volume, pcr_oi = _put_call_ratio(contracts)
+    put_iv, call_iv, skew = (
+        _skew(contracts, front, spot, rate) if front is not None else (None, None, None)
+    )
+    total_oi, strike_count, spread = _option_liquidity(contracts)
+
+    expiry = next((contract["expiry"] for contract in contracts if contract["dte"] == front), None)
+    move = _ratio(straddle, spot)
+    if move is None and atm_front is not None and front is not None:
+        # Fallback: lognormal approximation of the ATM straddle.
+        move = 0.7979 * atm_front * math.sqrt(front / 365.0)
+    if move is None:
+        implied_move = "N/A - no ATM straddle quote."
+    else:
+        implied_move = f"+/-{_pct(move)} by {expiry} ({front} DTE, ATM straddle)."
+
+    if atm_front is None:
+        iv_text = "N/A - implied volatility unavailable."
+    elif iv_ratio is None:
+        iv_text = f"ATM IV {_pct(atm_front)} ({front} DTE); realized volatility unavailable."
+    else:
+        iv_text = (
+            f"ATM IV {_pct(atm_front)} ({front} DTE) vs {_pct(realized)} realized "
+            f"(IV/RV {_x(iv_ratio, 2)})."
+        )
+
+    if skew is None:
+        skew_text = "N/A - 25-delta quotes unavailable."
+    else:
+        skew_text = (
+            f"25-delta put IV {_pct(put_iv)} vs call IV {_pct(call_iv)} "
+            f"({skew * 100:+.1f} vol pts)."
+        )
+
+    if front is None or back is None or atm_front is None or atm_back is None:
+        term_text = "N/A - two expiries with implied volatility are needed."
+    else:
+        slope = atm_back - atm_front
+        shape = "contango" if slope > 0 else "backwardation" if slope < 0 else "flat"
+        term_text = (
+            f"Front {_pct(atm_front)} ({front} DTE) vs {_pct(atm_back)} ({back} DTE); "
+            f"slope {slope * 100:+.1f} vol pts ({shape})."
+        )
+
+    liquidity_text = f"Open interest {total_oi:,.0f} across {strike_count} strikes (<=60 DTE)"
+    liquidity_text += (
+        f"; median bid-ask {_pct(spread)} of mid."
+        if spread is not None
+        else "; no two-sided quotes to measure spreads."
+    )
+
+    parts = []
+    if pcr_volume is not None:
+        parts.append(f"PCR {_decimal(pcr_volume)} volume / {_decimal(pcr_oi)} open interest")
+    if skew is not None:
+        parts.append(f"25-delta skew {skew * 100:+.1f} vol pts")
+    if atm_front is not None:
+        parts.append(
+            f"ATM IV {_pct(atm_front)} ({_x(iv_ratio, 2)} realized)"
+            if iv_ratio is not None
+            else f"ATM IV {_pct(atm_front)}"
+        )
+    parts.append(f"implied move {implied_move.rstrip('.')}")
+    positioning = (
+        "; ".join(parts)
+        + ". Descriptive positioning only; it does not change the recommendation, the "
+        "risk score or the factor scores."
+    )
+
+    result.update(
+        status="Observed" if atm_front is not None else "Derived",
+        implied_move=implied_move,
+        positioning=positioning,
+        iv=iv_text,
+        skew=skew_text,
+        term=term_text,
+        liquidity=liquidity_text,
+    )
+    return result
 
 
 def load_macro(query=None) -> dict:
@@ -236,6 +603,10 @@ def _x(value, digits=1):
     return "N/A" if value is None else f"{value:.{digits}f}x"
 
 
+def _decimal(value, digits=2):
+    return "N/A" if value is None else f"{value:.{digits}f}"
+
+
 def _level(value, low, high):
     """Map a metric to the worksheet's Low/Moderate/High ordering."""
     if value is None:
@@ -298,7 +669,7 @@ def build_payload(ticker: str, data: CompanyData, *, macro=None, today=None) -> 
 
     def src(section_id, *extra):
         parts = [sources] if sources else []
-        parts.extend(extra)
+        parts.extend(part for part in extra if part)
         sections[section_id]["sources"] = (
             "Auto-generated by app.analysis_autofill. " + " ".join(parts)
         ).strip()
@@ -316,6 +687,13 @@ def build_payload(ticker: str, data: CompanyData, *, macro=None, today=None) -> 
     ccy = c["currency"]
     price = c["price"]
     target = c["target"]
+    options = _options_block(data, price, today, macro)
+    option_source = (
+        "Options: YFINANCE derivatives.options.chains (single name), SPY proxy and "
+        "VIX/VIX3M history; descriptive only, not used in the recommendation."
+        if data.options_requested
+        else ""
+    )
 
     # 1. Investment universe -------------------------------------------------------
     put(
@@ -392,6 +770,8 @@ def build_payload(ticker: str, data: CompanyData, *, macro=None, today=None) -> 
         "Not reported by the selected endpoints; the debt maturity schedule in the 10-K "
         "is the source of truth for near-term maturities.",
     )
+    put("macro", "index_put_call_ratio", options["macro_pcr"])
+    put("macro", "vix_term_structure", options["macro_vix"])
     put("macro", "credit_verdict", verdict)
     put(
         "macro",
@@ -403,7 +783,11 @@ def build_payload(ticker: str, data: CompanyData, *, macro=None, today=None) -> 
         f"is not available from the selected endpoints.",
     )
     conf("macro", "OAS inputs are stored observations; default and CDS detail is unavailable.")
-    src("macro", "Macro series: raw.macro_series (IG_OAS, HY_OAS, UST_2Y, UST_10Y, VIX).")
+    src(
+        "macro",
+        "Macro series: raw.macro_series (IG_OAS, HY_OAS, UST_2Y, UST_10Y, VIX).",
+        option_source,
+    )
 
     # 3. Industry analysis ---------------------------------------------------------
     peers_text = c["peers_text"]
@@ -510,7 +894,8 @@ def build_payload(ticker: str, data: CompanyData, *, macro=None, today=None) -> 
         f"is the only market-based expectation gap available, so an earnings surprise "
         f"should be judged against that range, not against a point estimate.",
     )
-    src("consensus")
+    put("consensus", "options_implied_move", options["implied_move"])
+    src("consensus", option_source)
 
     # 8. Variant perception -------------------------------------------------------
     put("variant", "consensus_revenue_growth", _pct(c["rev_growth"]))
@@ -539,6 +924,7 @@ def build_payload(ticker: str, data: CompanyData, *, macro=None, today=None) -> 
         f"Apply the current P/E of {_x(c['pe'])} to the derived EPS path; the analyst "
         f"target implies {_x(c['target_multiple'])} on the same path.",
     )
+    put("variant", "options_positioning", options["positioning"])
     put(
         "variant",
         "bullish_variant",
@@ -569,7 +955,7 @@ def build_payload(ticker: str, data: CompanyData, *, macro=None, today=None) -> 
         ),
     )
     conf("variant")
-    src("variant")
+    src("variant", option_source)
 
     # 9. Company deep-dive --------------------------------------------------------
     put(
@@ -751,6 +1137,11 @@ def build_payload(ticker: str, data: CompanyData, *, macro=None, today=None) -> 
     put("risk", "macro_risk", c["risk"]["macro"])
     put("risk", "regulatory_risk", c["risk"]["regulatory"])
     put("risk", "liquidity_risk", c["risk"]["liquidity"])
+    put("risk", "options_iv", options["iv"])
+    put("risk", "options_skew", options["skew"])
+    put("risk", "options_term_structure", options["term"])
+    put("risk", "options_liquidity", options["liquidity"])
+    put("risk", "options_data_status", options["status"])
     put("risk", "overall_risk_score", c["risk_score"])
     put(
         "risk",
@@ -760,7 +1151,7 @@ def build_payload(ticker: str, data: CompanyData, *, macro=None, today=None) -> 
         f"position, sized down further if the dividend cover or liquidity weakens.",
     )
     conf("risk")
-    src("risk")
+    src("risk", option_source)
 
     # 17. Portfolio integration --------------------------------------------------
     put("portfolio", "factor_growth", c["factors"]["growth"])

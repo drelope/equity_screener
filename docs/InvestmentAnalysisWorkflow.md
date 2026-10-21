@@ -101,6 +101,8 @@ series, so a spread vs. its historical average cites the as-of-stamped value.
 | `default_rates` | text | Current vs. trend |
 | `distressed_ratio` | text | Distressed debt ratio |
 | `refinancing_wall` | text | Near-term maturities for the target sector |
+| `index_put_call_ratio` | text | Optional: SPY volume/OI put-call ratio (≤60 DTE) |
+| `vix_term_structure` | text | Optional: VIX vs. VIX3M level and contango/backwardation |
 | `credit_verdict` | select, **required** | Bullish / Neutral / Bearish |
 | `credit_rationale` | textarea, **required** | 2-3 sentences |
 | `confidence` | select, **required** | Section confidence (spec above) |
@@ -162,6 +164,7 @@ Inputs: external estimate data (revenue/EPS estimates, revision breadth).
 | `revision_trend` | select | Upward / Flat / Downward |
 | `estimate_dispersion` | select | Low / Moderate / High |
 | `surprise_implication` | textarea | What the setup implies for earnings surprises |
+| `options_implied_move` | text | Optional: ATM-straddle implied move for the front expiry |
 | `sources` | textarea | Data sources cited in this step |
 
 **Purpose:** makes expectation mismatches identifiable before thesis formation.
@@ -180,6 +183,7 @@ Inputs: external estimate data (revenue/EPS estimates, revision breadth).
 | `my_margins` | select | Expanding / Flat / Compressing |
 | `my_capital_allocation` | text | Your view |
 | `my_multiple` | text | Your view |
+| `options_positioning` | textarea | Optional: descriptive PCR, skew and IV/RV read (no recommendation impact) |
 | `bullish_variant` | textarea, **required** | Why the market may be wrong (upside) |
 | `bearish_variant` | textarea, **required** | Why the market may be wrong (downside) |
 | `key_evidence` | textarea, **required** | One piece of evidence per line (min. 3) |
@@ -293,6 +297,11 @@ Inputs: proxy/filing data, insider transactions (external).
 | `macro_risk` | select, **required** | High / Moderate / Low |
 | `regulatory_risk` | select, **required** | High / Moderate / Low |
 | `liquidity_risk` | select, **required** | High / Moderate / Low |
+| `options_iv` | text | Optional: ATM implied volatility vs. realized |
+| `options_skew` | text | Optional: 25-delta put minus call implied volatility |
+| `options_term_structure` | text | Optional: front vs. ~90-day ATM IV slope |
+| `options_liquidity` | text | Optional: open interest, strike count and median bid-ask |
+| `options_data_status` | select | Optional: Observed / Derived / Unavailable |
 | `overall_risk_score` | score, **required** | 1-10 |
 | `position_sizing` | textarea, **required** | Position-sizing implication |
 | `confidence` / `confidence_note` / `sources` | select, **required** / textarea / textarea | Section confidence and data sources; `confidence` is required to save a Final |
@@ -453,6 +462,27 @@ The panel requires the operator token and only ever places a payload in the form
 never writes to the warehouse. The returned worksheet passes `validate` (including the
 steps 1-17 gate), but every heuristic must be reviewed and edited before the call is saved
 as a Final.
+
+#### Options positioning (optional)
+
+Ticking **Include options positioning** adds a descriptive options block sourced from
+yfinance (`derivatives.options.chains`; there is no FMP options provider in this
+environment):
+
+- Step 2: SPY proxy put/call ratio (volume and open interest, contracts up to 60 DTE) and
+  the VIX vs. VIX3M term structure.
+- Step 7: the front-expiry ATM-straddle implied move.
+- Step 8: a positioning summary (PCR, 25-delta skew, ATM IV vs. realized volatility).
+- Step 16: ATM IV, 25-delta skew, term-structure slope and liquidity, plus an
+  `Observed / Derived / Unavailable` status.
+
+These fields are **supporting evidence only**. They are not inputs to `_risk`,
+`_risk_score`, `_recommendation`, the factor scores or the confidence level, and adding
+them cannot change the call. Treat PCR as ambiguous (hedging and overwriting both move
+it), discard unusable quotes (yfinance often reports implausible IV for same-day
+contracts), and remember that thin single-name chains and ex-dividend dates distort skew
+and the implied move. When the block is not requested or no chain is returned, the fields
+say so explicitly rather than inventing a value.
 
 ---
 

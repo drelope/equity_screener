@@ -418,6 +418,15 @@ def _autofill_section(info: pd.Series) -> None:
         )
         if not ui.controls_enabled():
             ui.require_controls_note()
+        include_options = st.checkbox(
+            "Include options positioning (optional, yfinance)",
+            key="ia_autofill_options",
+            disabled=not ui.controls_enabled(),
+            help="Adds the SPY put/call ratio, VIX term structure and the security's ATM "
+            "implied volatility, skew, term slope, implied move and liquidity. Descriptive "
+            "only: these fields cannot change the recommendation or risk score. Adds a "
+            "few seconds.",
+        )
         if not st.button(
             "Auto-complete",
             key="ia_autofill",
@@ -428,7 +437,7 @@ def _autofill_section(info: pd.Series) -> None:
 
         try:
             with st.spinner("Reading FMP, then yfinance..."):
-                data = autofill.fetch_company(info.ticker)
+                data = autofill.fetch_company(info.ticker, include_options=include_options)
                 payload = autofill.build_payload(info.ticker, data, macro=autofill.load_macro())
         except Exception as exc:  # noqa: BLE001 - show the failure, keep the form usable
             st.error(f"Not auto-completed ({type(exc).__name__}): {exc}")

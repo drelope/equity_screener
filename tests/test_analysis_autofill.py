@@ -333,3 +333,159 @@ def test_yfinance_profile_dividend_yield_is_read_as_a_percentage():
     payload = autofill.build_payload("TEST", data, macro=MACRO, today=TODAY)
 
     assert "2.5% dividend yield" in payload["sections"]["final"]["thesis"]
+
+
+# --- options positioning (opt-in, descriptive only) --------------------------------
+
+
+def _option_chain(spot=100.0):
+    rows = []
+    for dte in (30, 95):
+        expiry = (TODAY + pd.Timedelta(days=dte)).date().isoformat()
+        for strike in (85, 90, 95, 100, 105, 110, 115):
+            for kind in ("call", "put"):
+                distance = abs(strike / spot - 1.0)
+                iv = 0.24 + 0.30 * distance
+                if kind == "put":
+                    iv += 0.05 * max(0.0, 1.0 - strike / spot)
+                if dte > 60:
+                    iv += 0.02
+                bid = max(0.05, 3.0 - abs(strike - spot) * 0.2)
+                rows.append(
+                    {
+                        "underlying_price": spot,
+                        "expiration": expiry,
+                        "dte": dte,
+                        "strike": strike,
+                        "option_type": kind,
+                        "open_interest": 1000 if kind == "call" else 800,
+                        "volume": 500 if kind == "call" else 400,
+                        "last_trade_price": bid,
+                        "bid": bid,
+                        "ask": bid + 0.2,
+                        "implied_volatility": iv,
+                    }
+                )
+    return rows
+
+
+def _options_data():
+    data = _sample_data()
+    data.options_requested = True
+    data.options = _option_chain()
+    data.index_options = _option_chain(spot=500.0)
+    data.vix_term = {"vix": 18.0, "vix3m": 20.5, "as_of": "2026-10-19"}
+    return data
+
+
+def test_options_are_not_used_until_requested_and_say_so():
+    payload = _payload()
+
+    risk = payload["sections"]["risk"]
+    assert risk["options_data_status"] == "Unavailable"
+    assert "Not requested" in risk["options_iv"]
+    assert "Not requested" in payload["sections"]["macro"]["index_put_call_ratio"]
+
+
+def test_options_block_fills_every_metric_from_the_chain():
+    payload = _payload(_options_data())
+
+    macro = payload["sections"]["macro"]
+    risk = payload["sections"]["risk"]
+    assert "SPY proxy" in macro["index_put_call_ratio"]
+    assert "contango" in macro["vix_term_structure"]
+    assert "ATM straddle" in payload["sections"]["consensus"]["options_implied_move"]
+    assert "+/-" in payload["sections"]["consensus"]["options_implied_move"]
+    assert risk["options_data_status"] == "Observed"
+    assert "ATM IV" in risk["options_iv"]
+    assert "25-delta" in risk["options_skew"]
+    assert "slope" in risk["options_term_structure"]
+    assert "Open interest" in risk["options_liquidity"]
+    assert (
+        "descriptive positioning" in payload["sections"]["variant"]["options_positioning"].lower()
+    )
+    assert schema.validate(payload) == []
+
+
+def test_options_block_does_not_change_the_recommendation_or_risk_score():
+    base = _payload(_sample_data())
+    with_options = _payload(_options_data())
+
+    assert (
+        with_options["sections"]["final"]["recommendation"]
+        == base["sections"]["final"]["recommendation"]
+    )
+    assert with_options["sections"]["risk"]["confidence"] == base["sections"]["risk"]["confidence"]
+    assert (
+        with_options["sections"]["risk"]["overall_risk_score"]
+        == base["sections"]["risk"]["overall_risk_score"]
+    )
+    assert (
+        with_options["sections"]["risk"]["liquidity_risk"]
+        == base["sections"]["risk"]["liquidity_risk"]
+    )
+
+
+def test_requested_options_without_a_chain_are_marked_unavailable():
+    data = _sample_data()
+    data.options_requested = True
+
+    payload = _payload(data)
+
+    assert payload["sections"]["risk"]["options_data_status"] == "Unavailable"
+    assert "no options data" in payload["sections"]["risk"]["options_iv"]
+
+
+def test_fetch_company_reads_options_only_when_asked():
+    calls = []
+
+    def command(name, ticker, **kwargs):
+        calls.append((name, ticker))
+        if name == "options":
+            return "yfinance", pd.DataFrame(_option_chain())
+        if name == "index_prices":
+            frame = pd.DataFrame(
+                {"close": [18.0 if ticker == "^VIX" else 20.5]},
+                index=pd.Index([TODAY], name="date"),
+            )
+            return "yfinance", frame
+        if name == "prices":
+            return "yfinance", pd.DataFrame([{"date": "2026-10-19", "close": 100.0}])
+        return "fmp", pd.DataFrame([{"symbol": ticker, "name": "Test"}])
+
+    data = autofill.fetch_company("TEST", command=command, today=TODAY)
+    assert data.options_requested is False
+    assert data.options == []
+    assert not [call for call in calls if call[0] == "options"]
+
+    calls.clear()
+    data = autofill.fetch_company("TEST", command=command, today=TODAY, include_options=True)
+
+    assert ("options", "TEST") in calls
+    assert ("options", "SPY") in calls
+    assert ("index_prices", "^VIX") in calls
+    assert ("index_prices", "^VIX3M") in calls
+    assert data.options_requested is True
+    assert data.providers["options"] == "yfinance"
+    assert data.providers["index_options"] == "yfinance"
+    assert data.vix_term == {"vix": 18.0, "vix3m": 20.5, "as_of": "2026-10-20"}
+
+
+def test_options_command_is_yfinance_only_even_when_fmp_is_pinned(fmp_first, monkeypatch):
+    monkeypatch.setattr(settings, "openbb_provider", "fmp")
+    calls = []
+
+    def chains(**kwargs):
+        calls.append(kwargs["provider"])
+        return pd.DataFrame([{"symbol": kwargs["symbol"], "strike": 100.0}])
+
+    fake = SimpleNamespace(
+        derivatives=SimpleNamespace(options=SimpleNamespace(chains=chains)),
+    )
+    monkeypatch.setattr(client, "obb", fake)
+
+    provider, frame = client.equity_command("options", "ABC")
+
+    assert calls == ["yfinance"]
+    assert provider == "yfinance"
+    assert frame.iloc[0]["strike"] == 100.0

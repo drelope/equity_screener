@@ -1133,7 +1133,7 @@ def test_auto_complete_prefills_the_form_without_saving(with_token, monkeypatch)
     payload = schema.empty_payload()
     payload["sections"]["universe"]["universe_filters"] = "Auto-generated universe filter"
     monkeypatch.setattr(
-        autofill, "fetch_company", lambda ticker: autofill.CompanyData(ticker=ticker)
+        autofill, "fetch_company", lambda ticker, **kwargs: autofill.CompanyData(ticker=ticker)
     )
     monkeypatch.setattr(autofill, "build_payload", lambda ticker, data, macro=None: payload)
     monkeypatch.setattr(autofill, "load_macro", lambda: {})
@@ -1154,6 +1154,30 @@ def test_auto_complete_prefills_the_form_without_saving(with_token, monkeypatch)
             {"o": OPERATOR},
         ).scalar()
     assert count == 0, "auto-complete must never save"
+
+
+def test_auto_complete_options_are_opt_in(with_token, monkeypatch):
+    from app import analysis_autofill as autofill
+    from app import analysis_schema as schema
+
+    seen = []
+    payload = schema.empty_payload()
+
+    def fetch(ticker, **kwargs):
+        seen.append(kwargs.get("include_options", False))
+        return autofill.CompanyData(ticker=ticker)
+
+    monkeypatch.setattr(autofill, "fetch_company", fetch)
+    monkeypatch.setattr(autofill, "build_payload", lambda ticker, data, macro=None: payload)
+    monkeypatch.setattr(autofill, "load_macro", lambda: {})
+
+    at = page("investment_analysis", operator=True).run()
+    assert not at.checkbox(key="ia_autofill_options").value
+
+    at = at.checkbox(key="ia_autofill_options").check().run()
+    button(at, "Auto-complete").click().run()
+
+    assert seen == [True]
 
 
 def test_auto_complete_is_off_without_the_operator_token(without_token):
