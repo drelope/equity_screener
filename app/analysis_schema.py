@@ -527,9 +527,43 @@ def _values(payload: dict, section: Section) -> dict:
 
 def _present_in(values: dict, f: Field) -> bool:
     value = values.get(f.id)
+    if value is None:
+        return False
     if f.kind == "score":
-        return value is not None
+        return True
     return bool(str(value).strip()) and str(value).strip() != PLACEHOLDER
+
+
+def missing_required_fields(payload: dict) -> dict[str, list[str]]:
+    """Missing required field labels per section id; sections with none are omitted.
+
+    ``app.views.investment_analysis`` uses this to label incomplete steps, so an
+    analyst sees which fields a section still needs rather than only a count.
+    """
+    out: dict[str, list[str]] = {}
+    for section in SECTIONS:
+        values = _values(payload, section)
+        missing = [f.label for f in section.all_fields if f.required and not _present_in(values, f)]
+        if missing:
+            out[section.id] = missing
+    return out
+
+
+def missing_prior_step_fields(payload: dict) -> list[str]:
+    """``Section / Field`` lines for every missing required field outside the final step.
+
+    The recommendation gate depends on exactly these fields, so the page lists them
+    instead of only saying steps 1-17 are incomplete.
+    """
+    lines: list[str] = []
+    for section in SECTIONS:
+        if section.id == "final":
+            continue
+        values = _values(payload, section)
+        for f in section.all_fields:
+            if f.required and not _present_in(values, f):
+                lines.append(f"{section.title} / {f.label}")
+    return lines
 
 
 def _present(payload: dict, section: Section, f: Field) -> bool:

@@ -633,6 +633,30 @@ def test_a_draft_may_not_recommend_before_the_prior_steps_are_done(with_token):
     assert "steps 1-17" in details
 
 
+def test_required_fields_are_marked_and_the_missing_list_is_actionable(with_token):
+    at = page("investment_analysis", operator=True).run()
+
+    # Required fields carry the marker; optional ones do not.
+    assert at.text_input(key="ia__universe__universe_filters").label == "Filters applied *"
+    assert (
+        at.text_input(key="ia__macro__ig_spreads").label
+        == "Investment grade spreads vs. historical average"
+    )
+    assert at.selectbox(key="ia__risk__business_risk").label == "Business risk *"
+
+    # The recommendation warning names the exact missing required fields.
+    assert any("Steps 1-17 are incomplete" in w.value for w in at.warning)
+    details = " ".join(c.value for c in at.code)
+    assert "Investment universe / Filters applied" in details
+    assert "Macro & credit / Backdrop" in details
+    assert "Risk decomposition / Position sizing implication" in details
+
+    # Steps with no required fields are labelled optional rather than looking unfilled.
+    labels = [e.label for e in at.expander]
+    assert any("7. Consensus expectations (optional)" in label for label in labels)
+    assert any("17. Portfolio integration (optional)" in label for label in labels)
+
+
 def test_a_concurrent_edit_is_refused_rather_than_overwritten(with_token):
     at = page("investment_analysis", operator=True).run()
     _fill_worksheet(at)

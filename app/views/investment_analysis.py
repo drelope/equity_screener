@@ -93,15 +93,16 @@ def _payload_from_state() -> dict:
 def _render_field(section: schema.Section, field: schema.Field) -> None:
     key = _key(section, field)
     help_text = field.help or None
+    label = f"{field.label} *" if field.required else field.label
     if field.kind == "text":
-        st.text_input(field.label, key=key, help=help_text)
+        st.text_input(label, key=key, help=help_text)
     elif field.kind == "textarea":
-        st.text_area(field.label, key=key, help=help_text)
+        st.text_area(label, key=key, help=help_text)
     elif field.kind == "select":
-        st.selectbox(field.label, [schema.PLACEHOLDER, *field.options], key=key, help=help_text)
+        st.selectbox(label, [schema.PLACEHOLDER, *field.options], key=key, help=help_text)
     else:
         st.number_input(
-            field.label, min_value=1, max_value=10, step=1, value=None, key=key, help=help_text
+            label, min_value=1, max_value=10, step=1, value=None, key=key, help=help_text
         )
 
 
@@ -536,7 +537,7 @@ def render() -> None:
     st.caption(
         "Structured worksheet for the top-down workflow "
         "(docs/InvestmentAnalysisWorkflow.md). Steps are sequential: do not reach a "
-        "recommendation before steps 1-17 are complete."
+        "recommendation before steps 1-17 are complete. Fields marked * are required."
     )
 
     pending = st.session_state.pop(PENDING_KEY, None)
@@ -597,6 +598,8 @@ def render() -> None:
         label = f"{step}. {section.title}"
         if total:
             label += f" ({filled}/{total})"
+        else:
+            label += " (optional)"
         with st.expander(label, expanded=(section.id == first_incomplete)):
             if section.intro:
                 st.caption(section.intro)
@@ -605,6 +608,9 @@ def render() -> None:
                     "Steps 1-17 are incomplete; a recommendation cannot be saved until "
                     "their required fields are filled."
                 )
+                gaps = schema.missing_prior_step_fields(payload)
+                st.caption(f"Still missing {len(gaps)} required field(s):")
+                st.code("\n".join(gaps), language="text")
             for field in section.all_fields:
                 _render_field(section, field)
 

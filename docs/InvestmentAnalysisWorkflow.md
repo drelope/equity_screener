@@ -103,7 +103,7 @@ series, so a spread vs. its historical average cites the as-of-stamped value.
 | `refinancing_wall` | text | Near-term maturities for the target sector |
 | `credit_verdict` | select, **required** | Bullish / Neutral / Bearish |
 | `credit_rationale` | textarea, **required** | 2-3 sentences |
-| `confidence` | select | Section confidence (spec above) |
+| `confidence` | select, **required** | Section confidence (spec above) |
 | `confidence_note` | textarea | Required only when `confidence` is Low |
 | `sources` | textarea | Data sources cited in this step |
 
@@ -116,7 +116,7 @@ cyclicals.
 |---|---|---|
 | `industry_outlook` | textarea, **required** | Growth drivers, structure, pricing power |
 | `competitive_landscape` | textarea | Concentration, key competitors, positioning |
-| `confidence` / `confidence_note` / `sources` | | Section confidence and data sources |
+| `confidence` / `confidence_note` / `sources` | select, **required** / textarea / textarea | Section confidence and data sources; `confidence` is required to save a Final |
 
 ### 4. Industry structure & capital cycle — `capital_cycle`
 
@@ -129,7 +129,7 @@ cyclicals.
 | `utilization` | text | Current vs. historical average |
 | `profitability_trend` | select | Improving / Deteriorating / Stable |
 | `capital_discipline_score` | score, **required** | 1-3 poor (overbuilding, destructive competition); 4-6 moderate; 7-10 strong (rational, returns-focused) |
-| `confidence` / `confidence_note` / `sources` | | Section confidence and data sources |
+| `confidence` / `confidence_note` / `sources` | select, **required** / textarea / textarea | Section confidence and data sources; `confidence` is required to save a Final |
 
 **Relevance:** essential for semiconductors, energy, mining, shipping, chemicals, REITs
 and industrials — many opportunities are driven by supply constraints rather than
@@ -140,14 +140,14 @@ revenue growth.
 | Field id | Type | Notes |
 |---|---|---|
 | `supply_analysis` | textarea, **required** | Capacity, entrants, constraints |
-| `confidence` / `confidence_note` / `sources` | | Section confidence and data sources |
+| `confidence` / `confidence_note` / `sources` | select, **required** / textarea / textarea | Section confidence and data sources; `confidence` is required to save a Final |
 
 ### 6. Demand side — `demand`
 
 | Field id | Type | Notes |
 |---|---|---|
 | `demand_analysis` | textarea, **required** | Volume/price drivers, customer structure |
-| `confidence` / `confidence_note` / `sources` | | Section confidence and data sources |
+| `confidence` / `confidence_note` / `sources` | select, **required** / textarea / textarea | Section confidence and data sources; `confidence` is required to save a Final |
 
 ### 7. Consensus expectations — `consensus`
 
@@ -183,7 +183,7 @@ Inputs: external estimate data (revenue/EPS estimates, revision breadth).
 | `bullish_variant` | textarea, **required** | Why the market may be wrong (upside) |
 | `bearish_variant` | textarea, **required** | Why the market may be wrong (downside) |
 | `key_evidence` | textarea, **required** | One piece of evidence per line (min. 3) |
-| `confidence` / `confidence_note` / `sources` | | Section confidence and data sources |
+| `confidence` / `confidence_note` / `sources` | select, **required** / textarea / textarea | Section confidence and data sources; `confidence` is required to save a Final |
 
 **Purpose:** forces identification of informational, analytical and behavioural edge —
 the source of excess returns. Validation requires at least three evidence lines.
@@ -197,7 +197,7 @@ Inputs: warehouse context panel (`model.features`, `model.scores`,
 |---|---|---|
 | `business_model` | textarea, **required** | How the company makes money |
 | `financial_analysis` | textarea, **required** | Growth, margins, balance sheet, cash flows |
-| `confidence` / `confidence_note` / `sources` | | Section confidence and data sources |
+| `confidence` / `confidence_note` / `sources` | select, **required** / textarea / textarea | Section confidence and data sources; `confidence` is required to save a Final |
 
 ### 10. Earnings quality — `earnings_quality`
 
@@ -213,7 +213,7 @@ Inputs: `model.features` (cash conversion, margins) and `fundamentals.periodic_f
 | `one_time_items` | textarea | Recurring vs. one-time adjustments, itemised |
 | `quality_verdict` | select, **required** | High quality / Moderate / Low quality |
 | `red_flags` | textarea | List, if any |
-| `confidence` / `confidence_note` / `sources` | | Section confidence and data sources |
+| `confidence` / `confidence_note` / `sources` | select, **required** / textarea / textarea | Section confidence and data sources; `confidence` is required to save a Final |
 
 **Purpose:** identifies low-quality earnings before they distort valuation.
 
@@ -229,7 +229,7 @@ Inputs: `model.features` (cash conversion, margins) and `fundamentals.periodic_f
 | `regulatory_advantage` | select | Present / Absent |
 | `moat_rating` | select, **required** | Strong / Moderate / Weak / None |
 | `durability_trend` | select | Improving / Stable / Eroding |
-| `confidence` / `confidence_note` / `sources` | | Section confidence and data sources |
+| `confidence` / `confidence_note` / `sources` | select, **required** / textarea / textarea | Section confidence and data sources; `confidence` is required to save a Final |
 
 **Purpose:** separates compounders from cyclical trades and value traps.
 
@@ -246,7 +246,7 @@ Inputs: proxy/filing data, insider transactions (external).
 | `insider_transactions` | select | Buying / Selling / Mixed / None |
 | `compensation_alignment` | textarea | Tied to ROIC, EPS or opaque metrics |
 | `management_score` | score, **required** | 1-10 |
-| `confidence` / `confidence_note` / `sources` | | Section confidence and data sources |
+| `confidence` / `confidence_note` / `sources` | select, **required** / textarea / textarea | Section confidence and data sources; `confidence` is required to save a Final |
 
 **Purpose:** execution risk and stewardship quality.
 
@@ -258,7 +258,7 @@ Inputs: proxy/filing data, insider transactions (external).
 | `key_assumptions` | textarea, **required** | Every forward-looking assumption |
 | `target_price` | text | Per share, with currency |
 | `margin_of_safety` | text | Vs. current price |
-| `confidence` / `confidence_note` / `sources` | | Section confidence and data sources |
+| `confidence` / `confidence_note` / `sources` | select, **required** / textarea / textarea | Section confidence and data sources; `confidence` is required to save a Final |
 
 ### 14. Scenarios — `scenarios`
 
@@ -269,7 +269,7 @@ Inputs: proxy/filing data, insider transactions (external).
 | `bear_case` | textarea, **required** | Narrative + expected 12M return |
 | `scenario_probabilities` | text | e.g. 60 / 25 / 15 |
 | `expected_return` | text | Probability-weighted forward 12M return |
-| `confidence` / `confidence_note` / `sources` | | Section confidence and data sources |
+| `confidence` / `confidence_note` / `sources` | select, **required** / textarea / textarea | Section confidence and data sources; `confidence` is required to save a Final |
 
 ### 15. Historical analogs — `analog`
 
@@ -279,7 +279,7 @@ Inputs: proxy/filing data, insider transactions (external).
 | `base_rate` | text | % of similar conditions produced positive returns |
 | `key_differences` | textarea | How today differs (numbered) |
 | `analog_implication` | textarea | What the base rate implies here |
-| `confidence` / `confidence_note` / `sources` | | Section confidence and data sources |
+| `confidence` / `confidence_note` / `sources` | select, **required** / textarea / textarea | Section confidence and data sources; `confidence` is required to save a Final |
 
 **Purpose:** prevents narrative-driven conclusions; improves probabilistic thinking.
 
@@ -295,7 +295,7 @@ Inputs: proxy/filing data, insider transactions (external).
 | `liquidity_risk` | select, **required** | High / Moderate / Low |
 | `overall_risk_score` | score, **required** | 1-10 |
 | `position_sizing` | textarea, **required** | Position-sizing implication |
-| `confidence` / `confidence_note` / `sources` | | Section confidence and data sources |
+| `confidence` / `confidence_note` / `sources` | select, **required** / textarea / textarea | Section confidence and data sources; `confidence` is required to save a Final |
 
 **Purpose:** differentiated position sizing by risk category rather than a generic
 "risk is moderate".
@@ -385,8 +385,10 @@ Saving as **Final** (`analysis_schema.validate`) enforces everything above and:
     numbers summing to 100.
 11. `analog.base_rate`, once it contains digits, is a single percentage from 0 to 100.
 
-The page shows per-step progress (`filled/total` required fields) on each section header
-and opens the first incomplete section. Concurrent saves are refused with a message
+The page shows per-step progress (`filled/total` required fields) on each section header,
+marks required fields with an asterisk, opens the first incomplete section, and lists the
+exact missing required fields in the recommendation step. Sections with no required
+fields are labelled `(optional)`. Concurrent saves are refused with a message
 rather than silently overwriting a newer version: each worksheet tracks its row's
 `updated_at` and re-reads it before writing. A **Final** worksheet returns to **Draft**
 only when the save explicitly reopens it. Every save is kept as an append-only revision

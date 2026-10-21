@@ -372,3 +372,40 @@ def test_format_change_summarises_and_truncates():
 
     assert line.startswith("Valuation / Target price (with currency): (empty) -> ")
     assert line.endswith("…")
+
+
+# --- missing required fields (worksheet guidance) ---------------------------------
+
+
+def test_missing_required_fields_lists_labels_per_section():
+    payload = schema.empty_payload()
+    payload["sections"]["universe"]["universe_filters"] = "US large-cap dividend payers"
+
+    gaps = schema.missing_required_fields(payload)
+
+    assert "universe" not in gaps
+    assert "Backdrop" in gaps["macro"]
+    assert "Credit market verdict" in gaps["macro"]
+    assert "Confidence level" in gaps["macro"]
+    # sections with no required fields are omitted entirely
+    assert "consensus" not in gaps
+    assert "portfolio" not in gaps
+
+
+def test_missing_prior_step_fields_lists_section_slash_field_outside_final():
+    payload = schema.empty_payload()
+
+    lines = schema.missing_prior_step_fields(payload)
+
+    assert "Investment universe / Filters applied" in lines
+    assert "Macro & credit / Backdrop" in lines
+    assert "Risk decomposition / Position sizing implication" in lines
+    assert not any(line.startswith("Recommendation & final output") for line in lines)
+
+
+def test_missing_prior_step_fields_is_empty_once_prior_steps_are_complete():
+    payload = filled_payload()
+    del payload["sections"]["final"]["thesis"]  # the final step itself may be unfinished
+
+    assert schema.missing_prior_step_fields(payload) == []
+    assert schema.missing_required_fields(payload)["final"] == ["Thesis (3 sentences maximum)"]
