@@ -13,6 +13,14 @@ contract between this document, the worksheet form and the stored JSON payload
 
 ## Operating Rules
 
+### Ticker selection
+
+The **Security detail** and **Investment analysis** pages default to active common stock
+flagged as a dividend payer, so the picker does not bury the dividend universe under
+preferreds, funds, debt and non-payers. Tick **Show all active securities** to override
+the filter for one-off research. A ticker handed over from the Screener stays selected
+even when it falls outside that default list.
+
 ### Required workflow (sequential — do not skip steps)
 
 1. Define the investment universe
@@ -279,7 +287,7 @@ Inputs: proxy/filing data, insider transactions (external).
 
 | Field id | Type | Notes |
 |---|---|---|
-| `similar_setups` | textarea, **required** | Markdown table: date, conditions, forward 12M return, outcome (3+ rows) |
+| `similar_setups` | textarea, **required** | Markdown table: date, conditions, forward 12M total return, outcome (3+ rows) |
 | `base_rate` | text | % of similar conditions produced positive returns |
 | `key_differences` | textarea | How today differs (numbered) |
 | `analog_implication` | textarea | What the base rate implies here |
@@ -380,19 +388,25 @@ the sequence gate:
 
 1. The payload has a `sections` object and every section present.
 2. Every select value is either `""` (unset) or one of its declared options.
-3. Scores are integers in 1-10.
+3. Scores are integers in 1-10; an out-of-range score does not count as filled.
 4. At least one field is filled (an entirely empty worksheet is refused).
-5. No `recommendation` is recorded while steps 1-17 are incomplete.
+5. Bare placeholders such as `N/A`, `N.A.`, `none`, `TBD` or `(not set)` do not count as
+   filled required fields. Placeholder words inside a real sentence still count.
+6. No `recommendation` is recorded while steps 1-17 are incomplete.
+7. Once a `recommendation` is recorded, every required field in the final section
+   (including the thesis) must be present, even on a Draft.
 
 Saving as **Final** (`analysis_schema.validate`) enforces everything above and:
 
-6. Every **required** field is present and non-empty (after strip).
-7. `confidence == "Low"` on a section requires a non-empty `confidence_note`.
-8. `variant.key_evidence` has at least three non-empty lines.
-9. `final.thesis` has at most three sentences (three `.`, `!` or `?` terminators).
-10. `scenarios.scenario_probabilities`, once it contains digits, is exactly three
+8. Every **required** field is present and non-empty (after strip), and is not a bare
+   placeholder.
+9. `confidence == "Low"` on a section requires a non-empty `confidence_note`.
+10. `variant.key_evidence` has at least three non-empty lines.
+11. `final.thesis` has at most three sentences (periods in abbreviations such as `Inc.`
+    or `U.S.`, and initials, are not counted as sentence ends).
+12. `scenarios.scenario_probabilities`, once it contains digits, is exactly three
     numbers summing to 100.
-11. `analog.base_rate`, once it contains digits, is a single percentage from 0 to 100.
+13. `analog.base_rate`, once it contains digits, is a single percentage from 0 to 100.
 
 The page shows per-step progress (`filled/total` required fields) on each section header,
 marks required fields with an asterisk, opens the first incomplete section, and lists the
@@ -447,21 +461,38 @@ FMP does not implement the command or returns nothing, so a missing key or a pre
 endpoint degrades instead of blocking the worksheet. The commands read are the company
 profile and quote, analyst consensus and price targets, financial ratios and key metrics,
 the income/balance/cash-flow statements, insider transactions, the peer set and four years
-of price history.
+of adjusted price history (so momentum, volatility and the analog windows are total returns).
+
+The same run also reads the latest warehouse context for the ticker: the point-in-time
+`model.features` row, `model.scores`, `raw.fmp_dcf`, and up to four recent
+`fundamentals.periodic_financials` periods. Live provider values remain primary; warehouse
+values fill gaps when a provider omits a ratio or statement. The stored dividend coverage,
+payout, interest cover, refinancing wall and model score/quality fields are written into
+the company and valuation sections, the model risk score (normalised to 1-10) replaces the
+heuristic risk score when present, and an FMP DCF is used as the target only when no
+analyst target is available. The same run reports dividend yield, earnings and FCF payout,
+earnings cover and a sustainability verdict: the stored `target_sustainable_dividend`
+label when present, otherwise a data-derived covered / not proven / at-risk verdict. The
+sources and final data-quality note name the warehouse tables used, and a missing table
+or unknown ticker is ignored rather than failing the autofill.
 
 The values are deterministic heuristics over that reported data, not forecasts. Forward
 FY revenue and EPS are derived by holding the latest reported growth rate when live forward
 estimates are unavailable (FMP's are premium-only, and yfinance's consensus has no forward
 revenue or EPS figures).
-The historical-analog table uses the security's own prior 12M windows rather than a peer
-sample. Each step's **Sources** field names the provider that answered every command, and
-the final **Data quality** note lists anything that failed, so inferred values are not
+The historical-analog table uses the security's own prior 12M total-return windows rather
+than a peer sample, and scenario returns add the forward dividend yield to the price path.
+Each step's **Sources** field names the provider that answered every command, and the
+final **Data quality** note lists anything that failed, so inferred values are not
 mistaken for observations.
 
 The panel requires the operator token and only ever places a payload in the form: it
-never writes to the warehouse. The returned worksheet passes `validate` (including the
-steps 1-17 gate), but every heuristic must be reviewed and edited before the call is saved
-as a Final.
+never writes to the warehouse. When the data is insufficient for a conclusion — no
+analyst target or FMP DCF, or no reported revenue/net income — it deliberately leaves the
+`recommendation` unset and says why in the thesis, so the worksheet can be saved as a
+draft but not as a Final until the analyst supplies a supported call. With sufficient
+data the returned worksheet passes `validate` (including the steps 1-17 gate), but every
+heuristic must still be reviewed and edited before the call is saved as a Final.
 
 #### Options positioning (optional)
 

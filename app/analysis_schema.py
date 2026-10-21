@@ -30,8 +30,63 @@ MARGIN_OPTIONS = ("Expanding", "Flat", "Compressing")
 
 KINDS = ("text", "textarea", "select", "score")
 
-_SENTENCE_END = re.compile(r"[.!?](?:\s|$)")
+_SENTENCE_TERMINATOR = re.compile(r"[.!?](?=\s|$)")
 _NUMBER = re.compile(r"-?\d+(?:\.\d+)?")
+_ABBREVIATIONS = frozenset(
+    {
+        "approx",
+        "co",
+        "corp",
+        "dept",
+        "dr",
+        "e.g",
+        "est",
+        "etc",
+        "fig",
+        "i.e",
+        "inc",
+        "jr",
+        "ltd",
+        "mr",
+        "mrs",
+        "ms",
+        "no",
+        "sr",
+        "st",
+        "u.k",
+        "u.s",
+        "u.s.a",
+        "vs",
+    }
+)
+_PLACEHOLDER_VALUES = frozenset(
+    {
+        PLACEHOLDER.lower(),
+        "n/a",
+        "n/a.",
+        "n.a",
+        "n.a.",
+        "na",
+        "none",
+        "none.",
+        "null",
+        "nil",
+        "-",
+        "--",
+        "—",
+        "–",
+        "tbd",
+        "todo",
+        "unknown",
+        "unavailable",
+        "not applicable",
+        "not available",
+        "not loaded",
+        "not reported",
+        "not set",
+        "pending",
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -82,6 +137,16 @@ def _f(field_id: str, label: str, kind: str = "text", **kwargs) -> Field:
 
 
 CONFIDENCE_NOTE_REQUIRED = "a Low confidence level needs a confidence note"
+
+
+def _is_blank(value) -> bool:
+    """True for empty values and bare placeholders such as ``N/A`` or ``TBD``.
+
+    Only the whole value is matched, so explanatory text that mentions ``N/A`` (for
+    example an optional field documenting missing data) is not treated as blank.
+    """
+    text = " ".join(("" if value is None else str(value)).strip().split()).lower()
+    return not text or text in _PLACEHOLDER_VALUES
 
 
 SECTIONS: tuple[Section, ...] = (
@@ -364,7 +429,7 @@ SECTIONS: tuple[Section, ...] = (
                 "Similar historical setups (markdown table, 3+ rows)",
                 "textarea",
                 required=True,
-                help="Columns: date | conditions | forward 12M return | outcome",
+                help="Columns: date | conditions | forward 12M total return | outcome",
             ),
             _f("base_rate", "Base rate (% positive returns)"),
             _f("key_differences", "Key differences today", "textarea"),
@@ -545,11 +610,11 @@ def _values(payload: dict, section: Section) -> dict:
 
 def _present_in(values: dict, f: Field) -> bool:
     value = values.get(f.id)
-    if value is None:
-        return False
     if f.kind == "score":
-        return True
-    return bool(str(value).strip()) and str(value).strip() != PLACEHOLDER
+        return isinstance(value, int) and not isinstance(value, bool) and 1 <= value <= 10
+    if f.kind == "select":
+        return value is not None and str(value).strip() in f.options
+    return not _is_blank(value)
 
 
 def missing_required_fields(payload: dict) -> dict[str, list[str]]:
@@ -607,8 +672,9 @@ def validate_draft(payload: dict) -> list[str]:
     """The lighter rule set for saving incomplete work as a draft.
 
     A draft only needs a well-formed payload, at least one filled field, and — because a
-    recommendation is a conclusion — steps 1-17 complete before the recommendation is set.
-    The required-field and analytical-quality rules are deferred to :func:`validate`.
+    recommendation is a conclusion — steps 1-17 complete *and* the final narrative present
+    before the recommendation is set. The remaining analytical-quality rules are deferred
+    to :func:`validate`.
     """
     errors = _structural_errors(payload)
     sections = payload.get("sections")
@@ -618,7 +684,18 @@ def validate_draft(payload: dict) -> list[str]:
         errors.append("the worksheet is empty; fill in at least one field before saving")
         return errors
     errors.extend(_recommendation_errors(sections))
+    if _has_recommendation(sections):
+        final = SECTION_BY_ID["final"]
+        values = sections.get("final", {})
+        for f in final.all_fields:
+            if f.required and not _present_in(values, f):
+                errors.append(f"{_label(final, f)}: required once a recommendation is recorded")
+        errors.extend(_rule_thesis(sections))
     return errors
+
+
+def _has_recommendation(sections: dict) -> bool:
+    return bool(str(sections.get("final", {}).get("recommendation") or "").strip())
 
 
 def prior_steps_complete(payload: dict) -> bool:
@@ -668,12 +745,13 @@ def _required_errors(sections: dict) -> list[str]:
             raw = values.get(f.id)
             where = _label(section, f)
             if f.kind == "score":
-                if raw is None or raw == "":
+                if not _present_in(values, f):
                     errors.append(f"{where}: required")
-            else:
-                text = "" if raw is None else str(raw).strip()
-                if text == PLACEHOLDER or not text:
+            elif f.kind == "select":
+                if not _present_in(values, f):
                     errors.append(f"{where}: required")
+            elif _is_blank(raw):
+                errors.append(f"{where}: required")
     return errors
 
 
@@ -739,9 +817,29 @@ def _rule_evidence(sections: dict) -> list[str]:
     return []
 
 
+def _sentence_count(text: str) -> int:
+    """Count sentences without treating abbreviations like ``Inc.`` or ``U.S.`` as ends."""
+    count = 0
+    for match in _SENTENCE_TERMINATOR.finditer(text):
+        if match.group() == ".":
+            prefix = text[: match.end()]
+            token_match = re.search(r"([A-Za-z][A-Za-z.]*)\.$", prefix)
+            token = token_match.group(1).lower() if token_match else ""
+            following = text[match.end() :].lstrip()
+            # Initials (J. Smith) are never sentence ends; abbreviations before a
+            # lower-case word, a digit or the end of the text are part of the sentence.
+            if token and len(token) == 1:
+                continue
+            if token in _ABBREVIATIONS:
+                if not following or following[0].islower() or following[0].isdigit():
+                    continue
+        count += 1
+    return count
+
+
 def _rule_thesis(sections: dict) -> list[str]:
     thesis = str(sections.get("final", {}).get("thesis") or "").strip()
-    if thesis and len(_SENTENCE_END.findall(thesis)) > 3:
+    if thesis and _sentence_count(thesis) > 3:
         return ["Recommendation / Thesis: must be three sentences or fewer"]
     return []
 

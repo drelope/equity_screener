@@ -141,6 +141,54 @@ def test_the_thesis_must_be_three_sentences_or_fewer():
     assert any("three sentences" in error for error in errors)
 
 
+def test_the_thesis_rule_ignores_abbreviations_and_initials():
+    payload = filled_payload()
+    payload["sections"]["final"]["thesis"] = (
+        "Apple Inc. trades in the U.S. market at a discount. "
+        "Margins are stable. J. Smith sees upside."
+    )
+    assert schema.validate(payload) == []
+
+    payload["sections"]["final"]["thesis"] += " A fourth sentence."
+    assert any("three sentences" in error for error in schema.validate(payload))
+
+
+def test_bare_placeholders_are_not_filled_required_fields():
+    for value in ("N/A", "N.A.", "none", "TBD", "(not set)", "   "):
+        payload = filled_payload()
+        payload["sections"]["universe"]["universe_filters"] = value
+        where = "Investment universe / Filters applied"
+        assert any(error.startswith(f"{where}:") for error in schema.validate(payload)), value
+        assert not schema.prior_steps_complete(payload), value
+        assert schema.missing_required_fields(payload)["universe"], value
+        filled, total = schema.completion(payload)
+        assert filled == total - 1, value
+
+
+def test_placeholders_inside_explanatory_text_still_count():
+    payload = filled_payload()
+    payload["sections"]["universe"]["universe_filters"] = (
+        "Excludes financials where leverage data is N/A."
+    )
+    assert schema.validate(payload) == []
+
+
+def test_a_none_moat_rating_is_a_real_option_not_a_placeholder():
+    payload = filled_payload()
+    payload["sections"]["moat"]["moat_rating"] = "None"
+    assert schema.validate(payload) == []
+    assert schema.prior_steps_complete(payload)
+
+
+def test_an_out_of_range_score_does_not_count_as_filled():
+    payload = filled_payload()
+    payload["sections"]["risk"]["overall_risk_score"] = 0
+    assert not schema.prior_steps_complete(payload)
+    assert schema.missing_required_fields(payload)["risk"]
+    filled, total = schema.completion(payload)
+    assert filled == total - 1
+
+
 def test_a_missing_section_is_reported():
     payload = filled_payload()
     del payload["sections"]["risk"]
@@ -169,9 +217,18 @@ def test_a_draft_may_not_record_a_recommendation_before_steps_one_to_seventeen()
     assert any("steps 1-17" in error for error in errors)
 
 
-def test_a_draft_recommendation_is_allowed_once_prior_steps_are_complete():
+def test_a_draft_cannot_record_a_recommendation_without_the_final_narrative():
     payload = filled_payload()
-    del payload["sections"]["final"]["thesis"]  # the final step itself may be unfinished
+    del payload["sections"]["final"]["thesis"]
+    assert schema.prior_steps_complete(payload)
+    errors = schema.validate_draft(payload)
+    assert any(
+        "Thesis" in error and "once a recommendation is recorded" in error for error in errors
+    )
+
+
+def test_a_draft_recommendation_is_allowed_with_the_full_final_narrative():
+    payload = filled_payload()
     assert schema.prior_steps_complete(payload)
     assert schema.validate_draft(payload) == []
 
