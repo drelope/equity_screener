@@ -77,6 +77,8 @@ CIK. This is an expected unavailable-data response, not an API outage.
   target is populated.
 - [Data acquisition](docs/data-acquisition.md) — 12-month dividend lookback,
   nightly accrual, and the post-PoC total-history backfill provision.
+- [Global macro strategy](docs/GlobalMacroStrategy.md) — the macro transmission
+  memo whose Inputs block is populated from `raw.macro_series`.
 - [Nightly verification](docs/nightly-verification.md) — single-owner daily
   check of the 03:00 ET run + data-module audit (`audit.nightly_runs` /
   `audit.nightly_checks`).

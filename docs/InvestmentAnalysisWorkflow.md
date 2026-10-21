@@ -87,7 +87,10 @@ Inputs: `reference.securities` (active flag, type, sector filters).
 ### 2. Macro & credit — `macro`
 
 Inputs: external macro & credit data (dashboard in step inputs panel); warehouse
-regime features where available (`economic_credit_cycle_dividend_regime.md` framework).
+regime features where available (`economic_credit_cycle_dividend_regime.md` framework);
+observed macro levels from `raw.macro_series` / `GET /openbb/macro/inputs` (stage 5f,
+FMP + FRED) — `ig_spreads` and `hy_spreads` map to the stored `IG_OAS` / `HY_OAS`
+series, so a spread vs. its historical average cites the as-of-stamped value.
 
 | Field id | Type | Notes |
 |---|---|---|

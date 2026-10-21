@@ -27,8 +27,10 @@ web UI caption in `app/views/screener.py`.
   (`ix_securities_dividend_active` partial index).
 - `dividend = TRUE` only when a positive dividend or owner-distribution fact
   is reported by SEC Company Facts.
-- Sources: SEC EDGAR/XBRL (facts, submissions, documents, taxonomy concepts)
-  and OpenBB (historical prices, dividends, ticker profiles).
+- Sources: SEC EDGAR/XBRL (facts, submissions, documents, taxonomy concepts),
+  OpenBB (historical prices, dividends, ticker profiles), and FMP/FRED economic
+  inputs (`raw.macro_series`, stage 5f) — supporting data for the macro memo,
+  never a model feature source.
 
 ## 3. Scoring weights (composite score)
 

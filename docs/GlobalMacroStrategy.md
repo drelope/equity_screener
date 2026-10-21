@@ -16,6 +16,15 @@ Populate before running. Label every value **Observed** (sourced, as-of stamped)
 - **Risk**: `MOVE` · `VIX`
 - **Benchmarks**: PFF, PGX, SDY — before using any as a proxy, state its sector concentration (esp. financials weight), duration, and call exposure. PFF/PGX are themselves predominantly bank-capital vehicles.
 
+**Data source.** Observed values are served from the warehouse `raw.macro_series`
+table by stage 5f (`scripts.populate_macro_inputs`, FMP + FRED) and rendered with
+`GET /openbb/macro/inputs?markdown=true`; every token carries an as-of stamp and its
+provider source. Tokens with no provider behind them (`MOVE`, `TTF`, the term-premium
+estimate, repo-spike flags, the AT1/CoCo spread, and the industrial preferred spread)
+are returned `UNVERIFIED` with a stated reason and must not be filled with an assumed
+level presented as observed. Copper and CRB/BCOM are ETF-close proxies, and Term SOFR
+3M is a 90-day SOFR average proxy.
+
 ## Notation
 
 - Curve: `y_n ≈ (1/n)·Σ E[r_t] + TP_n` (expectations + term premium); Fisher: `i ≈ r + π`; real rate `r = y_nom − breakeven`
