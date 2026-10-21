@@ -180,13 +180,22 @@ def test_the_recommendation_is_safe_because_steps_1_to_17_are_complete():
     assert filled == total
 
 
-def test_missing_data_still_produces_a_valid_worksheet():
+def test_missing_data_produces_a_draft_but_no_recommendation():
     payload = _payload(autofill.CompanyData(ticker="EMPTY"), macro={})
 
-    assert schema.validate(payload) == []
     assert schema.validate_draft(payload) == []
+    assert payload["sections"]["final"]["recommendation"] == ""
+    assert any("Recommendation" in error for error in schema.validate(payload))
+    assert "not have enough reported data" in payload["sections"]["final"]["thesis"]
     assert payload["sections"]["macro"]["credit_verdict"] == "Neutral"
     assert "not loaded" in payload["sections"]["macro"]["macro_backdrop"]
+
+
+def test_a_single_price_is_not_enough_to_recommend_the_name():
+    payload = _payload(autofill.CompanyData(ticker="ONE", quote={"last_price": 100.0}), macro={})
+
+    assert payload["sections"]["final"]["recommendation"] == ""
+    assert schema.validate_draft(payload) == []
 
 
 def test_the_macro_section_reads_the_stored_observations():
@@ -212,7 +221,57 @@ def test_analog_table_has_three_historical_windows_and_a_usable_base_rate():
     analog = payload["sections"]["analog"]
 
     assert analog["similar_setups"].count("| Same security") >= 3
+    assert "total return" in analog["similar_setups"]
     assert analog["base_rate"].endswith("%")
+
+
+def test_price_return_uses_adjusted_close_so_dividends_are_reinvested():
+    rows = [{"date": TODAY, "close": 100.0, "adj_close": 110.0}]
+
+    assert autofill._price_rows(rows)[0]["close"] == 110.0
+
+
+def test_scenario_and_recommendation_returns_include_the_dividend_yield():
+    payload = _payload()
+
+    assert payload["sections"]["scenarios"]["expected_return"] == "18.5%"
+    assert "18.5% expected 12M total return" in payload["sections"]["final"]["thesis"]
+
+
+def test_statement_outflows_are_presented_as_positive_amounts():
+    payload = _payload()
+
+    assert (
+        "Capex 500.00M USD (5.0% of revenue)"
+        in payload["sections"]["capital_cycle"]["capacity_growth"]
+    )
+    assert (
+        "Dividends 400.00M USD" in payload["sections"]["management"]["capital_allocation_history"]
+    )
+    assert "buybacks 200.00M USD" in payload["sections"]["variant"]["consensus_capital_allocation"]
+
+
+def test_the_worksheet_assesses_dividend_sustainability_and_cover():
+    payload = _payload()
+    company = payload["sections"]["company"]["financial_analysis"]
+
+    assert "earnings payout 33.3%" in company
+    assert "FCF payout 36.4%" in company
+    assert "earnings cover 3.0x" in company
+    assert "the dividend is covered" in company
+    assert "the dividend is covered" in payload["sections"]["final"]["risk_summary"]
+
+
+def test_a_stored_sustainability_label_overrides_the_derived_verdict():
+    payload = autofill.build_payload(
+        "TEST",
+        _sample_data(),
+        macro=MACRO,
+        warehouse={"features": {"target_sustainable_dividend": 0}},
+        today=TODAY,
+    )
+
+    assert "the dividend is not sustainable" in payload["sections"]["company"]["financial_analysis"]
 
 
 # --- provider fallback -------------------------------------------------------------
@@ -307,6 +366,149 @@ def test_load_macro_tolerates_an_unloaded_warehouse():
         raise RuntimeError("relation raw.macro_series does not exist")
 
     assert autofill.load_macro(query=query) == {}
+
+
+def test_load_warehouse_reads_the_latest_rows_and_recent_financials():
+    def query(sql, params=None):
+        if "reference.securities" in sql:
+            return pd.DataFrame([{"security_id": "abc"}])
+        if "model.features" in sql:
+            return pd.DataFrame(
+                [
+                    {
+                        "as_of_date": "2026-10-19",
+                        "dividend_coverage": 2.1,
+                        "earnings_payout": 0.45,
+                        "fcf_payout": 0.38,
+                        "target_sustainable_dividend": 1,
+                        "price_quality": "ok",
+                    }
+                ]
+            )
+        if "model.scores" in sql:
+            return pd.DataFrame(
+                [
+                    {
+                        "as_of_date": "2026-10-19",
+                        "composite_score": 0.72,
+                        "sustainability_score": 0.8,
+                        "risk_score": 0.3,
+                        "score_coverage": 0.9,
+                        "cvs_tier": "T2",
+                    }
+                ]
+            )
+        if "raw.fmp_dcf" in sql:
+            return pd.DataFrame([{"as_of_date": "2026-10-18", "dcf": 120.0}])
+        if "periodic_financials" in sql:
+            return pd.DataFrame(
+                [
+                    {"period_end": "2025-12-31", "revenue": 1e10, "net_income": 1e9},
+                    {"period_end": "2024-12-31", "revenue": 9e9, "net_income": 8e8},
+                ]
+            )
+        raise AssertionError(sql)
+
+    warehouse = autofill.load_warehouse("TEST", query=query)
+
+    assert warehouse["security_id"] == "abc"
+    assert warehouse["features"]["dividend_coverage"] == 2.1
+    assert warehouse["scores"]["composite_score"] == 0.72
+    assert warehouse["dcf"]["dcf"] == 120.0
+    assert len(warehouse["financials"]) == 2
+
+
+def test_load_warehouse_tolerates_missing_tables_and_unknown_tickers():
+    def missing_table(sql, params=None):
+        if "reference.securities" in sql:
+            return pd.DataFrame([{"security_id": "abc"}])
+        raise RuntimeError("relation does not exist")
+
+    def unknown_ticker(sql, params=None):
+        return pd.DataFrame()
+
+    warehouse = autofill.load_warehouse("TEST", query=missing_table)
+    assert warehouse["features"] == {}
+    assert warehouse["financials"] == []
+    assert autofill.load_warehouse("MISSING", query=unknown_ticker) == {}
+
+
+def test_warehouse_context_fills_gaps_and_is_written_into_the_worksheet():
+    data = autofill.CompanyData(ticker="TEST", quote={"last_price": 100.0})
+    warehouse = {
+        "features": {
+            "as_of_date": "2026-10-19",
+            "current_price": 100.0,
+            "dividend_yield": 0.03,
+            "earnings_payout": 0.5,
+            "fcf_payout": 0.4,
+            "dividend_coverage": 2.0,
+            "interest_coverage": 8.0,
+            "net_debt_to_ebitda": 1.5,
+            "current_ratio": 1.7,
+            "pe_ratio": 17.0,
+            "fcf_yield": 0.05,
+            "gross_margin": 0.4,
+            "operating_margin": 0.18,
+            "net_margin": 0.1,
+            "fcf_margin": 0.08,
+            "cash_conversion": 1.1,
+            "target_sustainable_dividend": 1,
+            "data_quality_score": 8.5,
+            "price_quality": "ok",
+        },
+        "scores": {
+            "as_of_date": "2026-10-19",
+            "composite_score": 0.72,
+            "sustainability_score": 0.80,
+            "valuation_score": 0.50,
+            "risk_score": 0.30,
+            "score_coverage": 0.9,
+            "cvs_tier": "T2",
+            "market_regime": "neutral",
+            "credit_environment": "tight",
+        },
+        "dcf": {"as_of_date": "2026-10-18", "dcf": 120.0, "stock_price": 100.0},
+        "financials": [
+            {
+                "period_end": "2025-12-31",
+                "revenue": 1e10,
+                "net_income": 1e9,
+                "free_cash_flow": 1.2e9,
+            },
+            {
+                "period_end": "2024-12-31",
+                "revenue": 9e9,
+                "net_income": 8e8,
+                "free_cash_flow": 1.0e9,
+            },
+        ],
+    }
+
+    payload = autofill.build_payload("TEST", data, macro={}, warehouse=warehouse, today=TODAY)
+    company = payload["sections"]["company"]["financial_analysis"]
+    valuation = payload["sections"]["valuation"]
+    final = payload["sections"]["final"]
+
+    assert "Stored features" in company
+    assert "dividend cover 2.0x" in company
+    assert "Model scores" in company
+    assert "FMP DCF" in valuation["valuation_methods"]
+    assert "120.00" in valuation["target_price"]
+    assert payload["sections"]["risk"]["overall_risk_score"] == 4
+    assert "warehouse model" in final["risk_summary"]
+    assert "0.9" in final["data_quality"] or "90.0%" in final["data_quality"]
+    assert "model.features" in valuation["sources"]
+
+
+def test_live_provider_values_take_precedence_over_stored_features():
+    data = _sample_data()
+    warehouse = {"features": {"dividend_yield": 0.09, "pe_ratio": 99.0}}
+
+    payload = autofill.build_payload("TEST", data, macro=MACRO, warehouse=warehouse, today=TODAY)
+
+    assert "2.5% dividend yield" in payload["sections"]["final"]["thesis"]
+    assert "P/E 18.0x" in payload["sections"]["variant"]["consensus_multiple"]
 
 
 def test_fetch_company_keeps_the_date_index_of_price_history():

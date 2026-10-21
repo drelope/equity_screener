@@ -3,10 +3,12 @@
 Steps 1-17 (and the final recommendation) are normally written by the analyst. This
 module offers a deterministic starting point built from the same OpenBB commands the
 worksheet's context panel reads, trying FMP first and yfinance where FMP does not answer
-(a missing key, a premium-only endpoint or an empty payload). Every field is filled, but
-the values are heuristics over reported data rather than forecasts: the *Sources* field of
-each section names the endpoints used, and the final *Data quality* note lists anything
-that could not be read so nothing looks observed when it was inferred.
+(a missing key, a premium-only endpoint or an empty payload). The latest warehouse feature,
+score, DCF and periodic-financial rows fill provider gaps and supply the stored dividend
+coverage, payout and model-quality fields. Every field is filled, but the values are
+heuristics over reported data rather than forecasts: the *Sources* field of each section
+names the endpoints used, and the final *Data quality* note lists anything that could not
+be read so nothing looks observed when it was inferred.
 
 Nothing here writes to the warehouse. Like ``app.llm_client``, it returns a payload for
 the page to place in the form; the analyst reviews it and saves through the normal path,
@@ -178,7 +180,9 @@ def _price_rows(rows) -> list[dict]:
     prices = []
     for row in rows:
         date = row.get("date") or row.get("period_ending")
-        close = _num(_first(row, "close", "adj_close", "close_price"))
+        # Adjusted closes reinvest dividends, so momentum, volatility and the analog
+        # windows are total returns rather than price changes.
+        close = _num(_first(row, "adj_close", "adjusted_close", "close", "close_price"))
         if date is not None and close is not None:
             prices.append({"date": pd.Timestamp(date), "close": close})
     return sorted(prices, key=lambda item: item["date"])
@@ -534,6 +538,91 @@ def load_macro(query=None) -> dict:
     }
 
 
+def load_warehouse(ticker, query=None) -> dict:
+    """Latest warehouse context for one ticker, used as a fallback and cross-check.
+
+    The live provider commands remain the primary source. The stored feature row, model
+    scores, FMP DCF estimate and recent periodic financials fill gaps when a provider
+    lacks a ratio or statement, and the score/quality fields are surfaced in the written
+    sections. Missing relations or an empty warehouse yield ``{}`` rather than an error.
+    """
+    if query is None:
+        from app import ui  # local import: keeps the builder importable without Streamlit
+
+        query = ui.query
+    try:
+        security = query(
+            "SELECT CAST(security_id AS text) AS security_id FROM reference.securities "
+            "WHERE ticker = :t AND active "
+            "ORDER BY (security_type = 'common_stock') DESC, security_id LIMIT 1",
+            {"t": ticker},
+        )
+    except Exception:  # noqa: BLE001 - an unloaded warehouse is not a page failure
+        return {}
+    if security.empty:
+        return {}
+    security_id = str(security.iloc[0]["security_id"])
+
+    def one(sql):
+        try:
+            frame = query(sql, {"sid": security_id})
+        except Exception:  # noqa: BLE001 - each table is optional
+            return {}
+        if frame.empty:
+            return {}
+        return _clean(frame.iloc[0].to_dict())
+
+    def many(sql):
+        try:
+            frame = query(sql, {"sid": security_id})
+        except Exception:  # noqa: BLE001 - each table is optional
+            return []
+        return [_clean(row) for row in frame.to_dict("records")]
+
+    features = one(
+        "SELECT as_of_date, current_price, annualized_dividend, dividend_yield, "
+        "dividend_growth, earnings_payout, fcf_payout, dividend_coverage, "
+        "debt_to_ebitda, interest_coverage, volatility_252d, momentum_252d, "
+        "liquidation_discount, legal_rights_score, data_quality_score, "
+        "target_sustainable_dividend, price_quality, refinancing_wall, gross_margin, "
+        "operating_margin, net_margin, fcf_margin, cash_conversion, net_debt_to_ebitda, "
+        "current_ratio, debt_to_equity, pe_ratio, earnings_yield, fcf_yield, price_to_book "
+        "FROM model.features WHERE security_id = CAST(:sid AS uuid) "
+        "ORDER BY as_of_date DESC LIMIT 1"
+    )
+    scores = one(
+        "SELECT as_of_date, dividend_income_score, sustainability_score, "
+        "legal_rights_score, appreciation_score, risk_score, valuation_score, "
+        "composite_score, score_coverage, cvs_score, cvs_tier, market_regime, "
+        "credit_environment, macro_vintage FROM model.scores "
+        "WHERE security_id = CAST(:sid AS uuid) ORDER BY as_of_date DESC LIMIT 1"
+    )
+    dcf = one(
+        "SELECT as_of_date, dcf, stock_price, reported_currency FROM raw.fmp_dcf "
+        "WHERE security_id = CAST(:sid AS uuid) ORDER BY as_of_date DESC LIMIT 1"
+    )
+    financials = many(
+        "SELECT period_end, fiscal_period, revenue, net_income, free_cash_flow "
+        "FROM fundamentals.periodic_financials WHERE security_id = CAST(:sid AS uuid) "
+        "AND period_end <= CURRENT_DATE ORDER BY period_end DESC LIMIT 8"
+    )
+    recent, seen = [], set()
+    for row in financials:
+        period = row.get("period_end")
+        if period in seen or (_first(row, "revenue", "net_income", "free_cash_flow") is None):
+            continue
+        seen.add(period)
+        recent.append(row)
+    financials = recent[:4]
+    return {
+        "security_id": security_id,
+        "features": features,
+        "scores": scores,
+        "dcf": dcf,
+        "financials": financials,
+    }
+
+
 # --- value helpers -----------------------------------------------------------------
 
 
@@ -582,6 +671,24 @@ def _growth(current, prior):
     if current is None or prior in (None, 0):
         return None
     return current / prior - 1
+
+
+def _total_return(value, price, dividend_yield):
+    """Approximate a 12M total return by adding the forward yield to the price return."""
+    price_return = _growth(value, price)
+    if price_return is None:
+        return None
+    return price_return + (dividend_yield or 0)
+
+
+def _ratio_positive(numerator, denominator):
+    if numerator is None or denominator is None or denominator <= 0:
+        return None
+    return numerator / denominator
+
+
+def _outflow(value):
+    return None if value is None else abs(value)
 
 
 def _pct(value, digits=1):
@@ -655,13 +762,21 @@ def _macro_pct(macro, series_id):
 # --- the payload -------------------------------------------------------------------
 
 
-def build_payload(ticker: str, data: CompanyData, *, macro=None, today=None) -> dict:
-    """Fill every worksheet field from ``data`` and the latest macro observations."""
+def build_payload(
+    ticker: str, data: CompanyData, *, macro=None, warehouse=None, today=None
+) -> dict:
+    """Fill every worksheet field from ``data``, macro observations and the warehouse."""
     macro = macro or {}
+    warehouse = warehouse or {}
     today = pd.Timestamp(today or pd.Timestamp.now()).normalize()
-    c = _context(data, today, macro)
+    c = _context(data, today, macro, warehouse)
     sections = schema.empty_payload()["sections"]
     sources = _sources(data)
+    if warehouse:
+        sources += (
+            " Warehouse context: model.features, model.scores, raw.fmp_dcf and "
+            "fundamentals.periodic_financials."
+        )
     confidence = "High" if c["rich"] else ("Medium" if c["some"] else "Low")
 
     def put(section_id, field_id, value):
@@ -965,6 +1080,38 @@ def build_payload(ticker: str, data: CompanyData, *, macro=None, today=None) -> 
         f"{c['sector']} / {c['industry']}, with {c['employees']} employees. "
         f"CEO: {c['ceo']}.",
     )
+    warehouse_financials = ""
+    if c["features_as_of"]:
+        sustainable = c["target_sustainable_dividend"]
+        sustainability = (
+            "sustainable"
+            if sustainable == 1
+            else "not sustainable"
+            if sustainable == 0
+            else "unclassified"
+        )
+        warehouse_financials = (
+            f" Stored features ({c['features_as_of']}): earnings payout "
+            f"{_pct(c['earnings_payout'])}, FCF payout {_pct(c['fcf_payout'])}, dividend "
+            f"cover {_x(c['dividend_coverage'])}, interest cover {_x(c['interest_coverage'])}, "
+            f"refinancing wall {_x(c['refinancing_wall'])} and the dividend target is "
+            f"{sustainability}. Data quality {_decimal(c['data_quality_score'])}/10 "
+            f"({c['price_quality']})."
+        )
+    if c["scores_as_of"]:
+        warehouse_financials += (
+            f" Model scores ({c['scores_as_of']}): composite "
+            f"{_pct(c['composite_score'])}, sustainability "
+            f"{_pct(c['sustainability_score'])}, valuation "
+            f"{_pct(c['valuation_score'])}, risk {_pct(c['model_risk_score'])} "
+            f"with {_pct(c['score_coverage'])} coverage"
+            + (f"; CVS tier {c['cvs_tier']}" if c["cvs_tier"] else "")
+            + (
+                f"; regime {c['market_regime']}, credit {c['credit_environment']}."
+                if c["market_regime"] or c["credit_environment"]
+                else "."
+            )
+        )
     put(
         "company",
         "financial_analysis",
@@ -972,7 +1119,8 @@ def build_payload(ticker: str, data: CompanyData, *, macro=None, today=None) -> 
         f"operating margin {_pct(c['operating_margin'])}, net margin "
         f"{_pct(c['net_margin'])}. Net debt/EBITDA {_x(c['net_debt_ebitda'])}, current "
         f"ratio {_x(c['current_ratio'])}, debt/equity {_x(c['debt_equity'])}. Free cash "
-        f"flow {_money(c['fcf'], ccy)} and cash conversion {_x(c['cash_conversion'])}.",
+        f"flow {_money(c['fcf'], ccy)} and cash conversion {_x(c['cash_conversion'])}."
+        f"{_dividend_summary(c)}{warehouse_financials}",
     )
     conf("company")
     src("company")
@@ -1065,21 +1213,28 @@ def build_payload(ticker: str, data: CompanyData, *, macro=None, today=None) -> 
     src("management")
 
     # 13. Valuation --------------------------------------------------------------
+    dcf_text = (
+        f" The stored FMP DCF is {_money(c['dcf'], ccy)} as of {c['dcf_as_of']} "
+        f"({_pct(c['dcf_margin'])} versus the current price), used as an intrinsic-value "
+        f"cross-check."
+        if c["dcf"] is not None
+        else ""
+    )
     put(
         "valuation",
         "valuation_methods",
         f"P/E {_x(c['pe'])}, price/book {_x(c['pb'])}, EV/EBITDA {_x(c['ev_ebitda'])}, "
-        f"FCF yield {_pct(c['fcf_yield'])} and the analyst consensus target "
+        f"FCF yield {_pct(c['fcf_yield'])} and the {c['target_source']} target "
         f"{_money(target, ccy)}. The target is the anchor; the multiples are the "
-        f"cross-check.",
+        f"cross-check.{dcf_text}",
     )
     put(
         "valuation",
         "key_assumptions",
         f"Revenue grows at the reported {_pct(c['rev_growth'])} and margins hold at "
         f"{_pct(c['operating_margin'])}; the market applies the current {_x(c['pe'])} P/E "
-        f"to the derived EPS path. The consensus target is assumed to embed a discount "
-        f"rate consistent with the current price of {_money(price, ccy)}.",
+        f"to the derived EPS path. The {c['target_source']} target is assumed to embed a "
+        f"discount rate consistent with the current price of {_money(price, ccy)}.",
     )
     put("valuation", "target_price", f"{_money(target, ccy)} ({ccy})")
     put("valuation", "margin_of_safety", _pct(c["upside"]))
@@ -1118,7 +1273,7 @@ def build_payload(ticker: str, data: CompanyData, *, macro=None, today=None) -> 
         "key_differences",
         f"Today's setup differs from the listed windows in its current P/E of "
         f"{_x(c['pe'])} and free-cash-flow yield of {_pct(c['fcf_yield'])}; those are the "
-        f"variables to re-check, not just the price path.",
+        f"variables to re-check, not just the total-return path.",
     )
     put(
         "analog",
@@ -1148,7 +1303,7 @@ def build_payload(ticker: str, data: CompanyData, *, macro=None, today=None) -> 
         "position_sizing",
         f"Risk score {c['risk_score']}/10 implies a "
         f"{'small (1-2%)' if c['risk_score'] >= 7 else 'moderate (2-3%)' if c['risk_score'] >= 4 else 'full (4-5%)'} "
-        f"position, sized down further if the dividend cover or liquidity weakens.",
+        f"position; {_dividend_phrase(c)}, and size down further if cover or liquidity weakens.",
     )
     conf("risk")
     src("risk", option_source)
@@ -1184,27 +1339,43 @@ def build_payload(ticker: str, data: CompanyData, *, macro=None, today=None) -> 
     put(
         "portfolio",
         "correlation_assessment",
-        f"Momentum is {c['factors']['momentum'].lower()} (price vs 200-day average) and "
-        f"beta is {_x(c['beta'])}; the correlation check must use the live portfolio.",
+        f"Momentum is {c['factors']['momentum'].lower()} (12M total return) and beta is "
+        f"{_x(c['beta'])}; the correlation check must use the live portfolio.",
     )
     src("portfolio")
 
     # 18. Recommendation & final output -----------------------------------------
     recommendation = c["recommendation"]
-    put(
-        "final",
-        "thesis",
-        # A name like "Apple Inc." would read as an extra sentence to the three-sentence
-        # rule, so periods are dropped from it.
-        f"{c['name'].replace('.', '')} trades at {_x(c['pe'])} with a "
-        f"{_pct(c['dividend_yield'])} dividend yield and a {_pct(c['fcf_yield'])} "
-        f"free-cash-flow yield. "
-        f"Reported revenue growth is {_pct(c['rev_growth'])} with a "
-        f"{_pct(c['operating_margin'])} operating margin and {_x(c['cash_conversion'])} "
-        f"cash conversion. "
-        f"The auto-generated {recommendation} call reflects {_pct(c['upside'])} upside to "
-        f"the analyst target and a {c['risk_word']}-risk profile.",
-    )
+    if recommendation:
+        thesis = (
+            # A name like "Apple Inc." would read as an extra sentence to the
+            # three-sentence rule, so periods are dropped from it.
+            f"{c['name'].replace('.', '')} trades at {_x(c['pe'])} with a "
+            f"{_pct(c['dividend_yield'])} dividend yield and a {_pct(c['fcf_yield'])} "
+            f"free-cash-flow yield. "
+            f"Reported revenue growth is {_pct(c['rev_growth'])} with a "
+            f"{_pct(c['operating_margin'])} operating margin and {_x(c['cash_conversion'])} "
+            f"cash conversion. "
+            f"The auto-generated {recommendation} call reflects "
+            f"{_pct(c['expected_return'])} expected 12M total return, {_pct(c['upside'])} "
+            f"price upside to the {c['target_source']} target and a {c['risk_word']}-risk "
+            f"profile, while {_dividend_phrase(c)}."
+        )
+        position_text = (
+            f"{'Small (1-2%)' if c['risk_score'] >= 7 else 'Moderate (2-3%)' if c['risk_score'] >= 4 else 'Full (4-5%)'} "
+            "position, built in two tranches and reviewed after the next results."
+        )
+    else:
+        thesis = (
+            f"{c['name'].replace('.', '')} does not have enough reported data for a "
+            "recommendation: an analyst target or FMP DCF plus reported revenue and net "
+            "income are required. The auto-complete leaves the recommendation unset for "
+            "the analyst to decide."
+        )
+        position_text = (
+            "No position size is proposed because the recommendation is intentionally unset."
+        )
+    put("final", "thesis", thesis)
     put("final", "recommendation", recommendation)
     put(
         "final",
@@ -1217,18 +1388,13 @@ def build_payload(ticker: str, data: CompanyData, *, macro=None, today=None) -> 
     put(
         "final",
         "risk_summary",
-        f"Risk score {c['risk_score']}/10. Business {c['risk']['business'].lower()}, "
-        f"valuation {c['risk']['valuation'].lower()}, balance sheet "
-        f"{c['risk']['balance_sheet'].lower()}, macro {c['risk']['macro'].lower()}, "
-        f"regulatory {c['risk']['regulatory'].lower()}, liquidity "
-        f"{c['risk']['liquidity'].lower()}.",
+        f"Risk score {c['risk_score']}/10 ({c['risk_score_source']}). Business "
+        f"{c['risk']['business'].lower()}, valuation {c['risk']['valuation'].lower()}, "
+        f"balance sheet {c['risk']['balance_sheet'].lower()}, macro "
+        f"{c['risk']['macro'].lower()}, regulatory {c['risk']['regulatory'].lower()}, "
+        f"liquidity {c['risk']['liquidity'].lower()}.{_dividend_summary(c)}",
     )
-    put(
-        "final",
-        "position_recommendation",
-        f"{'Small (1-2%)' if c['risk_score'] >= 7 else 'Moderate (2-3%)' if c['risk_score'] >= 4 else 'Full (4-5%)'} "
-        f"position, built in two tranches and reviewed after the next results.",
-    )
+    put("final", "position_recommendation", position_text)
     put(
         "final",
         "catalyst_timeline",
@@ -1238,8 +1404,8 @@ def build_payload(ticker: str, data: CompanyData, *, macro=None, today=None) -> 
     put(
         "final",
         "kill_switch",
-        "A dividend cut, cash conversion below 0.7, net debt/EBITDA above 3.0x, or two "
-        "consecutive periods of operating-margin compression.",
+        "A dividend cut, earnings cover below 1.0x, cash conversion below 0.7, net "
+        "debt/EBITDA above 3.0x, or two consecutive periods of operating-margin compression.",
     )
     put("final", "confidence_overall", confidence)
     put(
@@ -1247,6 +1413,8 @@ def build_payload(ticker: str, data: CompanyData, *, macro=None, today=None) -> 
         "data_quality",
         f"Providers: {c['provider_summary']}. "
         f"Unavailable: {', '.join(sorted(data.failures)) or 'none'}. "
+        f"Warehouse scores are {_pct(c['composite_score'])} composite with "
+        f"{_pct(c['score_coverage'])} coverage; stored price quality is {c['price_quality']}. "
         f"Forward estimates are derived rather than observed and insider ownership is not "
         f"reported by the selected endpoints.",
     )
@@ -1275,13 +1443,23 @@ def build_payload(ticker: str, data: CompanyData, *, macro=None, today=None) -> 
     return {"version": schema.SCHEMA_VERSION, "sections": sections}
 
 
-def _context(data: CompanyData, today, macro) -> dict:
+def _context(data: CompanyData, today, macro, warehouse=None) -> dict:
     profile, quote, cons = data.profile or {}, data.quote or {}, data.consensus or {}
     ratios, metrics = data.ratios or {}, data.metrics or {}
+    warehouse = warehouse or {}
+    features = warehouse.get("features") or {}
+    scores = warehouse.get("scores") or {}
+    dcf = warehouse.get("dcf") or {}
+    stored = warehouse.get("financials") or []
     inc = data.income[0] if data.income else {}
     prior = data.income[1] if len(data.income) > 1 else {}
     bal = data.balance[0] if data.balance else {}
     cash = data.cash[0] if data.cash else {}
+    if not inc and stored:
+        inc = stored[0]
+        prior = stored[1] if len(stored) > 1 else {}
+        if not cash:
+            cash = {"free_cash_flow": _first(stored[0], "free_cash_flow")}
 
     currency = _text(profile, "currency", default=_text(metrics, "currency", default="USD"))
     revenue = _first(inc, "revenue", "total_revenue", "operating_revenue")
@@ -1296,15 +1474,21 @@ def _context(data: CompanyData, today, macro) -> dict:
     eps_prior = _first(prior, "diluted_earnings_per_share", "basic_earnings_per_share")
     cfo = _first(cash, "operating_cash_flow")
     fcf = _first(cash, "free_cash_flow")
-    capex = _first(cash, "capital_expenditure", "purchase_of_property_plant_and_equipment")
-    capex_prior = _first(
-        data.cash[1] if len(data.cash) > 1 else {},
-        "capital_expenditure",
-        "purchase_of_property_plant_and_equipment",
+    # Statement outflows are negative in the provider frames; keep the magnitudes
+    # positive so capex intensity and the capital-allocation prose do not flip signs.
+    capex = _outflow(
+        _first(cash, "capital_expenditure", "purchase_of_property_plant_and_equipment")
+    )
+    capex_prior = _outflow(
+        _first(
+            data.cash[1] if len(data.cash) > 1 else {},
+            "capital_expenditure",
+            "purchase_of_property_plant_and_equipment",
+        )
     )
     sbc = _first(cash, "stock_based_compensation")
-    dividends_paid = _first(cash, "net_dividends_paid", "common_dividends_paid")
-    buybacks = _first(cash, "repurchase_of_common_equity")
+    dividends_paid = _outflow(_first(cash, "net_dividends_paid", "common_dividends_paid"))
+    buybacks = _outflow(_first(cash, "repurchase_of_common_equity"))
     working_capital = _first(cash, "change_in_working_capital")
 
     assets = _first(bal, "total_assets")
@@ -1318,58 +1502,111 @@ def _context(data: CompanyData, today, macro) -> dict:
         _first(quote, "last_price"),
         _first(profile, "last_price"),
         _first(cons, "current_price"),
+        _first(features, "current_price"),
     )
     market_cap = _coalesce(
         _first(profile, "market_cap"),
         _first(metrics, "market_cap"),
         _first(quote, "market_cap"),
     )
-    target = _coalesce(
+    analyst_target = _coalesce(
         _first(cons, "target_consensus"),
         _first(cons, "target_median"),
+    )
+    dcf_target = _first(dcf, "dcf")
+    target = _coalesce(analyst_target, dcf_target)
+    target_source = (
+        "analyst consensus"
+        if analyst_target is not None
+        else "FMP DCF"
+        if dcf_target is not None
+        else "not available"
     )
     target_high = _first(cons, "target_high")
     target_low = _first(cons, "target_low")
 
     rev_growth = _growth(revenue, revenue_prior)
     eps_growth = _coalesce(_growth(eps, eps_prior), _growth(net_income, net_income_prior))
-    gross_margin = _coalesce(_first(ratios, "gross_profit_margin"), _ratio(gross_profit, revenue))
+    gross_margin = _coalesce(
+        _first(ratios, "gross_profit_margin"),
+        _ratio(gross_profit, revenue),
+        _first(features, "gross_margin"),
+    )
     operating_margin = _coalesce(
         _first(ratios, "operating_profit_margin", "ebit_margin"),
         _ratio(operating_income, revenue),
+        _first(features, "operating_margin"),
     )
     operating_margin_prior = _ratio(operating_income_prior, revenue_prior)
     net_margin = _coalesce(
         _first(ratios, "bottom_line_profit_margin", "net_profit_margin"),
         _ratio(net_income, revenue),
+        _first(features, "net_margin"),
     )
-    fcf_margin = _ratio(fcf, revenue)
-    cash_conversion = _ratio(cfo, net_income)
+    fcf_margin = _coalesce(_first(features, "fcf_margin"), _ratio(fcf, revenue))
+    cash_conversion = _coalesce(_first(features, "cash_conversion"), _ratio(cfo, net_income))
     accrual_ratio = _ratio(None if net_income is None or cfo is None else net_income - cfo, assets)
     sbc_pct = _coalesce(
         _first(metrics, "stock_based_compensation_to_revenue"), _ratio(sbc, revenue)
     )
     net_debt = None if debt is None and cash_balance is None else (debt or 0) - (cash_balance or 0)
-    net_debt_ebitda = _coalesce(_first(metrics, "net_debt_to_ebitda"), _ratio(net_debt, ebitda))
+    net_debt_ebitda = _coalesce(
+        _first(metrics, "net_debt_to_ebitda"),
+        _ratio(net_debt, ebitda),
+        _first(features, "net_debt_to_ebitda", "debt_to_ebitda"),
+    )
     current_ratio = _coalesce(
         _first(ratios, "current_ratio", "quick_ratio"),
         _ratio(current_assets, current_liabilities),
         _first(metrics, "current_ratio"),
+        _first(features, "current_ratio"),
     )
-    debt_equity = _coalesce(_first(ratios, "debt_to_equity"), _ratio(debt, equity))
-    pe = _coalesce(_first(ratios, "price_to_earnings"), _ratio(market_cap, net_income))
-    pb = _coalesce(_first(ratios, "price_to_book"), _ratio(market_cap, equity))
+    debt_equity = _coalesce(
+        _first(ratios, "debt_to_equity"),
+        _ratio(debt, equity),
+        _first(features, "debt_to_equity"),
+    )
+    pe = _coalesce(
+        _first(ratios, "price_to_earnings"),
+        _ratio(market_cap, net_income),
+        _first(features, "pe_ratio"),
+    )
+    pb = _coalesce(
+        _first(ratios, "price_to_book"),
+        _ratio(market_cap, equity),
+        _first(features, "price_to_book"),
+    )
     ev_ebitda = _first(metrics, "ev_to_ebitda")
-    earnings_yield = _coalesce(_first(metrics, "earnings_yield"), _ratio(1, pe))
-    fcf_yield = _coalesce(_first(metrics, "free_cash_flow_yield"), _ratio(fcf, market_cap))
+    earnings_yield = _coalesce(
+        _first(metrics, "earnings_yield"),
+        _ratio(1, pe),
+        _first(features, "earnings_yield"),
+    )
+    fcf_yield = _coalesce(
+        _first(metrics, "free_cash_flow_yield"),
+        _ratio(fcf, market_cap),
+        _first(features, "fcf_yield"),
+    )
     profile_yield = _first(profile, "dividend_yield")
     if profile_yield is not None and data.providers.get("profile") == "yfinance":
         # yfinance reports the profile yield in percent; the ratios table is a fraction.
         profile_yield /= 100
     dividend_yield = _coalesce(
         _first(ratios, "dividend_yield"),
+        _first(features, "dividend_yield"),
         _ratio(_first(profile, "annualized_dividend_amount"), price),
         profile_yield,
+    )
+    earnings_payout = _coalesce(
+        _first(features, "earnings_payout"), _ratio_positive(dividends_paid, net_income)
+    )
+    fcf_payout = _coalesce(_first(features, "fcf_payout"), _ratio_positive(dividends_paid, fcf))
+    dividend_coverage = _coalesce(
+        _first(features, "dividend_coverage"), _ratio_positive(net_income, dividends_paid)
+    )
+    target_sustainable = _first(features, "target_sustainable_dividend")
+    dividend_status = _dividend_verdict(
+        dividends_paid, target_sustainable, dividend_coverage, fcf_payout
     )
     roe = _first(metrics, "return_on_equity")
     roic = _first(metrics, "return_on_invested_capital")
@@ -1379,8 +1616,8 @@ def _context(data: CompanyData, today, macro) -> dict:
     upside = None if upside is None else upside - 1
     target_multiple = _ratio(target, eps) if eps else None
 
-    momentum = _momentum(data.prices)
-    volatility = _volatility(data.prices)
+    momentum = _coalesce(_momentum(data.prices), _first(features, "momentum_252d"))
+    volatility = _coalesce(_volatility(data.prices), _first(features, "volatility_252d"))
     insider_buys, insider_sells = _insider_counts(data.insider, today)
 
     fy_revenue = None if revenue is None or rev_growth is None else revenue * (1 + rev_growth)
@@ -1393,9 +1630,9 @@ def _context(data: CompanyData, today, macro) -> dict:
     base_case = _coalesce(target, None if price is None else price * 1.05)
     bull_case = _coalesce(target_high, None if base_case is None else base_case * 1.15)
     bear_case = _coalesce(target_low, None if base_case is None else base_case * 0.85)
-    base_return = _growth(base_case, price)
-    bull_return = _growth(bull_case, price)
-    bear_return = _growth(bear_case, price)
+    base_return = _total_return(base_case, price, dividend_yield)
+    bull_return = _total_return(bull_case, price, dividend_yield)
+    bear_return = _total_return(bear_case, price, dividend_yield)
     expected_return = _weighted_return(base_return, bull_return, bear_return)
 
     analog_table, base_rate = _analog(data.prices, today)
@@ -1405,6 +1642,11 @@ def _context(data: CompanyData, today, macro) -> dict:
     )
     if data.failures:
         provider_summary += f"; failed: {', '.join(sorted(data.failures))}"
+    if warehouse:
+        provider_summary += (
+            "; warehouse: model.features, model.scores, raw.fmp_dcf, "
+            "fundamentals.periodic_financials"
+        )
 
     values = {
         "currency": currency,
@@ -1454,10 +1696,37 @@ def _context(data: CompanyData, today, macro) -> dict:
         "roic": roic,
         "beta": beta,
         "target": target,
+        "analyst_target": analyst_target,
+        "target_source": target_source,
         "target_high": target_high,
         "target_low": target_low,
         "upside": upside,
         "target_multiple": target_multiple,
+        "dcf": dcf_target,
+        "dcf_as_of": dcf.get("as_of_date"),
+        "dcf_margin": None if dcf_target is None or not price else dcf_target / price - 1,
+        "earnings_payout": earnings_payout,
+        "fcf_payout": fcf_payout,
+        "dividend_coverage": dividend_coverage,
+        "dividend_status": dividend_status,
+        "interest_coverage": _first(features, "interest_coverage"),
+        "refinancing_wall": _first(features, "refinancing_wall"),
+        "target_sustainable_dividend": target_sustainable,
+        "data_quality_score": _first(features, "data_quality_score"),
+        "price_quality": _text(features, "price_quality", default="not reported"),
+        "features_as_of": features.get("as_of_date"),
+        "composite_score": _first(scores, "composite_score"),
+        "sustainability_score": _first(scores, "sustainability_score"),
+        "dividend_income_score": _first(scores, "dividend_income_score"),
+        "appreciation_score": _first(scores, "appreciation_score"),
+        "valuation_score": _first(scores, "valuation_score"),
+        "score_coverage": _first(scores, "score_coverage"),
+        "model_risk_score": _first(scores, "risk_score"),
+        "cvs_tier": _text(scores, "cvs_tier", default=""),
+        "market_regime": _text(scores, "market_regime", default=""),
+        "credit_environment": _text(scores, "credit_environment", default=""),
+        "scores_as_of": scores.get("as_of_date"),
+        "evidence_ready": all(value is not None for value in (price, target, revenue, net_income)),
         "fy_revenue": fy_revenue,
         "next_fy_revenue": next_fy_revenue,
         "fy_eps": fy_eps,
@@ -1490,20 +1759,31 @@ def _context(data: CompanyData, today, macro) -> dict:
         "base_rate": base_rate,
         "revision_trend": _revision_trend(data.price_target, today),
         "dispersion": _dispersion(target_high, target_low, target),
-        "rich": bool(inc and bal and cash and data.ratios),
-        "some": bool(inc or data.profile),
-        "source_short": ", ".join(sorted(set(data.providers.values()))) or "no provider",
+        "rich": bool((inc and bal and cash and data.ratios) or (features and (scores or stored))),
+        "some": bool(inc or data.profile or features or stored),
+        "source_short": (", ".join(sorted(set(data.providers.values()))) or "no provider")
+        + (", warehouse" if warehouse else ""),
         "provider_summary": provider_summary,
     }
     values["risk"] = _risk(values, macro=macro, volatility=volatility)
-    values["risk_score"] = _risk_score(values["risk"])
+    heuristic_risk = _risk_score(values["risk"])
+    values["risk_score"] = (
+        _clamp(1 + 9 * values["model_risk_score"])
+        if values["model_risk_score"] is not None
+        else heuristic_risk
+    )
+    values["risk_score_source"] = (
+        "warehouse model" if values["model_risk_score"] is not None else "heuristic"
+    )
     values["risk_word"] = (
         "high" if values["risk_score"] >= 7 else "moderate" if values["risk_score"] >= 4 else "low"
     )
     values["factors"] = _factors(
         values, macro=macro, momentum=momentum, volatility=volatility, beta=beta
     )
-    values["recommendation"] = _recommendation(expected_return, values["risk_score"])
+    values["recommendation"] = (
+        _recommendation(expected_return, values["risk_score"]) if values["evidence_ready"] else ""
+    )
     return values
 
 
@@ -1526,6 +1806,50 @@ def _margin_trend(current, prior):
     if current - prior < -0.005:
         return "Compressing"
     return "Flat"
+
+
+def _dividend_verdict(dividends_paid, target_sustainable, coverage, fcf_payout):
+    if target_sustainable == 1:
+        return "sustainable"
+    if target_sustainable == 0:
+        return "not sustainable"
+    if not dividends_paid:
+        return "not paid"
+    if (coverage is not None and coverage < 1) or (fcf_payout is not None and fcf_payout > 1):
+        return "at risk"
+    if coverage is not None and coverage >= 1.5 and (fcf_payout is None or fcf_payout <= 0.8):
+        return "covered"
+    return "not proven"
+
+
+def _dividend_phrase(c):
+    status = c.get("dividend_status")
+    if status == "not paid":
+        return "no dividend was paid in the latest period"
+    return f"the dividend is {status}"
+
+
+def _dividend_summary(c):
+    status = c.get("dividend_status")
+    if status == "not paid":
+        return " Dividend: no payment was reported in the latest period."
+    details = []
+    if c.get("dividend_yield") is not None:
+        details.append(f"yield {_pct(c['dividend_yield'])}")
+    if c.get("earnings_payout") is not None:
+        details.append(f"earnings payout {_pct(c['earnings_payout'])}")
+    if c.get("fcf_payout") is not None:
+        details.append(f"FCF payout {_pct(c['fcf_payout'])}")
+    if c.get("dividend_coverage") is not None:
+        details.append(f"earnings cover {_x(c['dividend_coverage'])}")
+    if not details:
+        return " Dividend: the latest payment could not be related to earnings or free cash flow."
+    source = (
+        "stored model label"
+        if c.get("target_sustainable_dividend") is not None
+        else "data-derived view"
+    )
+    return f" Dividend: {', '.join(details)}; {source} says the dividend is {status}."
 
 
 def _capital_discipline(fcf, capex, revenue, net_debt_ebitda):
@@ -1710,6 +2034,7 @@ def _sensitivity(c):
 
 
 def _momentum(prices):
+    """12M total return from adjusted closes (dividends reinvested)."""
     if len(prices) < 2:
         return None
     latest = prices[-1]
@@ -1729,7 +2054,9 @@ def _volatility(prices):
 
 
 def _analog(prices, today):
-    header = "| Period | Conditions | Forward 12M return | Outcome |\n| --- | --- | --- | --- |"
+    header = (
+        "| Period | Conditions | Forward 12M total return | Outcome |\n| --- | --- | --- | --- |"
+    )
     rows, returns = [], []
     for offset in (3, 2, 1):
         end = pd.Timestamp(today) - pd.Timedelta(days=365 * (offset - 1))
@@ -1744,12 +2071,12 @@ def _analog(prices, today):
         returns.append(value)
         outcome = "Positive" if value >= 0 else "Negative"
         rows.append(
-            f"| {start.date()} to {end.date()} | Same security, 12M window | "
+            f"| {start.date()} to {end.date()} | Same security, 12M total-return window | "
             f"{_pct(value)} | {outcome} |"
         )
     if not rows:
         return (
-            "| Period | Conditions | Forward 12M return | Outcome |\n"
+            "| Period | Conditions | Forward 12M total return | Outcome |\n"
             "| --- | --- | --- | --- |\n"
             "| not available | No price history was returned | N/A | Unknown |",
             0.0,
