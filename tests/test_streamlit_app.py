@@ -790,6 +790,58 @@ def test_go_to_analysis_switches_pages_and_carries_the_ticker(without_token):
     assert at.selectbox[0].value == ticker
 
 
+def test_the_ticker_picker_defaults_to_dividend_paying_common_stock(without_token):
+    at = page("security").run()
+    assert not at.exception, [e.value for e in at.exception]
+
+    override = next(c for c in at.checkbox if c.label == "Show all active securities")
+    assert not override.value
+    with engine.connect() as conn:
+        expected = conn.execute(
+            text(
+                "SELECT count(*) FROM reference.securities "
+                "WHERE active AND security_type = 'common_stock' AND dividend"
+            )
+        ).scalar()
+    assert len(at.selectbox[0].options) == expected
+
+
+def test_the_ticker_picker_override_restores_the_full_active_universe(without_token):
+    at = page("security").run()
+    assert not at.exception, [e.value for e in at.exception]
+    default_count = len(at.selectbox[0].options)
+
+    at = next(c for c in at.checkbox if c.label == "Show all active securities").check().run()
+    assert not at.exception, [e.value for e in at.exception]
+    with engine.connect() as conn:
+        expected = conn.execute(
+            text("SELECT count(*) FROM reference.securities WHERE active")
+        ).scalar()
+    assert len(at.selectbox[0].options) == expected
+    assert expected > default_count
+
+
+def test_a_selected_ticker_outside_the_default_universe_is_kept(without_token):
+    with engine.connect() as conn:
+        ticker = conn.execute(
+            text(
+                "SELECT ticker FROM reference.securities "
+                "WHERE active AND NOT (security_type = 'common_stock' AND dividend) "
+                "ORDER BY ticker LIMIT 1"
+            )
+        ).scalar()
+    if ticker is None:
+        pytest.skip("no active non-dividend listing in the warehouse")
+
+    at = page("security")
+    at.session_state["selected_ticker"] = ticker
+    at.run()
+
+    assert not at.exception, [e.value for e in at.exception]
+    assert at.selectbox[0].value == ticker
+    assert ticker in at.selectbox[0].options
+
+
 def test_the_security_page_offers_the_analysis_worksheet_for_its_ticker(without_token):
     at = page("security").run()
     assert not at.exception, [e.value for e in at.exception]
@@ -1135,8 +1187,11 @@ def test_auto_complete_prefills_the_form_without_saving(with_token, monkeypatch)
     monkeypatch.setattr(
         autofill, "fetch_company", lambda ticker, **kwargs: autofill.CompanyData(ticker=ticker)
     )
-    monkeypatch.setattr(autofill, "build_payload", lambda ticker, data, macro=None: payload)
+    monkeypatch.setattr(
+        autofill, "build_payload", lambda ticker, data, macro=None, **kwargs: payload
+    )
     monkeypatch.setattr(autofill, "load_macro", lambda: {})
+    monkeypatch.setattr(autofill, "load_warehouse", lambda ticker: {})
 
     at = page("investment_analysis", operator=True).run()
     assert not at.exception, [e.value for e in at.exception]
@@ -1168,8 +1223,11 @@ def test_auto_complete_options_are_opt_in(with_token, monkeypatch):
         return autofill.CompanyData(ticker=ticker)
 
     monkeypatch.setattr(autofill, "fetch_company", fetch)
-    monkeypatch.setattr(autofill, "build_payload", lambda ticker, data, macro=None: payload)
+    monkeypatch.setattr(
+        autofill, "build_payload", lambda ticker, data, macro=None, **kwargs: payload
+    )
     monkeypatch.setattr(autofill, "load_macro", lambda: {})
+    monkeypatch.setattr(autofill, "load_warehouse", lambda ticker: {})
 
     at = page("investment_analysis", operator=True).run()
     assert not at.checkbox(key="ia_autofill_options").value

@@ -9,6 +9,7 @@ import streamlit as st
 
 from app import column_docs, ui
 from app.views.screener import SELECTED_KEY
+from app.views.ticker_picker import render_ticker_picker
 from src.crispdm.analysis import store
 
 RANGES = {"1 year": 365, "3 years": 3 * 365, "5 years": 5 * 365, "All": None}
@@ -1023,20 +1024,10 @@ def issuer_section(cik, current_symbol) -> None:
 
 def render() -> None:
     st.title("Security detail")
-    tickers = ui.query(
-        "SELECT ticker FROM reference.securities WHERE active ORDER BY ticker"
-    ).ticker.tolist()
-    if not tickers:
-        st.warning("No active securities. Run the reference-data load first.")
+    ticker = render_ticker_picker("security")
+    if ticker is None:
         return
-
-    chosen = st.session_state.get(SELECTED_KEY)
-    index = tickers.index(chosen) if chosen in tickers else 0
-    # No widget key: a keyed selectbox keeps its own state and would ignore a ticker
-    # picked on the Screener after the first render.
-    pick, action = st.columns([4, 1])
-    ticker = pick.selectbox("Ticker", tickers, index=index)
-    st.session_state[SELECTED_KEY] = ticker
+    _, action = st.columns([4, 1])
     if action.button(
         "Analyze",
         key="security_analyze",

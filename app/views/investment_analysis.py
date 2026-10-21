@@ -24,6 +24,7 @@ from app.views.security import (
     profile,
     score_section,
 )
+from app.views.ticker_picker import render_ticker_picker
 from src.crispdm.analysis import store
 from src.crispdm.config import settings
 
@@ -438,7 +439,12 @@ def _autofill_section(info: pd.Series) -> None:
         try:
             with st.spinner("Reading FMP, then yfinance..."):
                 data = autofill.fetch_company(info.ticker, include_options=include_options)
-                payload = autofill.build_payload(info.ticker, data, macro=autofill.load_macro())
+                payload = autofill.build_payload(
+                    info.ticker,
+                    data,
+                    macro=autofill.load_macro(),
+                    warehouse=autofill.load_warehouse(info.ticker),
+                )
         except Exception as exc:  # noqa: BLE001 - show the failure, keep the form usable
             st.error(f"Not auto-completed ({type(exc).__name__}): {exc}")
             return
@@ -589,17 +595,9 @@ def render() -> None:
     if flash:
         st.success(flash)
 
-    tickers = ui.query(
-        "SELECT ticker FROM reference.securities WHERE active ORDER BY ticker"
-    ).ticker.tolist()
-    if not tickers:
-        st.warning("No active securities. Run the reference-data load first.")
+    ticker = render_ticker_picker("ia")
+    if ticker is None:
         return
-
-    chosen = st.session_state.get(SELECTED_KEY)
-    index = tickers.index(chosen) if chosen in tickers else 0
-    ticker = st.selectbox("Ticker", tickers, index=index)
-    st.session_state[SELECTED_KEY] = ticker
 
     found = profile(ticker)
     if found.empty:
