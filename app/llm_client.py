@@ -70,9 +70,7 @@ def generate_draft(
     payload = parse_payload(content)
     errors = schema.validate_draft(payload)
     if errors:
-        raise LLMError(
-            "the generated draft did not pass validation: " + "; ".join(errors[:5])
-        )
+        raise LLMError("the generated draft did not pass validation: " + "; ".join(errors[:5]))
     return payload
 
 
@@ -96,9 +94,7 @@ def parse_payload(content: str) -> dict:
 
 def _require_enabled(allow_remote: bool) -> None:
     if not settings.llm_enabled:
-        raise LLMError(
-            "the local LLM draft is disabled; set LLM_ENABLED=true to turn it on"
-        )
+        raise LLMError("the local LLM draft is disabled; set LLM_ENABLED=true to turn it on")
     if not settings.llm_endpoint_is_local() and not allow_remote:
         raise LLMError(
             "the configured LLM endpoint is not localhost; confirm you want to send "
@@ -118,13 +114,10 @@ def _post(messages: list[dict], *, session, timeout: float) -> str:
         "stream": False,
     }
     try:
-        response = session.post(
-            settings.llm_endpoint, json=body, headers=headers, timeout=timeout
-        )
+        response = session.post(settings.llm_endpoint, json=body, headers=headers, timeout=timeout)
     except requests.RequestException as exc:
         raise LLMError(
-            f"could not reach the local model at {settings.llm_endpoint} "
-            f"({type(exc).__name__})"
+            f"could not reach the local model at {settings.llm_endpoint} ({type(exc).__name__})"
         ) from exc
     if not response.ok:
         raise LLMError(f"the local model returned HTTP {response.status_code}")
@@ -144,7 +137,7 @@ def _system_prompt() -> str:
         'field as "" (or null for a score) when the context does not support it; give each '
         "analytical section a confidence and cite its data sources; do not state a "
         "recommendation until every earlier section is complete; a select must use one of "
-        "its listed options or \"\"; a score is an integer 1-10.\n\n"
+        'its listed options or ""; a score is an integer 1-10.\n\n'
         "Schema (section id -> fields):\n" + _schema_digest()
     )
 

@@ -131,7 +131,7 @@ def test_generate_draft_posts_to_the_local_model_and_returns_a_payload(enabled):
     payload = llm_client.generate_draft("Ticker: ABC", session=session)
 
     assert payload["sections"]["universe"]["universe_filters"] == "Tech"
-    (url, kwargs), = session.calls
+    ((url, kwargs),) = session.calls
     assert url == LOCAL
     assert kwargs["json"]["model"] == "test-model"
     assert kwargs["json"]["temperature"] == 0.2

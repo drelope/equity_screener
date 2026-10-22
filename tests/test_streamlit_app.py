@@ -956,7 +956,9 @@ def test_generating_a_local_draft_prefills_the_form_without_saving(with_token, m
     assert count == 0, "generation must never save"
 
 
-def test_the_generate_control_is_hidden_until_the_local_draft_is_enabled(without_token, monkeypatch):
+def test_the_generate_control_is_hidden_until_the_local_draft_is_enabled(
+    without_token, monkeypatch
+):
     from src.crispdm.config import settings
 
     monkeypatch.setattr(settings, "llm_enabled", False)

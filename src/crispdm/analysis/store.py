@@ -34,8 +34,7 @@ class StatusTransitionError(ValueError):
 
     def __init__(self, current: str, requested: str):
         super().__init__(
-            f"a {current} worksheet can only become {requested} when the save is an "
-            "explicit reopen"
+            f"a {current} worksheet can only become {requested} when the save is an explicit reopen"
         )
         self.current = current
         self.requested = requested

@@ -124,7 +124,9 @@ class Section:
             extra.append(
                 Field("confidence", "Confidence level", "select", CONFIDENCE_OPTIONS, required=True)
             )
-            extra.append(Field("confidence_note", "Confidence note (required when Low)", "textarea"))
+            extra.append(
+                Field("confidence_note", "Confidence note (required when Low)", "textarea")
+            )
         extra.append(Field("sources", "Sources & citations", "textarea"))
         return self.fields + tuple(extra)
 
