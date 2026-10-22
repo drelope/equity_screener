@@ -54,6 +54,13 @@ DATASETS: dict[str, Dataset] = {
         Dataset("Scores", "model.scores", "Composite and component scores by date.", "as_of_date"),
         Dataset("Rankings", "model.rankings", "Ranked securities by date.", "as_of_date"),
         Dataset(
+            "Forward returns",
+            "model.forward_returns",
+            "Forward 12M total return per security and setup date, over complete "
+            "252-trading-day windows only.",
+            "as_of_date",
+        ),
+        Dataset(
             "Dividends",
             "raw.dividend_data",
             "Dividend events from OpenBB and SEC XBRL.",

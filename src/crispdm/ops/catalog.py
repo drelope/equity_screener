@@ -145,6 +145,32 @@ CATALOG: dict[str, TaskDef] = {
             ),
         ),
         TaskDef(
+            key="build_forward_returns",
+            title="Rebuild forward returns",
+            description=(
+                "Recompute model.forward_returns: the forward 12M total return of every "
+                "security, over complete 252-trading-day windows only. This is what the "
+                "investment-analysis peer base rate is measured from, so a stale table "
+                "means a stale base rate."
+            ),
+            module="scripts.build_forward_returns",
+            risk="heavy",
+            timeout_seconds=6 * 3600,
+            exclusive=True,
+            params=(
+                Param(
+                    "days",
+                    "Days of observations",
+                    "int",
+                    "--days",
+                    help="Default 400, as the nightly uses.",
+                    default=400,
+                    minimum=7,
+                    maximum=4000,
+                ),
+            ),
+        ),
+        TaskDef(
             key="score_rank",
             title="Score and rank",
             description="Recompute model.scores, rankings and predictions for the latest date.",

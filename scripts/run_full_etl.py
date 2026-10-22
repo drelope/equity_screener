@@ -25,6 +25,7 @@ Stages (in dependency order):
                                      skipped cleanly without a key)
     6. populate_fundamentals     -> fundamentals.periodic_financials (offline, stored XBRL)
     7. build_features            -> model.features (offline, last --feature-days only)
+    7b. build_forward_returns    -> model.forward_returns (offline, last --forward-days only)
     8. score_rank                -> model.scores + model.predictions + model.rankings
     9. populate_audit            -> audit.source_lineage + audit.data_quality (offline)
     10. label_targets (optional) -> model.features.target_sustainable_dividend
@@ -318,6 +319,15 @@ def main():
         help="Days of observations for the nightly feature rebuild (default: 400). "
         "Must exceed the longest price lookback (252 trading days) or the "
         "volatility and momentum features lose their trailing window.",
+    )
+    parser.add_argument(
+        "--forward-days",
+        type=int,
+        default=400,
+        help="Days of observations for the nightly forward-return rebuild "
+        "(default: 400). Each stored row is a forward 252-trading-day window, so "
+        "the tail is what a new price series extends; a smaller value only "
+        "recomputes the most recent setups.",
     )
     parser.add_argument(
         "--skip-profiles", action="store_true", help="Do not refresh raw.ticker_profile in stage 3"
@@ -661,6 +671,18 @@ def main():
         # the ~50 minutes a full history rebuild takes.
         if all_ok and not stage(
             "scripts.build_features", ["--days", str(args.feature_days)], args.skip_derived
+        ):
+            all_ok = False
+
+        # The forward 12M total returns are what the investment-analysis peer
+        # base rate is measured from, so they are refreshed with the features.
+        # The insert upserts on (security_id, as_of_date) and only the recent
+        # tail is rebuilt; a window is stored only when 252 observations follow
+        # it, so the newest year of setups is absent until it can be scored.
+        if all_ok and not stage(
+            "scripts.build_forward_returns",
+            ["--days", str(args.forward_days)],
+            args.skip_derived,
         ):
             all_ok = False
 

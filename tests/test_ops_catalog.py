@@ -128,10 +128,39 @@ def test_verify_treats_exit_one_as_a_finding_not_a_failure():
 def test_only_writers_that_do_not_take_their_own_lock_are_exclusive():
     """run_full_etl takes the pipeline lock itself; a second holder would refuse it."""
     assert catalog.CATALOG["run_full_etl"].exclusive is False
-    for key in ("build_features", "score_rank", "populate_audit", "populate_market_data"):
+    for key in (
+        "build_features",
+        "build_forward_returns",
+        "score_rank",
+        "populate_audit",
+        "populate_market_data",
+    ):
         assert catalog.CATALOG[key].exclusive is True
     for key in ("verify_nightly", "migrate_check", "schema_drift", "ticker_conflicts"):
         assert catalog.CATALOG[key].risk == "read"
+
+
+def test_the_forward_return_task_is_a_heavy_exclusive_rebuild():
+    task = catalog.CATALOG["build_forward_returns"]
+
+    assert task.module == "scripts.build_forward_returns"
+    assert task.risk == "heavy"
+    assert task.exclusive is True
+    assert task.timeout_seconds > 0
+    assert catalog.build_argv("build_forward_returns", {}, python="py") == [
+        "py",
+        "-m",
+        "scripts.build_forward_returns",
+        "--days",
+        "400",
+    ]
+    assert catalog.validate_params("build_forward_returns", {}) == {"days": 400}
+
+
+def test_the_forward_return_task_refuses_an_out_of_range_window():
+    for value in (6, 4001, 4.5, True, -1):
+        with pytest.raises(ValueError):
+            catalog.validate_params("build_forward_returns", {"days": value})
 
 
 def test_describe_command_is_display_only():

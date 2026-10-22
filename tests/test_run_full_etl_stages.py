@@ -144,3 +144,32 @@ def test_the_recorded_stage_order_matches_the_calls(monkeypatch):
     assert stages["scripts.repair_security_classification"] == "ok"
     assert stages["scripts.populate_contract_terms"] == "ok"
     assert recorded["exit_code"] == 0
+
+
+def test_the_forward_returns_run_after_the_features_and_before_the_scoring(monkeypatch):
+    calls, _, rc = _run(monkeypatch, [])
+    names = _names(calls)
+
+    assert rc == 0
+    features = names.index("scripts.build_features")
+    forward = names.index("scripts.build_forward_returns")
+    scoring = names.index("scripts.score_rank")
+
+    assert features < forward < scoring
+    args = next(args for name, args, _ in calls if name == "scripts.build_forward_returns")
+    assert args == ("--days", "400")
+
+
+def test_the_forward_returns_are_skipped_with_the_other_derived_stages(monkeypatch):
+    calls, recorded, _ = _run(monkeypatch, ["--skip-derived"])
+    skips = {name: skip for name, _, skip in calls}
+
+    assert skips["scripts.build_forward_returns"] is True
+    assert recorded["stages"]["scripts.build_forward_returns"] == "skipped"
+
+
+def test_the_forward_return_window_can_be_widened(monkeypatch):
+    calls, _, _ = _run(monkeypatch, ["--forward-days", "1200"])
+    args = next(args for name, args, _ in calls if name == "scripts.build_forward_returns")
+
+    assert args == ("--days", "1200")
