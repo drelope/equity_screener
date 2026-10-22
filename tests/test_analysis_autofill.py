@@ -216,13 +216,139 @@ def test_sources_name_the_provider_that_answered_each_command():
     assert "app.analysis_autofill" in sources
 
 
-def test_analog_table_has_three_historical_windows_and_a_usable_base_rate():
+def test_analog_table_falls_back_to_the_securitys_own_windows_without_a_peer_sample():
+    # No warehouse in the payload, so there is no peer sample: the own-history
+    # table is the fallback and the confidence note says so.
     payload = _payload()
     analog = payload["sections"]["analog"]
 
     assert analog["similar_setups"].count("| Same security") >= 3
     assert "total return" in analog["similar_setups"]
     assert analog["base_rate"].endswith("%")
+    assert "own 12M windows, not a peer sample" in analog["confidence_note"]
+
+
+def _peer_warehouse(pct_positive=70.1, observations=211):
+    return {
+        "features": {"as_of_date": "2026-10-19", "current_price": 100.0},
+        "base_rate": {
+            "ticker": "TEST",
+            "industry": "Drug Manufacturers - General",
+            "observations": observations,
+            "has_sample": True,
+            "pct_positive": pct_positive,
+            "base_rate": f"{pct_positive:.0f}%",
+            "median_return": 0.0888,
+            "p05_return": -0.137,
+            "p95_return": 0.665,
+            "peer_observations": 1680,
+            "peer_pct_positive": 64.5,
+            "current_yield": 0.0204,
+            "current_coverage": 1.6875,
+            "caveats": ["Peers are classified by today's industry."],
+            "similar_table": (
+                "| Date | Conditions | Forward 12M total return | Outcome |\n"
+                "| --- | --- | --- | --- |\n"
+                "| 2023-01-03 | Drug Manufacturers - General, yield 2.97% | 19.9% | Positive |\n"
+                "| 2022-02-01 | Drug Manufacturers - General, yield 2.45% | -0.6% | Negative |"
+            ),
+        },
+    }
+
+
+def test_the_analog_section_reports_the_peer_base_rate_when_there_is_one():
+    payload = autofill.build_payload(
+        "TEST",
+        _sample_data(),
+        macro=MACRO,
+        warehouse=_peer_warehouse(),
+        today=TODAY,
+    )
+    analog = payload["sections"]["analog"]
+
+    assert analog["base_rate"] == "70%"
+    assert "Drug Manufacturers - General" in analog["similar_setups"]
+    assert "Positive" in analog["similar_setups"]
+    assert "matched peer setups" in analog["analog_implication"]
+    assert "211" in analog["analog_implication"]
+    assert "not a peer sample" not in analog["confidence_note"]
+    assert "Peers are classified by today's industry." in analog["confidence_note"]
+
+
+def test_the_peer_base_rate_names_the_conditions_the_sample_did_not_use():
+    payload = autofill.build_payload(
+        "TEST",
+        _sample_data(),
+        macro=MACRO,
+        warehouse=_peer_warehouse(),
+        today=TODAY,
+    )
+    key_differences = payload["sections"]["analog"]["key_differences"]
+
+    assert "2.04% yield" in key_differences
+    assert "1.69x coverage" in key_differences
+    assert "does not condition on" in key_differences
+
+
+def test_the_analog_section_still_passes_the_worksheet_rules_with_a_peer_rate():
+    payload = autofill.build_payload(
+        "TEST",
+        _sample_data(),
+        macro=MACRO,
+        warehouse=_peer_warehouse(),
+        today=TODAY,
+    )
+
+    assert schema.validate(payload) == []
+    assert schema.validate_draft(payload) == []
+
+
+def test_a_thin_peer_sample_falls_back_to_the_own_history_table():
+    warehouse = _peer_warehouse()
+    warehouse["base_rate"]["has_sample"] = False
+
+    payload = autofill.build_payload(
+        "TEST", _sample_data(), macro=MACRO, warehouse=warehouse, today=TODAY
+    )
+    analog = payload["sections"]["analog"]
+
+    assert analog["similar_setups"].count("| Same security") >= 3
+    assert "own 12M windows, not a peer sample" in analog["confidence_note"]
+
+
+def test_the_own_history_fallback_reads_the_stored_forward_returns():
+    warehouse = {
+        "features": {"as_of_date": "2026-10-19", "current_price": 100.0},
+        "base_rate": {"has_sample": False},
+        "own_returns": [
+            {
+                "as_of_date": "2023-06-01",
+                "forward_date": "2024-06-03",
+                "window_days": 252,
+                "total_return": 0.20,
+                "price_return": 0.16,
+                "dividend_return": 0.04,
+            },
+            {
+                "as_of_date": "2024-06-03",
+                "forward_date": "2025-06-02",
+                "window_days": 252,
+                "total_return": -0.10,
+                "price_return": -0.14,
+                "dividend_return": 0.04,
+            },
+        ],
+    }
+
+    payload = autofill.build_payload(
+        "TEST", _sample_data(), macro=MACRO, warehouse=warehouse, today=TODAY
+    )
+    analog = payload["sections"]["analog"]
+
+    assert "2023-06-01 to 2024-06-03" in analog["similar_setups"]
+    assert "20.0%" in analog["similar_setups"]
+    assert analog["base_rate"] == "50%"
+    assert "own 12M windows, not a peer sample" in analog["confidence_note"]
 
 
 def test_price_return_uses_adjusted_close_so_dividends_are_reinvested():
@@ -431,6 +557,57 @@ def test_load_warehouse_tolerates_missing_tables_and_unknown_tickers():
     assert warehouse["features"] == {}
     assert warehouse["financials"] == []
     assert autofill.load_warehouse("MISSING", query=unknown_ticker) == {}
+
+
+def test_load_warehouse_reads_the_peer_base_rate():
+    def query(sql, params=None):
+        # The sample query names every relation the other reads name, so it is
+        # matched first; the industry read joins reference.securities as well.
+        if "model.forward_returns" in sql:
+            return pd.DataFrame(
+                [
+                    {
+                        "as_of_date": "2020-01-02",
+                        "ticker": "AAA",
+                        "industry": "Peers",
+                        "dividend_yield": 0.03,
+                        "dividend_coverage": 2.0,
+                        "total_return": 0.10,
+                        "price_return": 0.08,
+                        "dividend_return": 0.02,
+                    }
+                ]
+            )
+        if "clean.ticker_profile" in sql:
+            return pd.DataFrame([{"industry": "Peers"}])
+        if "reference.securities" in sql:
+            return pd.DataFrame([{"security_id": "abc"}])
+        if "model.features" in sql:
+            return pd.DataFrame(
+                [{"as_of_date": "2026-10-19", "dividend_yield": 0.03, "dividend_coverage": 2.0}]
+            )
+        return pd.DataFrame()
+
+    warehouse = autofill.load_warehouse("TEST", query=query)
+    base_rate = warehouse["base_rate"]
+
+    assert base_rate["industry"] == "Peers"
+    assert base_rate["observations"] == 1
+    assert base_rate["base_rate"] == "100%"
+    assert "Date | Conditions" in base_rate["similar_table"]
+
+
+def test_a_missing_forward_return_table_leaves_the_warehouse_loadable():
+    def query(sql, params=None):
+        if "reference.securities" in sql:
+            return pd.DataFrame([{"security_id": "abc"}])
+        if "model.forward_returns" in sql:
+            raise RuntimeError("relation model.forward_returns does not exist")
+        return pd.DataFrame()
+
+    warehouse = autofill.load_warehouse("TEST", query=query)
+
+    assert warehouse["base_rate"] == {}
 
 
 def test_warehouse_context_fills_gaps_and_is_written_into_the_worksheet():

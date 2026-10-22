@@ -288,12 +288,38 @@ Inputs: proxy/filing data, insider transactions (external).
 | Field id | Type | Notes |
 |---|---|---|
 | `similar_setups` | textarea, **required** | Markdown table: date, conditions, forward 12M total return, outcome (3+ rows) |
-| `base_rate` | text | % of similar conditions produced positive returns |
+| `base_rate` | text | % of similar conditions produced positive returns; one number, 0-100 |
 | `key_differences` | textarea | How today differs (numbered) |
 | `analog_implication` | textarea | What the base rate implies here |
 | `confidence` / `confidence_note` / `sources` | select, **required** / textarea / textarea | Section confidence and data sources; `confidence` is required to save a Final |
 
 **Purpose:** prevents narrative-driven conclusions; improves probabilistic thinking.
+
+**How the base rate is built.** The autofill reads a cross-sectional peer sample from the
+warehouse rather than the security's own history. `model.forward_returns` holds the
+forward 12M total return of every security, computed from the price and dividend series
+and stored only for complete 252-trading-day windows. The peer group is the target's
+industry from `clean.ticker_profile`; each peer observation is scored on the conditions
+recorded at its own date (`model.features.dividend_yield` and `dividend_coverage`), so a
+2019 peer is matched on what was true in 2019, and the sample is narrowed to the
+observations within 50% of today's yield and coverage. The sample is taken on the first
+observation date of each month, because consecutive daily windows share 251 of their 252
+observations and a daily sample would report roughly ten times more observations than
+there are independent ones. Rows whose price the model flagged as a split artifact or a
+sub-penny value are excluded, since their yields are not yields.
+
+The field carries the rate only: `base_rate` is validated to hold exactly one number
+between 0 and 100, so the sample size, the median, the 5th-95th percentile range, the
+wider peer-group rate and the caveats travel in `analog_implication` and the section's
+**Confidence note**. The caveats are properties of the data and are always shown:
+peers are classified by today's industry applied to historical dates, the rate is
+descriptive rather than a validated forecast, and the most recent year of setups is not
+yet scoreable because a forward 12M return is only knowable 252 trading days later. Where
+the peer sample is missing or too thin, the autofill falls back to the security's own
+trailing 12M windows, read from the same stored forward-return table so the fallback is
+measured by the same definition as the answer it stands in for, and says so in the
+confidence note; the own-history table is a weak base rate, and the worksheet says that
+when it uses it.
 
 ### 16. Risk decomposition — `risk`
 
@@ -480,8 +506,10 @@ The values are deterministic heuristics over that reported data, not forecasts. 
 FY revenue and EPS are derived by holding the latest reported growth rate when live forward
 estimates are unavailable (FMP's are premium-only, and yfinance's consensus has no forward
 revenue or EPS figures).
-The historical-analog table uses the security's own prior 12M total-return windows rather
-than a peer sample, and scenario returns add the forward dividend yield to the price path.
+The historical-analog table uses a cross-sectional peer base rate from the stored
+forward-return table (see step 15 above), falling back to the security's own prior 12M
+total-return windows when no peer sample is available, and scenario returns add the
+forward dividend yield to the price path.
 Each step's **Sources** field names the provider that answered every command, and the
 final **Data quality** note lists anything that failed, so inferred values are not
 mistaken for observations.

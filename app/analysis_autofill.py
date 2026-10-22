@@ -24,6 +24,7 @@ from dataclasses import dataclass, field
 import pandas as pd
 
 from app import analysis_schema as schema
+from src.crispdm import analogs
 from src.crispdm import openbb_client as client
 
 #: Commands whose frame is one row per period rather than one row per security.
@@ -620,7 +621,40 @@ def load_warehouse(ticker, query=None) -> dict:
         "scores": scores,
         "dcf": dcf,
         "financials": financials,
+        "base_rate": _peer_base_rate(query, security_id, ticker, features),
+        "own_returns": _own_forward_returns(query, security_id),
     }
+
+
+def _own_forward_returns(query, security_id):
+    """This security's own last complete forward windows, for the fallback table.
+
+    Read from the materialised table so the fallback is measured by the same
+    definition as the peer base rate it stands in for.
+    """
+    try:
+        return analogs.own_forward_returns(query, security_id)
+    except Exception:  # noqa: BLE001 - a missing forward-return table is not a failure
+        return []
+
+
+def _peer_base_rate(query, security_id, ticker, features):
+    """The peer base rate for one ticker, or an empty payload when unavailable.
+
+    The forward-return table is a derived relation, so it may not have been built
+    yet; a missing table is a reason to fall back to the security's own history,
+    not a reason to fail the page.
+    """
+    try:
+        base_rate = analogs.peer_base_rate(
+            query,
+            security_id,
+            features.get("as_of_date") or pd.Timestamp.now().normalize(),
+            ticker=ticker,
+        )
+    except Exception:  # noqa: BLE001 - a missing forward-return table is not a failure
+        return {}
+    return analogs.base_rate_payload(base_rate)
 
 
 # --- value helpers -----------------------------------------------------------------
@@ -774,8 +808,8 @@ def build_payload(
     sources = _sources(data)
     if warehouse:
         sources += (
-            " Warehouse context: model.features, model.scores, raw.fmp_dcf and "
-            "fundamentals.periodic_financials."
+            " Warehouse context: model.features, model.scores, raw.fmp_dcf, "
+            "fundamentals.periodic_financials and model.forward_returns."
         )
     confidence = "High" if c["rich"] else ("Medium" if c["some"] else "Low")
 
@@ -1268,21 +1302,29 @@ def build_payload(
     # 15. Historical analogs -----------------------------------------------------
     put("analog", "similar_setups", c["analog_table"])
     put("analog", "base_rate", f"{c['base_rate']:.0f}%")
-    put(
-        "analog",
-        "key_differences",
-        f"Today's setup differs from the listed windows in its current P/E of "
-        f"{_x(c['pe'])} and free-cash-flow yield of {_pct(c['fcf_yield'])}; those are the "
-        f"variables to re-check, not just the total-return path.",
-    )
-    put(
-        "analog",
-        "analog_implication",
-        f"{c['base_rate']:.0f}% of the listed 12M windows were positive. That is a weak "
-        f"base rate from one security's own history, so it supports a probabilistic "
-        f"frame rather than a directional conclusion.",
-    )
-    conf("analog", "Base rate uses this security's own 12M windows, not a peer sample.")
+    if c["analog_source"] == "peer":
+        put("analog", "key_differences", _peer_key_differences(c))
+        put("analog", "analog_implication", _peer_implication(c))
+        conf("analog", _peer_confidence_note(c))
+    else:
+        put(
+            "analog",
+            "key_differences",
+            f"Today's setup differs from the listed windows in its current P/E of "
+            f"{_x(c['pe'])} and free-cash-flow yield of {_pct(c['fcf_yield'])}; those are the "
+            f"variables to re-check, not just the total-return path.",
+        )
+        put(
+            "analog",
+            "analog_implication",
+            f"{c['base_rate']:.0f}% of the listed 12M windows were positive. That is a weak "
+            f"base rate from one security's own history, so it supports a probabilistic "
+            f"frame rather than a directional conclusion.",
+        )
+        conf(
+            "analog",
+            "Base rate uses this security's own 12M windows, not a peer sample.",
+        )
     src("analog")
 
     # 16. Risk decomposition -----------------------------------------------------
@@ -1635,7 +1677,12 @@ def _context(data: CompanyData, today, macro, warehouse=None) -> dict:
     bear_return = _total_return(bear_case, price, dividend_yield)
     expected_return = _weighted_return(base_return, bull_return, bear_return)
 
-    analog_table, base_rate = _analog(data.prices, today)
+    analog_table, base_rate, analog_source = _analog(
+        data.prices,
+        today,
+        warehouse.get("base_rate") or {},
+        warehouse.get("own_returns") or [],
+    )
 
     provider_summary = ", ".join(
         f"{name}: {provider}" for name, provider in sorted(data.providers.items())
@@ -1757,6 +1804,8 @@ def _context(data: CompanyData, today, macro, warehouse=None) -> dict:
         "expected_return": expected_return,
         "analog_table": analog_table,
         "base_rate": base_rate,
+        "analog_source": analog_source,
+        "base_rate_detail": warehouse.get("base_rate") or {},
         "revision_trend": _revision_trend(data.price_target, today),
         "dispersion": _dispersion(target_high, target_low, target),
         "rich": bool((inc and bal and cash and data.ratios) or (features and (scores or stored))),
@@ -2053,7 +2102,110 @@ def _volatility(prices):
     return float(returns.std() * math.sqrt(252))
 
 
-def _analog(prices, today):
+def _peer_key_differences(c):
+    """What differs between today's setup and the matched peer setups.
+
+    The similarity filter conditions on yield and coverage only, so the honest
+    answer names what it did not condition on: valuation and balance-sheet
+    differences are the reader's to judge.
+    """
+    detail = c.get("base_rate_detail") or {}
+    yield_now = detail.get("current_yield")
+    coverage_now = detail.get("current_coverage")
+    if yield_now is None or coverage_now is None:
+        conditions = "The matched setups were chosen on dividend yield and coverage"
+    else:
+        conditions = (
+            f"Today's setup is at a {yield_now * 100:.2f}% yield with "
+            f"{coverage_now:.2f}x coverage; the matched setups are the peer group's "
+            f"observations within 50% of both"
+        )
+    return (
+        f"{conditions}. The peer sample does not condition on today's P/E of "
+        f"{_x(c['pe'])} or free-cash-flow yield of {_pct(c['fcf_yield'])}, so those "
+        f"are the variables to re-check, not just the total-return path."
+    )
+
+
+def _peer_implication(c):
+    """What the peer base rate says, with the sample and the spread attached."""
+    detail = c.get("base_rate_detail") or {}
+    observations = detail.get("observations") or 0
+    median = detail.get("median_return")
+    p05 = detail.get("p05_return")
+    p95 = detail.get("p95_return")
+    peer_observations = detail.get("peer_observations") or 0
+    peer_rate = detail.get("peer_pct_positive")
+    industry = detail.get("industry") or "the peer group"
+
+    parts = [
+        f"{c['base_rate']:.0f}% of {observations} matched peer setups were positive over "
+        f"the following twelve months"
+    ]
+    if median is not None:
+        parts.append(f"median {median * 100:.1f}%")
+    if p05 is not None and p95 is not None:
+        parts.append(f"5th-95th percentile {p05 * 100:.1f}% to {p95 * 100:.1f}%")
+    sentence = ", ".join(parts) + "."
+    if peer_rate is not None and peer_observations:
+        sentence += (
+            f" The wider {industry} peer group was {peer_rate:.0f}% positive across "
+            f"{peer_observations} observations."
+        )
+    return (
+        f"{sentence} This is a descriptive rate over comparable setups in the period "
+        f"covered, so it frames the position probabilistically rather than "
+        f"predicting the next twelve months."
+    )
+
+
+def _peer_confidence_note(c):
+    """The caveats, as the section's confidence note."""
+    detail = c.get("base_rate_detail") or {}
+    caveats = detail.get("caveats") or []
+    observations = detail.get("observations") or 0
+    prefix = (
+        f"Peer base rate over {observations} matched observations, sampled monthly "
+        f"from the stored forward-return table."
+    )
+    if caveats:
+        return f"{prefix} " + " ".join(caveats)
+    return prefix
+
+
+def _analog(prices, today, base_rate=None, own_returns=None):
+    """The analogs table, its base rate, and which of the two produced it.
+
+    A peer base rate is preferred. "What happened to setups like this one" is
+    answered by the sector's comparable setups, matched on the conditions that
+    held at the time; the security's own twelve-month windows answer a different
+    question -- "how has this one security gone", which is largely its own past
+    and, over three windows, is a weak base rate. The own-history table is kept
+    as the fallback for when the peer sample is missing or too thin.
+    """
+    if base_rate and base_rate.get("has_sample") and base_rate.get("similar_table"):
+        rate = base_rate.get("pct_positive")
+        if rate is not None:
+            return base_rate["similar_table"], float(rate), "peer"
+    if own_returns:
+        table = analogs.own_history_table(own_returns)
+        values = [
+            row.get("total_return") for row in own_returns if row.get("total_return") is not None
+        ]
+        if values:
+            rate = 100.0 * sum(1 for value in values if value > 0) / len(values)
+            return table, rate, "own"
+    table, rate = _own_history_analogs(prices, today)
+    return table, rate, "own"
+
+
+def _own_history_analogs(prices, today):
+    """This security's own trailing twelve-month total-return windows.
+
+    A fallback, not the answer: three overlapping windows of one security are
+    not a base rate for a population, and the worksheet says so when it uses
+    them.
+    """
     header = (
         "| Period | Conditions | Forward 12M total return | Outcome |\n| --- | --- | --- | --- |"
     )

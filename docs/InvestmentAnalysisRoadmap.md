@@ -91,6 +91,18 @@ two people editing the same worksheet silently overwrote each other.
   was saved. `store.recommendation_history(conn, security_id)` returns every change of
   call for one security, newest first, collapsing re-saves that kept the same call and
   dropping withdrawals; the Security detail page renders it in a **Recommendations** tab.
+- **Peer base rate for step 15 (done).** The historical-analog step no longer reports the
+  security's own trailing 12M windows as its "base rate": three overlapping windows of
+  one security answer "how has this one gone", which is mostly its own past, not "what
+  happens to setups like this". A forward-return engine now stores the forward 12M total
+  return of every security (`model.forward_returns`, built by
+  `scripts/build_forward_returns.py`), and `src/crispdm/analogs.py` turns that into a
+  cross-sectional rate over the target's industry, matched on the yield and coverage
+  recorded at each historical date. The sample is monthly, because consecutive daily
+  windows share 251 of their 252 observations; the caveats (current industry applied to
+  history, descriptive rather than predictive, 252-day lag) are shown in the worksheet
+  rather than hidden. The security's own windows remain as a fallback, and the
+  confidence note says when they were used.
 - **LLM-assisted draft (not started).** The Markdown export is designed to be pasted into
   an external model; a supported "generate a draft from the warehouse context" path is the
   next step, gated on the same Final rules so a model cannot skip the workflow.
