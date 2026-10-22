@@ -103,6 +103,10 @@ services:
       # unreachable or the key as missing instead of failing.
       API_BASE_URL: http://api:8000
       API_KEY: ${API_KEY:-}
+    # The provider keys are read from the file at runtime, not baked into the
+    # image, so they never sit in a layer that outlives the container.
+    volumes:
+      - ./ObbCredentials.json:/app/ObbCredentials.json:ro
     ports:
       - "127.0.0.1:8501:8501"
     # Streamlit serves /_stcore/health once the app is up. The operator token gates the
@@ -171,6 +175,14 @@ services:
     read_only: true
     tmpfs:
       - /tmp
+      # OpenBB creates its platform directory under the user's home on import
+      # and writes its settings there, so a read-only rootfs needs one writable
+      # path. The image ships the directory; this mount makes it scratch.
+      - /home/app/.openbb_platform:mode=1777
+    # The provider keys are read from the file at runtime, not baked into the
+    # image, so they never sit in a layer that outlives the container.
+    volumes:
+      - ./ObbCredentials.json:/app/ObbCredentials.json:ro
 
   # Runs the tasks queued from the web app's Operations page, and queues its schedules.
   # It executes only the commands in src/crispdm/ops/catalog.py. The nightly ETL is NOT
@@ -182,6 +194,10 @@ services:
     environment:
       DATABASE_URL: *db-url
       SEC_USER_AGENT: ${SEC_USER_AGENT:-Your Name your.email@example.com}
+    # The provider keys are read from the file at runtime, not baked into the
+    # image, so they never sit in a layer that outlives the container.
+    volumes:
+      - ./ObbCredentials.json:/app/ObbCredentials.json:ro
     depends_on:
       postgres:
         condition: service_healthy

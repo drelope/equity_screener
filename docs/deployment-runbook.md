@@ -55,11 +55,51 @@ for first initialization only.
    curl -s -H "X-API-Key: $API_KEY" localhost:8000/metrics/enriched/AAPL
    ```
 
+   The API imports OpenBB at startup. If it is crash-looping with
+   `PermissionError: .../openbb/.build.lock`, the image was built before the
+   OpenBB build moved into the Dockerfile — rebuild it (§2.4a).
+
 5. Run the nightly ETL (see §5 for automation). Stage 3 keeps the 12-month
    dividend lookback (`DIVIDEND_LOOKBACK_START`, default 2025-01-01) and
    accrues forward; **after the PoC gate passes**, switch the ETL/scheduler to
    total history once with `--dividend-full-history`
    (see [data-acquisition.md](data-acquisition.md)).
+
+### 2a. Rebuilding the image
+
+The Compose services build from the `Dockerfile` in this repository, so a
+code change needs a rebuild before the running container sees it:
+
+```bash
+docker compose build
+docker compose up -d
+```
+
+A running container keeps the image it was started from: editing a file in
+the repository does not change what `/app` contains. Check with
+`docker compose exec api ls /app/app`, not with `ls app`.
+
+Two things the image build does that a plain `pip install` does not:
+
+- **OpenBB's static package is built during the build, as root.** The
+  published wheels carry no `assets/reference.json`, so a fresh install
+  rebuilds the package on its first import, into `site-packages`. At runtime
+  that import runs as the unprivileged `app` user against a root-owned
+  directory, and it dies with `PermissionError: .../openbb/.build.lock`. The
+  Dockerfile builds it instead, where the directory is still writable, and
+  fails the build if the reference file did not land. `OPENBB_AUTO_BUILD=false`
+  then stops the runtime from trying again.
+- **OpenBB's platform directory is writable where it has to be.** OpenBB
+  creates `~/.openbb_platform` and writes its settings there on import. The
+  `api` service runs on a read-only rootfs, so it gets that one directory as
+  a tmpfs (`mode=1777`); the other services have a writable rootfs and need
+  nothing.
+
+`ObbCredentials.json` is deliberately **not** in the image: `.dockerignore`
+excludes it and Compose bind-mounts it read-only at `/app/ObbCredentials.json`
+for the `api`, `streamlit` and `worker` services. The file must exist on the
+host before `docker compose up`, or Docker creates a directory in its place
+and the provider keys are silently absent.
 
 ## 3. Database backups
 
@@ -194,6 +234,14 @@ in all three options.
 - **`SEC_USER_AGENT`**: must be a real contact string. Enforced before any SEC
   request (`src/crispdm/sec_client.py`); the placeholder
   `Your Name your.email@example.com` fails fast.
+- **`ObbCredentials.json`**: the OpenBB provider keys, read at runtime from a
+  read-only bind mount. `.dockerignore` keeps the file out of the image and
+  `.gitignore` keeps it out of source control, so it never sits in a layer
+  that outlives the container. It must exist on the host before
+  `docker compose up`, or Docker mounts a directory in its place and the
+  provider calls fail with missing credentials rather than with a clear
+  error. Rotate by replacing the file on the host and restarting the
+  services.
 - **At Azure migration:** move `API_KEY`, `DATABASE_URL`, OpenBB keys, and the
   SEC agent into Azure Key Vault and load them as App/Container App settings;
   nothing goes into source control or image layers. `.env` remains local-only

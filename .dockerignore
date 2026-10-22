@@ -7,6 +7,9 @@
 .env.*
 *.pem
 *.key
+# The OpenBB provider keys. The containers read them from a bind mount at
+# runtime, so they must not be baked into a layer that outlives the container.
+ObbCredentials.json
 
 # Version control, CI and tooling config
 .git
