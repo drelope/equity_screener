@@ -161,6 +161,77 @@ def test_the_wider_peer_group_is_reported_alongside_the_matched_sample():
     assert base_rate.observations == 1
 
 
+def test_the_derived_metrics_describe_the_similar_sample():
+    # A fixed set of returns, so the count, rate, average, median and tails are
+    # all pinned to numbers rather than "not None".
+    rows = [
+        _sample_row("A", "2020-01-02", -0.20),
+        _sample_row("B", "2020-02-03", -0.05),
+        _sample_row("C", "2020-03-04", 0.0),
+        _sample_row("D", "2020-04-02", 0.10),
+        _sample_row("E", "2020-05-04", 0.30),
+    ]
+    query = _query_with(rows)
+
+    base_rate = analogs.peer_base_rate(query, "sid-1", "2026-10-20", ticker="TEST")
+
+    assert base_rate.observations == 5
+    assert base_rate.pct_positive == pytest.approx(40.0)
+    assert base_rate.avg_return == pytest.approx(0.03)
+    assert base_rate.median_return == pytest.approx(0.0)
+    assert base_rate.p05_return == pytest.approx(-0.17)
+    assert base_rate.p95_return == pytest.approx(0.26)
+
+
+def test_the_derived_metrics_of_the_wider_peer_group_cover_every_setup():
+    # The two FAR rows are outside the similarity band, so they move the peer
+    # group's distribution without touching the headline similar sample.
+    rows = [
+        _sample_row("CLOSE", "2020-01-02", 0.10),
+        _sample_row("CLOSE", "2020-02-03", -0.05),
+        _sample_row("FAR", "2020-03-04", -0.20, yield_=0.10),
+        _sample_row("FAR", "2020-04-02", 0.30, yield_=0.10),
+    ]
+    query = _query_with(rows)
+
+    base_rate = analogs.peer_base_rate(query, "sid-1", "2026-10-20", ticker="TEST")
+
+    assert base_rate.observations == 2
+    assert base_rate.peer.observations == 4
+    assert base_rate.peer.pct_positive == pytest.approx(50.0)
+    assert base_rate.peer.avg_return == pytest.approx(0.0375)
+    assert base_rate.peer.median_return == pytest.approx(0.025)
+    assert base_rate.peer.p05_return == pytest.approx(-0.1775)
+    assert base_rate.peer.p95_return == pytest.approx(0.27)
+
+
+def test_a_flat_return_is_not_counted_as_positive():
+    rows = [
+        _sample_row("FLAT", "2020-01-02", 0.0),
+        _sample_row("UP", "2020-02-03", 0.10),
+    ]
+    query = _query_with(rows)
+
+    base_rate = analogs.peer_base_rate(query, "sid-1", "2026-10-20", ticker="TEST")
+
+    assert base_rate.pct_positive == pytest.approx(50.0)
+    assert [item.outcome for item in base_rate.similar] == ["Negative", "Positive"]
+
+
+def test_the_base_rate_text_rounds_to_a_whole_percent():
+    rows = [
+        _sample_row("A", "2020-01-02", 0.10),
+        _sample_row("B", "2020-02-03", -0.05),
+        _sample_row("C", "2020-03-04", -0.02),
+    ]
+    query = _query_with(rows)
+
+    base_rate = analogs.peer_base_rate(query, "sid-1", "2026-10-20", ticker="TEST")
+
+    assert base_rate.pct_positive == pytest.approx(100 / 3)
+    assert base_rate.base_rate_text == "33%"
+
+
 def test_the_caveats_say_what_the_number_cannot_be_used_for():
     query = _query_with([_sample_row("A", "2020-01-02", 0.10)])
 
@@ -231,7 +302,14 @@ def test_the_payload_carries_the_rate_the_count_and_the_caveats():
 
     assert payload["base_rate"] == "50%"
     assert payload["observations"] == 2
+    assert payload["pct_positive"] == pytest.approx(50.0)
+    assert payload["avg_return"] == pytest.approx(0.025)
+    assert payload["median_return"] == pytest.approx(0.025)
+    assert payload["p05_return"] == pytest.approx(-0.0425)
+    assert payload["p95_return"] == pytest.approx(0.0925)
     assert payload["peer_observations"] == 2
+    assert payload["peer_pct_positive"] == pytest.approx(50.0)
+    assert payload["peer_median_return"] == pytest.approx(0.025)
     assert payload["caveats"]
     assert payload["similar_table"].startswith("| Date |")
 
@@ -272,6 +350,17 @@ def test_the_percentile_interpolates_like_percentile_cont():
     assert analogs._percentile(values, 0.5) == pytest.approx(2.0)
     assert analogs._percentile(values, 1.0) == pytest.approx(4.0)
     assert analogs._percentile([], 0.5) is None
+
+
+def test_an_empty_peer_group_reports_nothing():
+    peer = analogs._peer_group([])
+
+    assert peer.observations == 0
+    assert peer.pct_positive is None
+    assert peer.avg_return is None
+    assert peer.median_return is None
+    assert peer.p05_return is None
+    assert peer.p95_return is None
 
 
 def test_the_own_windows_do_not_overlap():
