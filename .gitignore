@@ -32,6 +32,10 @@ sec_dividend_analysis.csv
 .idea/
 .DS_Store
 
+# Local agent tooling (installed per-machine, not shared)
+.agents/
+.claude/
+
 # Accidental command-output junk (PowerShell redirect artifact)
 t -ErrorAction SilentlyContinue | Select-Object Name,Source
 
