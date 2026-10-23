@@ -84,6 +84,9 @@ CIK. This is an expected unavailable-data response, not an API outage.
   `audit.nightly_checks`).
 - [Deployment runbook](docs/deployment-runbook.md) — release/rollback, secrets,
   nightly schedule (Airflow DAG or systemd).
+- [Peer base rate methodology](docs/peer-base-rate-methodology.md) — how the
+  investment-analysis step-15 base rate is measured: the forward total-return
+  definition, the monthly sampling design, and the disclosed limits.
 - [Contributing](CONTRIBUTING.md) — branch model, commits, PR checklist.
 
 ## Install

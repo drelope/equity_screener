@@ -306,7 +306,9 @@ observations within 50% of today's yield and coverage. The sample is taken on th
 observation date of each month, because consecutive daily windows share 251 of their 252
 observations and a daily sample would report roughly ten times more observations than
 there are independent ones. Rows whose price the model flagged as a split artifact or a
-sub-penny value are excluded, since their yields are not yields.
+sub-penny value are excluded, since their yields are not yields. The reasoning behind
+each of these choices, and the data traps the total-return definition has to clear, is in
+[peer-base-rate-methodology.md](peer-base-rate-methodology.md).
 
 The field carries the rate only: `base_rate` is validated to hold exactly one number
 between 0 and 100, so the sample size, the median, the 5th-95th percentile range, the
