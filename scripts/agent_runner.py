@@ -17,6 +17,9 @@ inspected with ``--dry-run``; its work is performed by following ``SKILL.md``.
 The runner performs read-only preflight checks (git status, migrate --check when
 DB-touching) and records them in ``preflight.json``. No environment values are
 printed.
+
+Validation uses Pydantic schemas where available (``src.agent``) with fallback
+to the built-in parser for compatibility.
 """
 
 from __future__ import annotations
