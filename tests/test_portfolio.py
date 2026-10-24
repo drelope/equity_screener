@@ -8,8 +8,11 @@ import pytest
 
 from src.crispdm.portfolio import (
     BASE_NAV,
+    MIN_PRICE,
     factor_exposures,
     holdings_table,
+    load_risk_free,
+    load_universe,
     monthly_return_table,
     performance_metrics,
     piotroski_f_score,
@@ -143,6 +146,59 @@ def test_sortino_uses_downside_deviation_over_all_observations():
     assert metrics["sortino"] == pytest.approx(expected)
 
 
+def test_sharpe_subtracts_the_daily_risk_free_rate():
+    returns = pd.Series(
+        [0.01, -0.005, 0.012, 0.002, -0.003, 0.008],
+        index=pd.bdate_range("2026-01-02", periods=6),
+    )
+    rate = pd.Series(0.0002, index=returns.index)
+
+    metrics = performance_metrics(returns, risk_free=rate)
+
+    excess = returns - rate
+    assert metrics["sharpe"] == pytest.approx(excess.mean() / excess.std(ddof=1) * np.sqrt(252))
+    assert metrics["risk_free_applied"] is True
+
+
+def test_sharpe_falls_back_explicitly_when_the_risk_free_series_is_incomplete():
+    returns = pd.Series(
+        [0.01, -0.005, 0.012, 0.002],
+        index=pd.bdate_range("2026-01-02", periods=4),
+    )
+    partial = pd.Series([0.0002, np.nan, 0.0002, 0.0002], index=returns.index)
+
+    metrics = performance_metrics(returns, risk_free=partial)
+
+    assert metrics["risk_free_applied"] is False
+    assert metrics["sharpe"] == pytest.approx(returns.mean() / returns.std(ddof=1) * np.sqrt(252))
+
+
+def test_load_risk_free_converts_the_percent_yield_to_a_compounded_daily_rate():
+    dates = pd.bdate_range("2026-09-01", periods=5)
+    calls = []
+
+    def fake_query(sql, params):
+        calls.append(params)
+        return pd.DataFrame(
+            {"observation_date": [dates[0].date()], "value": [3.6]},
+        )
+
+    rate = load_risk_free(dates, query=fake_query)
+
+    assert calls[0]["series"] == "UST_3M"
+    assert rate.index.equals(dates)
+    expected = (1.036) ** (1 / 252) - 1
+    assert rate.to_numpy() == pytest.approx(np.full(5, expected))
+
+
+def test_load_risk_free_returns_nan_when_the_series_is_missing():
+    dates = pd.bdate_range("2026-09-01", periods=3)
+
+    rate = load_risk_free(dates, query=lambda sql, params: pd.DataFrame())
+
+    assert rate.isna().all()
+
+
 def test_sortino_is_undefined_without_any_downside():
     metrics = performance_metrics(pd.Series([0.01, 0.02, 0.03]))
     assert np.isnan(metrics["sortino"])
@@ -159,6 +215,40 @@ def test_component_var_sums_to_parametric_var():
     assert risk["components"]["component_var"].sum() == pytest.approx(risk["parametric_var"])
     assert risk["historical_var"] >= 0
     assert risk["expected_shortfall"] >= risk["historical_var"]
+
+
+def test_covariance_uses_only_dates_where_every_name_has_a_return():
+    from statistics import NormalDist
+
+    rng = np.random.default_rng(11)
+    index = pd.bdate_range("2026-01-02", periods=60)
+    returns = pd.DataFrame(rng.normal(0, 0.01, size=(60, 3)), index=index, columns=list("abc"))
+    returns.loc[index[:50], "c"] = np.nan  # name c has only ten days of history
+    book = pd.DataFrame({"security_id": list("abc"), "weight": [0.5, -0.3, 0.2]})
+
+    risk = risk_metrics(returns, book)
+
+    complete = returns.dropna(how="any")
+    weights = book.set_index("security_id")["weight"][list("abc")].to_numpy()
+    expected = NormalDist().inv_cdf(0.95) * np.sqrt(weights @ complete.cov().to_numpy() @ weights)
+    assert risk["covariance_observations"] == 10
+    assert risk["parametric_var"] == pytest.approx(expected)
+    assert risk["components"]["component_var"].sum() == pytest.approx(risk["parametric_var"])
+
+
+def test_parametric_var_is_flagged_when_the_window_has_no_more_dates_than_names():
+    rng = np.random.default_rng(3)
+    book = pd.DataFrame({"security_id": list("abc"), "weight": [0.5, -0.3, 0.2]})
+
+    long_window = pd.DataFrame(
+        rng.normal(0, 0.01, size=(60, 3)),
+        index=pd.bdate_range("2026-01-02", periods=60),
+        columns=list("abc"),
+    )
+    short_window = long_window.iloc[:3]
+
+    assert risk_metrics(long_window, book)["parametric_reliable"] is True
+    assert risk_metrics(short_window, book)["parametric_reliable"] is False
 
 
 def test_stress_scenarios_report_the_worst_observed_window():
@@ -291,3 +381,28 @@ def test_holdings_table_combines_returns_f_scores_and_risk():
     assert table["pnl"].notna().all()
     assert set(table["conviction"]) <= {"High", "Medium", "Low"}
     assert table["f_score"].eq(8).all()
+
+
+def test_universe_query_restricts_the_book_to_common_stock():
+    captured = {}
+    columns = [
+        "security_id",
+        "dividend_income_score",
+        "sustainability_score",
+        "appreciation_score",
+        "risk_score",
+        "valuation_score",
+        "composite_score",
+        "score_coverage",
+    ]
+
+    def fake_query(sql, params):
+        captured["sql"] = sql
+        captured["params"] = params
+        return pd.DataFrame(columns=columns)
+
+    load_universe(pd.Timestamp("2026-10-23"), query=fake_query)
+
+    assert "sec.security_type = 'common_stock'" in captured["sql"]
+    assert "px.close >= :min_price" in captured["sql"]
+    assert captured["params"]["min_price"] == MIN_PRICE

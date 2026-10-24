@@ -38,6 +38,7 @@ LONG_GROSS = 1.0
 SHORT_GROSS = 0.5
 BASE_NAV = 100_000_000.0
 MIN_COVERAGE = 0.50
+MIN_PRICE = 1.0
 TRADING_DAYS = 252
 MAX_SINGLE_PAYMENT_RATIO = 1.0
 
@@ -70,9 +71,22 @@ LEFT JOIN LATERAL (
     ORDER BY cp.loaded_at DESC NULLS LAST, cp.profile_id DESC
     LIMIT 1
 ) cp ON TRUE
+JOIN LATERAL (
+    -- Price on the formation date. Sub-$1 names in the warehouse carry corrupt
+    -- closes (for example 0.0006 followed by 1.50), so they cannot be held.
+    SELECT md.close::float8 AS close
+    FROM raw.market_data md
+    WHERE md.security_id = sc.security_id
+      AND md.observation_date = sc.as_of_date
+    LIMIT 1
+) px ON px.close >= :min_price
 WHERE sc.as_of_date = COALESCE(CAST(:as_of AS date), (SELECT max(as_of_date) FROM model.scores))
   AND sc.composite_score IS NOT NULL
   AND sc.score_coverage >= :min_coverage
+  -- The book holds common stock only. Preferreds, bonds, derivatives, futures and
+  -- the ambiguous 'equity' and 'other' types are excluded: the dividend score is
+  -- not a valid ranking for them.
+  AND sec.security_type = 'common_stock'
 ORDER BY sc.composite_score DESC
 """
 
@@ -81,6 +95,16 @@ SELECT DISTINCT as_of_date
 FROM model.scores
 WHERE composite_score IS NOT NULL
 ORDER BY as_of_date
+"""
+
+RISK_FREE_SERIES = "UST_3M"
+
+RISK_FREE_SQL = """
+SELECT observation_date, value::float8 AS value
+FROM raw.macro_series
+WHERE series_id = :series
+  AND observation_date BETWEEN :date_from AND :date_to
+ORDER BY observation_date
 """
 
 PRICE_SQL = """
@@ -189,7 +213,10 @@ def rebalance_date(score_dates, as_of=None) -> pd.Timestamp:
 
 def load_universe(as_of_date, min_coverage=MIN_COVERAGE, query=read_df) -> pd.DataFrame:
     """The scored, sufficiently covered universe on one date."""
-    frame = query(UNIVERSE_SQL, {"as_of": as_of_date, "min_coverage": min_coverage})
+    frame = query(
+        UNIVERSE_SQL,
+        {"as_of": as_of_date, "min_coverage": min_coverage, "min_price": MIN_PRICE},
+    )
     frame["security_id"] = frame["security_id"].astype(str)
     for column in (
         "dividend_income_score",
@@ -259,7 +286,10 @@ def total_return_matrix(prices: pd.DataFrame) -> pd.DataFrame:
     frame["security_id"] = frame["security_id"].astype(str)
     frame["observation_date"] = pd.to_datetime(frame["observation_date"])
     frame["close"] = pd.to_numeric(frame["close"], errors="coerce")
-    frame["dividend"] = pd.to_numeric(frame.get("dividend", 0), errors="coerce").fillna(0.0)
+    if "dividend" in frame:
+        frame["dividend"] = pd.to_numeric(frame["dividend"], errors="coerce").fillna(0.0)
+    else:
+        frame["dividend"] = 0.0
     frame = frame.dropna(subset=["close"]).sort_values(["security_id", "observation_date"])
     frame = frame.drop_duplicates(["security_id", "observation_date"], keep="last")
 
@@ -289,11 +319,26 @@ def portfolio_returns(returns: pd.DataFrame, book: pd.DataFrame) -> pd.DataFrame
     return path
 
 
-def performance_metrics(returns: pd.Series, benchmark: pd.Series | None = None) -> dict:
-    """Annualised performance and risk-adjusted ratios from daily returns."""
+def performance_metrics(
+    returns: pd.Series,
+    benchmark: pd.Series | None = None,
+    risk_free: pd.Series | None = None,
+) -> dict:
+    """Annualised performance and risk-adjusted ratios from daily returns.
+
+    Sharpe uses excess returns over the daily risk-free series when it covers
+    every return date. If it does not, Sharpe falls back to a zero rate and the
+    result says so in ``risk_free_applied``.
+    """
     series = pd.to_numeric(returns, errors="coerce").dropna()
     if series.empty:
         return {}
+    rate = None
+    if risk_free is not None:
+        candidate = pd.to_numeric(risk_free, errors="coerce").reindex(series.index)
+        if candidate.notna().all():
+            rate = candidate
+    excess = series - rate if rate is not None else series
     nav = (1.0 + series).cumprod()
     drawdown = nav / nav.cummax() - 1.0
     annual_return = nav.iloc[-1] ** (TRADING_DAYS / len(series)) - 1.0
@@ -308,9 +353,10 @@ def performance_metrics(returns: pd.Series, benchmark: pd.Series | None = None) 
         "cumulative_return": float(nav.iloc[-1] - 1.0),
         "annual_return": float(annual_return),
         "annual_volatility": float(annual_volatility),
-        "sharpe": float(series.mean() / series.std(ddof=1) * np.sqrt(TRADING_DAYS))
-        if series.std(ddof=1) > 0
+        "sharpe": float(excess.mean() / excess.std(ddof=1) * np.sqrt(TRADING_DAYS))
+        if excess.std(ddof=1) > 0
         else np.nan,
+        "risk_free_applied": rate is not None,
         "sortino": float(series.mean() / downside_deviation * np.sqrt(TRADING_DAYS))
         if downside_deviation > 0
         else np.nan,
@@ -374,7 +420,11 @@ def risk_metrics(
     tail = portfolio[portfolio <= np.nanpercentile(portfolio, alpha * 100.0)]
     expected_shortfall = float(-tail.mean()) if len(tail) else np.nan
 
-    covariance = frame.cov()
+    # Covariance and correlation use one common window: only dates on which every
+    # held name has a return. Pairwise estimates over uneven histories are not
+    # guaranteed positive semi-definite, which would make parametric VaR invalid.
+    complete = frame.dropna(how="any")
+    covariance = complete.cov()
     variance = float(aligned.to_numpy() @ covariance.to_numpy() @ aligned.to_numpy())
     volatility = float(np.sqrt(max(variance, 0.0)))
     z_score = NormalDist().inv_cdf(confidence)
@@ -400,7 +450,11 @@ def risk_metrics(
         "parametric_var_amount": float(z_score * volatility * base_nav),
         "annual_volatility": float(volatility * np.sqrt(TRADING_DAYS)),
         "components": components,
-        "correlation": frame.corr(),
+        "correlation": complete.corr(),
+        "covariance_observations": int(len(complete)),
+        # A sample covariance of n names is full rank only with more than n dates.
+        # This is a necessary condition, not proof of a stable estimate.
+        "parametric_reliable": bool(len(complete) > len(common)),
         "portfolio_returns": portfolio,
     }
 
@@ -527,6 +581,38 @@ def piotroski_f_score(current: pd.Series, prior: pd.Series) -> tuple[int, dict, 
     complete = all(value is not None for value in signals.values())
     score = sum(bool(value) for value in signals.values())
     return score, signals, complete
+
+
+def load_risk_free(index, query=read_df) -> pd.Series:
+    """Daily risk-free return on ``index`` from the 3-month Treasury yield.
+
+    The yield is quoted in percent per annum. It is converted to a compounded
+    daily rate over 252 trading days and carried onto each return date. Dates
+    before the first observation take the first available yield. Returns an
+    all-NaN series when the series has no data, so callers can fall back
+    explicitly rather than silently assuming a zero rate.
+    """
+    dates = pd.DatetimeIndex(pd.to_datetime(index))
+    if dates.empty:
+        return pd.Series(dtype=float)
+    frame = query(
+        RISK_FREE_SQL,
+        {
+            "series": RISK_FREE_SERIES,
+            "date_from": dates.min().date(),
+            "date_to": dates.max().date(),
+        },
+    )
+    if frame is None or frame.empty:
+        return pd.Series(np.nan, index=dates)
+    yields = pd.Series(
+        pd.to_numeric(frame["value"], errors="coerce").to_numpy() / 100.0,
+        index=pd.to_datetime(frame["observation_date"]),
+    ).dropna()
+    if yields.empty:
+        return pd.Series(np.nan, index=dates)
+    carried = yields.reindex(yields.index.union(dates)).ffill().bfill().reindex(dates)
+    return (1.0 + carried) ** (1.0 / TRADING_DAYS) - 1.0
 
 
 def load_prices(
