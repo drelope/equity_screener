@@ -26,6 +26,7 @@ env/
 data/*
 !data/.gitkeep
 sec_dividend_analysis.csv
+artifacts/
 
 # IDE / OS
 .vscode/

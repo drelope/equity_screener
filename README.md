@@ -71,6 +71,9 @@ CIK. This is an expected unavailable-data response, not an API outage.
 
 - [SDLC review](docs/sdlc-review.md) — SDLC phase assessment, key roles and
   responsibilities, and prioritized gaps.
+- [File-based agentic workflow](docs/file-based-agentic-workflow.md) — skill
+  layout, routing map, and CRISP-DM phase map; `SYSTEM.md` is the runtime
+  contract.
 - [Requirements](docs/requirements.md) — screening universe, weights, and
   acceptance criteria.
 - [Model labeling plan](docs/model-labeling-plan.md) — how the offline ML
