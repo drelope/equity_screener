@@ -47,3 +47,5 @@ t -ErrorAction SilentlyContinue | Select-Object Name,Source
 
 # OpenBB provider credentials (loaded at runtime by src/crispdm/openbb_client.py)
 ObbCredentials.json
+artifacts/*
+!artifacts/.gitkeep
