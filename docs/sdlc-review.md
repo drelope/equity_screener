@@ -64,9 +64,9 @@ rules, weights, and acceptance criteria.
 **Current state:**
 
 - Business framing is well captured by the CRISP-DM descriptions and the
-  scoring weights surfaced in the Streamlit caption: Income 25% | Sustainability
-  20% | Legal/Economic Rights 25% | Appreciation 15% | Risk 10% | Valuation 5%
-  (`app/views/screener.py:183`).
+  scoring weights surfaced in the Streamlit caption: Income 33.3% |
+  Sustainability 26.7% | Appreciation 20.0% | Risk 13.3% | Valuation 6.7%
+  (`app/column_docs.py`, `SCORING_CAPTION`).
 - The dividend-universe definition is explicit and enforced: `dividend = TRUE`
    in `reference.securities`, backed by a partial index that gates every
    downstream ETL stage (`README.md:364-367`). Since 2026-10-07 the flag means
@@ -218,7 +218,7 @@ Today **one person fills every role**. Coverage is labeled:
 
 | Role | Primary responsibilities | Phase(s) | Coverage |
 |---|---|---|---|
-| **Product Owner / Business Analyst** | Own screening objectives, the weighting scheme (Income 25 / Sustainability 20 / Legal-Rights 25 / Appreciation 15 / Risk 10 / Valuation 5), the dividend-universe definition, and priority order of stages | Requirements | ◐ Weighted rules and universe recorded in a light requirements artifact; acceptance criteria now codified (`docs/requirements.md`); still no PRD-level user stories |
+| **Product Owner / Business Analyst** | Own screening objectives, the weighting scheme (Income 33.3 / Sustainability 26.7 / Appreciation 20.0 / Risk 13.3 / Valuation 6.7), the dividend-universe definition, and priority order of stages | Requirements | ◐ Weighted rules and universe recorded in a light requirements artifact; acceptance criteria now codified (`docs/requirements.md`); still no PRD-level user stories |
 | **Data Scientist / ML Engineer** | Feature engineering, rule+ML composite scoring (`src/crispdm/scoring.py`, `WEIGHTS` sum to 1), walk-forward evaluation, offline target labeling for future dividend outcomes | Requirements, Design, Testing | ◐ Scoring implemented + tested; checkpoint mechanism, labeler, **and a dry-run Go/No-Go demonstration** (`scripts.dry_run_walk_forward`, PASS) all wired and unit-tested; lookback (2025-01-01) + total-history provisions in place; the DB now carries 315k+ `raw.dividend_data` rows back to 1970 and 3.4M labeled `model.features` rows — **the real-data gate has been run and recorded `no_go` in `audit.model_runs` (2026-10-06), an accepted decision (the composite rules score ships, not the model)** |
 | **Data Engineer** | SEC EDGAR/XBRL + OpenBB ingestion, normalization against the XBRL tag registry, `raw→reference` classification, per-CIK de-duplication, audit lineage | Design, Development, Ops | ✓ Strong: staged scripts, CIK-keyed payloads, dividend gating, `raw_payload` retention |
 | **DBA / Data Modeler** | 8-schema data model, `reference.securities` hub, indexes (`ix_securities_dividend_active`), Flyway-style migrations + `init_db` compat, Compose-hosted Postgres with `pg_stat_statements` | Design, Deployment, Ops | ✓ Strong: schema documented with per-column `COMMENT`, migration discipline present |

@@ -353,10 +353,7 @@ def charts(view) -> None:
 
 def render() -> None:
     st.title("Screener")
-    st.caption(
-        "Income 25% | Sustainability 20% | Legal/Economic Rights 25% | "
-        "Appreciation 15% | Risk 10% | Valuation 5%"
-    )
+    st.caption(column_docs.SCORING_CAPTION)
     st.caption(
         "Scores are rule-based percentile ranks across the universe, not probabilities. "
         "The ML model was evaluated and not adopted."

@@ -6,12 +6,13 @@ criteria so they survive knowledge loss. It deliberately stays one page; the
 authoritative technical design remains `../README.md`. Values below are drawn
 from the code (`src/crispdm/scoring.py`, `src/crispdm/config.py`,
 `scripts/populate_reference_tables.py`) and are the source of truth for the
-web UI caption in `app/views/screener.py`.
+web UI caption in `app/column_docs.py` (`SCORING_CAPTION`).
 
 ## 1. Business objectives
 
-1. Identify US-listed equities that pay an **income** today and are likely to
-   keep paying it **sustainably**, with strong **legal / economic rights**.
+1. Identify US-listed equities that pay an **income** today, are likely to keep
+   paying it **sustainably**, and offer reasonable **appreciation, risk and
+   valuation** characteristics.
 2. Rank and screen the universe rather than score a hand-picked watchlist.
 3. Stay audit-friendly: every raw SEC/OpenBB payload and every derived fact is
    traceable to provenance (`audit.source_lineage`, content hashes, provider
@@ -34,18 +35,25 @@ web UI caption in `app/views/screener.py`.
 
 ## 3. Scoring weights (composite score)
 
-The composite is the weighted sum of six factor sub-scores; each sub-score is a
-percentile rank of the factor across the current feature date
-(`src/crispdm/scoring.py`, `WEIGHTS` must sum to 1 — enforced by tests):
+The composite is the weighted mean of five factor sub-scores; each sub-score is
+a percentile rank of the factor across the current feature date
+(`src/crispdm/scoring.py`, `WEIGHTS` must sum to 1 — enforced by tests). The
+weights below are the original 25/20/15/10/5 allocation renormalised over the
+0.75 that remains after retiring `legal_rights_score`:
 
 | Factor | Weight | Basis |
 |---|---|---|
-| dividend_income_score | **25%** | percentile of dividend yield |
-| sustainability_score | **20%** | 0.5·coverage + 0.2·growth + 0.3·payout (inverted) |
-| legal_rights_score | **25%** | preferred-stock legal terms / security-terms lookup |
-| appreciation_score | **15%** | 0.6·252d momentum + 0.4·63d momentum |
-| risk_score | **10%** | inverted percentile of 252d realized volatility |
-| valuation_score | **5%** | 0.4·earnings yield + 0.4·fcf yield + 0.2·price/book (inverted) |
+| dividend_income_score | **1/3 (33.3%)** | percentile of dividend yield |
+| sustainability_score | **4/15 (26.7%)** | 0.5·coverage + 0.2·growth + 0.3·payout (inverted) |
+| appreciation_score | **1/5 (20.0%)** | 0.6·252d momentum + 0.4·63d momentum |
+| risk_score | **2/15 (13.3%)** | inverted percentile of 252d realized volatility |
+| valuation_score | **1/15 (6.7%)** | 0.4·earnings yield + 0.4·fcf yield + 0.2·price/book (inverted) |
+
+`legal_rights_score` is retired from the composite because its upstream column
+is NULL for every row; carrying a constant 0.25 weight would award every
+security the same 0.125 of composite and floor `score_coverage` at 25%.
+`score_coverage` is now the measured share of the total 1.0 weight, and a
+composite is published only at `MIN_PRESENT_WEIGHT = 0.50`.
 
 `model.predictions` thresholds the composite against `precision_threshold`
 (0.5 by default). That is a relative rank, not a calibrated probability.

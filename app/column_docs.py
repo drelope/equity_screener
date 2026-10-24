@@ -17,6 +17,21 @@ from __future__ import annotations
 import streamlit as st
 
 from app import ui
+from src.crispdm.scoring import WEIGHTS
+
+_WEIGHT_LABELS = {
+    "dividend_income_score": "Income",
+    "sustainability_score": "Sustainability",
+    "appreciation_score": "Appreciation",
+    "risk_score": "Risk",
+    "valuation_score": "Valuation",
+}
+
+#: One caption for every screen that states the composite weights, derived from
+#: the scorer so a weight change cannot leave a stale percentage in the UI.
+SCORING_CAPTION = " | ".join(
+    f"{_WEIGHT_LABELS[name]} {weight:.1%}" for name, weight in WEIGHTS.items()
+)
 
 _SQL = """
 SELECT n.nspname || '.' || c.relname AS relation,

@@ -15,8 +15,9 @@ from sqlalchemy.exc import SQLAlchemyError
 # ever installed.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from app import ui  # noqa: E402
+from app import column_docs, ui  # noqa: E402
 from app.views import (  # noqa: E402
+    dashboard,
     data_explorer,
     health,
     integrations,
@@ -36,8 +37,7 @@ st.set_page_config(
         "Report a bug": None,
         "About": (
             "Dividend Equity Decision System. Scores are rule-based percentile ranks: "
-            "Income 25% | Sustainability 20% | Legal/Economic Rights 25% | "
-            "Appreciation 15% | Risk 10% | Valuation 5%."
+            f"{column_docs.SCORING_CAPTION}."
         ),
     },
 )
@@ -51,6 +51,12 @@ navigation = st.navigation(
                 icon=":material/filter_alt:",
                 url_path="screener",
                 default=True,
+            ),
+            st.Page(
+                dashboard.render,
+                title=dashboard.PAGE_TITLE,
+                icon=":material/space_dashboard:",
+                url_path=dashboard.PAGE_PATH,
             ),
             st.Page(
                 security.render,

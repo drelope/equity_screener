@@ -1,0 +1,293 @@
+"""Selection, return, risk and attribution rules for the model portfolio."""
+
+from __future__ import annotations
+
+import numpy as np
+import pandas as pd
+import pytest
+
+from src.crispdm.portfolio import (
+    BASE_NAV,
+    factor_exposures,
+    holdings_table,
+    monthly_return_table,
+    performance_metrics,
+    piotroski_f_score,
+    portfolio_returns,
+    rebalance_date,
+    risk_metrics,
+    sector_attribution,
+    select_portfolio,
+    stress_scenarios,
+    total_return_matrix,
+)
+
+
+def _universe(size=30):
+    scores = np.linspace(0.99, 0.01, size)
+    return pd.DataFrame(
+        {
+            "security_id": [f"s{index:02d}" for index in range(size)],
+            "ticker": [f"T{index:02d}" for index in range(size)],
+            "sector": ["Technology"] * size,
+            "composite_score": scores,
+            "score_coverage": 1.0,
+            "dividend_income_score": scores,
+            "sustainability_score": scores,
+            "appreciation_score": scores,
+            "risk_score": scores,
+            "valuation_score": scores,
+        }
+    )
+
+
+def test_rebalance_date_uses_the_last_date_of_a_completed_month():
+    dates = pd.to_datetime(["2026-09-25", "2026-09-30", "2026-10-01", "2026-10-22"])
+
+    assert rebalance_date(dates, as_of="2026-10-24") == pd.Timestamp("2026-09-30")
+    assert rebalance_date(dates, as_of="2026-11-01") == pd.Timestamp("2026-10-22")
+
+
+def test_rebalance_date_falls_back_to_the_first_date_when_no_month_is_complete():
+    dates = pd.to_datetime(["2026-09-25", "2026-09-30"])
+
+    assert rebalance_date(dates, as_of="2026-09-30") == pd.Timestamp("2026-09-25")
+
+
+def test_select_portfolio_builds_equal_weight_sleeves_without_overlap():
+    book = select_portfolio(_universe())
+
+    assert len(book) == 23
+    assert (book["side"] == "Long").sum() == 15
+    assert (book["side"] == "Short").sum() == 8
+    assert book.loc[book["side"] == "Long", "weight"].sum() == pytest.approx(1.0)
+    assert book.loc[book["side"] == "Short", "weight"].sum() == pytest.approx(-0.5)
+    assert book["weight"].abs().sum() == pytest.approx(1.5)
+    assert book.loc[book["side"] == "Long", "weight"].nunique() == 1
+    assert book.loc[book["side"] == "Short", "weight"].nunique() == 1
+    assert set(book.loc[book["side"] == "Long", "ticker"]) == {
+        f"T{index:02d}" for index in range(15)
+    }
+    assert set(book.loc[book["side"] == "Short", "ticker"]) == {
+        f"T{index:02d}" for index in range(22, 30)
+    }
+
+
+def test_select_portfolio_refuses_a_universe_that_cannot_fill_both_sleeves():
+    with pytest.raises(ValueError, match="need 23"):
+        select_portfolio(_universe(10))
+
+
+def test_total_return_matrix_credits_the_dividend_on_its_price_date():
+    prices = pd.DataFrame(
+        {
+            "security_id": ["s1", "s1", "s1"],
+            "observation_date": pd.to_datetime(["2026-01-02", "2026-01-05", "2026-01-06"]),
+            "close": [100.0, 110.0, 99.0],
+            "dividend": [0.0, 0.0, 11.0],
+        }
+    )
+
+    returns = total_return_matrix(prices)
+
+    assert returns.loc[pd.Timestamp("2026-01-05"), "s1"] == pytest.approx(0.10)
+    assert returns.loc[pd.Timestamp("2026-01-06"), "s1"] == pytest.approx(0.0)
+
+
+def test_total_return_matrix_drops_an_impossible_dividend():
+    prices = pd.DataFrame(
+        {
+            "security_id": ["s1", "s1"],
+            "observation_date": pd.to_datetime(["2026-01-02", "2026-01-05"]),
+            "close": [100.0, 110.0],
+            "dividend": [0.0, 200.0],
+        }
+    )
+
+    returns = total_return_matrix(prices)
+
+    assert returns.loc[pd.Timestamp("2026-01-05"), "s1"] == pytest.approx(0.10)
+
+
+def test_portfolio_returns_apply_the_short_weight_to_the_stock_return():
+    index = pd.to_datetime(["2026-01-02", "2026-01-05"])
+    returns = pd.DataFrame({"s1": [0.01, 0.02], "s2": [0.03, 0.04]}, index=index)
+    book = pd.DataFrame({"security_id": ["s1", "s2"], "weight": [1.0, -0.5]})
+
+    path = portfolio_returns(returns, book)
+
+    assert path["return"].to_list() == pytest.approx([-0.005, 0.0])
+    assert path["nav"].iloc[-1] == pytest.approx(BASE_NAV * 0.995)
+
+
+def test_performance_metrics_report_drawdown_and_hit_rate():
+    returns = pd.Series(
+        [0.01, -0.02, 0.03],
+        index=pd.to_datetime(["2026-01-02", "2026-01-05", "2026-01-06"]),
+    )
+    metrics = performance_metrics(returns)
+
+    assert metrics["cumulative_return"] == pytest.approx(1.01 * 0.98 * 1.03 - 1.0)
+    assert metrics["max_drawdown"] < 0
+    assert metrics["hit_rate"] == pytest.approx(2 / 3)
+    assert metrics["observations"] == 3
+
+
+def test_sortino_uses_downside_deviation_over_all_observations():
+    returns = pd.Series([0.02, -0.01, 0.03, -0.02, 0.01, 0.00])
+    metrics = performance_metrics(returns)
+
+    # Standard definition: DD = sqrt(mean(min(r, 0)^2)) over all N observations.
+    downside = np.sqrt(np.mean(np.minimum(returns.to_numpy(), 0.0) ** 2))
+    expected = returns.mean() / downside * np.sqrt(252)
+    assert metrics["sortino"] == pytest.approx(expected)
+
+
+def test_sortino_is_undefined_without_any_downside():
+    metrics = performance_metrics(pd.Series([0.01, 0.02, 0.03]))
+    assert np.isnan(metrics["sortino"])
+
+
+def test_component_var_sums_to_parametric_var():
+    rng = np.random.default_rng(7)
+    index = pd.bdate_range("2026-01-02", periods=120)
+    returns = pd.DataFrame(rng.normal(0, 0.01, size=(120, 3)), index=index, columns=list("abc"))
+    book = pd.DataFrame({"security_id": list("abc"), "weight": [0.8, -0.3, 0.4]})
+
+    risk = risk_metrics(returns, book)
+
+    assert risk["components"]["component_var"].sum() == pytest.approx(risk["parametric_var"])
+    assert risk["historical_var"] >= 0
+    assert risk["expected_shortfall"] >= risk["historical_var"]
+
+
+def test_stress_scenarios_report_the_worst_observed_window():
+    returns = pd.Series([0.01, -0.05, 0.02, -0.04, 0.03])
+
+    table = stress_scenarios(returns, horizons=(1, 2))
+
+    assert table.loc[table["horizon_days"] == 1, "worst_return"].iloc[0] == pytest.approx(-0.05)
+    assert table.loc[table["horizon_days"] == 2, "worst_return"].iloc[0] == pytest.approx(
+        (1 + 0.01) * (1 - 0.05) - 1
+    )
+
+
+def test_monthly_return_table_compounds_within_each_calendar_month():
+    returns = pd.Series(
+        [0.10, -0.10, 0.05],
+        index=pd.DatetimeIndex(
+            pd.to_datetime(["2026-01-05", "2026-01-20", "2026-02-02"]),
+            name="observation_date",
+        ),
+        name="return",
+    )
+
+    table = monthly_return_table(returns)
+
+    assert table.loc[table["month"] == 1, "return"].iloc[0] == pytest.approx(-0.01)
+    assert table.loc[table["month"] == 2, "return"].iloc[0] == pytest.approx(0.05)
+
+
+def test_piotroski_f_score_counts_all_nine_signals():
+    current = pd.Series(
+        {
+            "net_income": 10.0,
+            "assets": 100.0,
+            "operating_cash_flow": 12.0,
+            "debt": 20.0,
+            "current_assets": 30.0,
+            "current_liabilities": 20.0,
+            "shares_outstanding": 100.0,
+            "gross_profit": 40.0,
+            "revenue": 100.0,
+        }
+    )
+    prior = pd.Series(
+        {
+            "net_income": 5.0,
+            "assets": 100.0,
+            "operating_cash_flow": 8.0,
+            "debt": 30.0,
+            "current_assets": 25.0,
+            "current_liabilities": 20.0,
+            "shares_outstanding": 100.0,
+            "gross_profit": 31.5,
+            "revenue": 90.0,
+        }
+    )
+
+    score, signals, complete = piotroski_f_score(current, prior)
+
+    assert complete is True
+    assert score == 9
+    assert all(signals.values())
+
+
+def test_piotroski_f_score_marks_missing_inputs_incomplete():
+    current = pd.Series({"net_income": 10.0, "assets": None})
+    prior = pd.Series({"net_income": 5.0, "assets": 100.0})
+
+    _score, signals, complete = piotroski_f_score(current, prior)
+
+    assert complete is False
+    assert signals["positive_roa"] is None
+
+
+def test_factor_exposures_are_weighted_across_each_sleeve():
+    book = select_portfolio(_universe())
+    exposures = factor_exposures(book)
+
+    assert set(exposures["factor"]) == {
+        "Income",
+        "Sustainability",
+        "Appreciation",
+        "Low volatility",
+        "Valuation",
+    }
+    assert (exposures["long"] > exposures["short"]).all()
+    assert (exposures["net"] > 0).all()
+
+
+def test_sector_attribution_nets_long_and_short_pnl():
+    book = pd.DataFrame(
+        {
+            "security_id": ["s1", "s2"],
+            "ticker": ["T1", "T2"],
+            "sector": ["Technology", "Financials"],
+            "side": ["Long", "Short"],
+            "weight": [1.0, -0.5],
+        }
+    )
+    returns = pd.DataFrame({"security_id": ["s1", "s2"], "total_return": [0.10, 0.20]})
+
+    table = sector_attribution(book, returns)
+
+    by_sector = table.set_index("sector")["pnl"]
+    assert by_sector["Technology"] == pytest.approx(0.10 * BASE_NAV)
+    assert by_sector["Financials"] == pytest.approx(-0.10 * BASE_NAV)
+    assert table["pnl"].sum() == pytest.approx(0.0)
+
+
+def test_holdings_table_combines_returns_f_scores_and_risk():
+    book = select_portfolio(_universe(23))
+    index = pd.bdate_range("2026-01-02", periods=3)
+    returns = pd.DataFrame(
+        {security_id: [0.0, 0.01, -0.01] for security_id in book["security_id"]},
+        index=index,
+    )
+    f_scores = pd.DataFrame(
+        {
+            "security_id": book["security_id"],
+            "f_score": 8,
+            "f_score_max": 9,
+            "f_score_complete": True,
+        }
+    )
+    risk = risk_metrics(returns, book)
+
+    table = holdings_table(book, returns, f_scores, risk)
+
+    assert len(table) == 23
+    assert table["pnl"].notna().all()
+    assert set(table["conviction"]) <= {"High", "Medium", "Low"}
+    assert table["f_score"].eq(8).all()
