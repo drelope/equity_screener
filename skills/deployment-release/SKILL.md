@@ -143,7 +143,8 @@ Pass when:
 - **Missing/dirty source data:** route to `data-acquisition` with coverage gaps and tables.
 - **Freshness/health check:** route to `observability-nightly-verification` with `audit.nightly_runs`/`audit.nightly_checks`.
 - **Security/secret risk:** route to `security-compliance` (do not share secret values).
-- **Scoring/labeling policy:** route to `analysis-scoring` or `modeling-evaluation` per boundaries above.
+- **Investment validation, KPI/risk interpretation or a report:** route to `financial-analysis`.
+- **Scoring/labeling policy:** route to `financial-scoring` or `modeling-evaluation` per boundaries above.
 
 ## Stop conditions
 

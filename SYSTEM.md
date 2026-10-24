@@ -53,7 +53,8 @@ The skill directory name must equal the frontmatter `name`.
 
 | Skill | Risk | Phase |
 |---|---|---|
-| `analysis-scoring` | write | 2 |
+| `financial-analysis` | read | 2 |
+| `financial-scoring` | write | 2 |
 | `business-understanding` | write | 2 |
 | `data-acquisition` | heavy | 2 |
 | `data-archiving` | heavy | 2 |
@@ -69,7 +70,7 @@ The skill directory name must equal the frontmatter `name`.
 | `observability-nightly-verification` | read | 1 |
 | `security-compliance` | read | 1 |
 
-All 15 skills exist. Only the skills with a fixed entrypoint can be executed by
+All 16 skills exist. Only the skills with a fixed entrypoint can be executed by
 the runner; for the rest, apply the skill procedure directly and report the
 evidence in the response.
 

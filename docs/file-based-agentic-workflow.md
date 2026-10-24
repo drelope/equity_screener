@@ -1,6 +1,6 @@
 # File-Based Agentic Workflow
 
-Status: phase 3 complete. `SYSTEM.md`, `skills/_template/`, all 15 skills,
+Status: phase 3 complete. `SYSTEM.md`, `skills/_template/`, all 16 skills,
 the deterministic executor (`scripts/agent_runner.py`), gitignored run
 artifacts and the drift test exist. The pipeline they wrap is real and
 authoritative: `scripts.run_full_etl` and the stage scripts listed in
@@ -38,7 +38,8 @@ the repository:
 | `system.py` at root | `scripts/agent_runner.py` | The repo keeps executables under `scripts/`; a root module collides with ruff/import expectations. |
 | `skills/` at root | Keep at root, tracked | `.claude/` and `.agents/` are gitignored, so skills stored there cannot be shared. |
 | `investor_support` | `investment-analysis` | The real feature is `app/views/investment_analysis.py` plus `docs/InvestmentAnalysisWorkflow.md`. |
-| `data_analysis` | `analysis-scoring` | The project has a concrete rule-based scorer, not generic analysis. |
+| `data_analysis` | `financial-scoring` | The project has a concrete rule-based scorer, not generic analysis. |
+| `investor_reporting` | `financial-analysis` | The analyst layer validates, risks and reports the score; it is separate from score mechanics. |
 | `data_dependency_optimization` | Retired | No matching stage or documented capability; keep the tree honest. |
 | Underscored names | kebab-case | Matches the existing `.claude/skills/developing-with-streamlit` convention. |
 
@@ -91,7 +92,9 @@ dividend_equity_crispdm/
 │   │   └── SKILL.md
 │   ├── data-archiving/                    # Existing (heavy)
 │   │   └── SKILL.md
-│   ├── analysis-scoring/                  # Existing (write)
+│   ├── financial-analysis/                # Existing (read)
+│   │   └── SKILL.md
+│   ├── financial-scoring/                 # Existing (write)
 │   │   └── SKILL.md
 │   ├── modeling-evaluation/               # Existing (write)
 │   │   └── SKILL.md
@@ -271,8 +274,8 @@ If preflight fails, the run stops before any write.
 | Business Understanding | `business-understanding` |
 | Data Understanding | `data-understanding`, `data-acquisition`, `data-validation` |
 | Data Preparation | `data-transformation`, `data-storage-schema`, `data-refresh-operations`, `data-backup-recovery`, `data-archiving` |
-| Modeling | `analysis-scoring`, `modeling-evaluation` |
-| Evaluation | `modeling-evaluation`, `observability-nightly-verification` |
+| Modeling | `financial-scoring`, `modeling-evaluation` |
+| Evaluation | `financial-analysis`, `modeling-evaluation`, `observability-nightly-verification` |
 | Deployment | `deployment-release`, `security-compliance`, `investment-analysis` |
 
 The ML model is **not adopted** (see `docs/requirements.md`, section 4). The
@@ -292,7 +295,8 @@ does not promote a model to production.
 | Run the nightly or a partial pipeline | `data-refresh-operations` | `python -m scripts.run_full_etl`, `python -m scripts.run_etl` | `python -m scripts.verify_nightly_run`, `audit.nightly_runs` |
 | Back up or restore the warehouse | `data-backup-recovery` | `docs/deployment-runbook.md` sections 3-4 | documented restore drill |
 | Archive or apply retention | `data-archiving` | `docs/deployment-runbook.md` | lineage and `audit.source_lineage` preserved |
-| Produce scores and rankings | `analysis-scoring` | `python -m scripts.score_rank --prune-superseded` | `tests/test_scoring.py`, `tests/test_score_pruning.py` |
+| Produce scores and rankings | `financial-scoring` | `python -m scripts.score_rank --prune-superseded` | `tests/test_scoring.py`, `tests/test_score_pruning.py` |
+| Validate an investment, interpret KPIs/risk, or prepare the analyst dashboard/reports | `financial-analysis` | `app/views/dashboard.py`, `docs/AnalystDashboard.md`, `docs/InvestmentAnalysisWorkflow.md` | `tests/test_portfolio.py`, `tests/test_dashboard_view.py`, `tests/test_financial_analysis_skill.py` |
 | Revisit the ML model | `modeling-evaluation` | `python -m scripts.evaluate_walk_forward`, `python -m scripts.dry_run_walk_forward` | `MIN_RECALL`, `audit.model_runs` |
 | Work an investment-analysis worksheet | `investment-analysis` | `app/views/investment_analysis.py`, `docs/InvestmentAnalysisWorkflow.md` | `tests/test_workflow_doc.py`, `tests/test_analysis_schema.py` |
 | Morning health check | `observability-nightly-verification` | `python -m scripts.verify_nightly_run` | exit 0; exit 1 is a recorded finding, not a crash |
@@ -301,7 +305,7 @@ does not promote a model to production.
 
 ## 9. Skill inventory
 
-All 15 skills exist as phase-2 files. The "Existing anchors" column is the
+All 16 skills exist as phase-2 files. The "Existing anchors" column is the
 code and documentation each skill must link to rather than restate.
 
 | Skill | Purpose | Existing anchors |
@@ -315,7 +319,8 @@ code and documentation each skill must link to rather than restate.
 | `data-refresh-operations` | Run nightly/partial ETL safely | `scripts/run_full_etl.py`, `scripts/run_etl.py`, `ops/systemd/`, `airflow/dags/` |
 | `data-backup-recovery` | Back up and restore the warehouse | `docs/deployment-runbook.md` sections 3-4 |
 | `data-archiving` | Apply retention without losing lineage | `docs/deployment-runbook.md`, `audit.source_lineage` |
-| `analysis-scoring` | Build and explain the rule-based composite | `src/crispdm/scoring.py`, `scripts/score_rank.py`, `docs/requirements.md` |
+| `financial-analysis` | Validate investments, interpret KPIs/risk and run the 7-tab analyst dashboard | `src/crispdm/portfolio.py`, `app/views/dashboard.py`, `docs/AnalystDashboard.md` |
+| `financial-scoring` | Build and explain the rule-based composite | `src/crispdm/scoring.py`, `scripts/score_rank.py`, `docs/requirements.md` |
 | `modeling-evaluation` | Keep walk-forward diagnostics reproducible; do not promote a failed model | `src/crispdm/model.py`, `scripts/evaluate_walk_forward.py`, `docs/model-labeling-plan.md` |
 | `investment-analysis` | Drive the 18-step worksheet and recommendation gate | `app/analysis_schema.py`, `app/views/investment_analysis.py`, `docs/InvestmentAnalysisWorkflow.md` |
 | `observability-nightly-verification` | Verify the nightly run and data-module SLAs | `scripts/verify_nightly_run.py`, `docs/nightly-verification.md` |

@@ -28,7 +28,7 @@ Do not use when:
 - the run already happened and only verification is needed
   (`observability-nightly-verification`);
 - a stage failed and needs a code or data repair;
-- the task is to change weights or features (`analysis-scoring`);
+- the task is to change weights or features (`financial-scoring`);
 - the task is to add schema (`data-storage-schema`).
 
 ## Inputs
@@ -105,7 +105,7 @@ the evidence.
   delete the advisory lock by hand.
 - Pending migration: stop. Route to `data-storage-schema`; do not auto-apply.
 - Stage failure: stop the chain; identify the owning skill (`data-acquisition`,
-  `data-transformation`, `analysis-scoring`) and report the stage, exit code and
+  `data-transformation`, `financial-scoring`) and report the stage, exit code and
   first error.
 - Upstream unavailable (SEC/OpenBB/FMP/FRED): report the source and skip scope;
   do not fabricate data or silently widen a timeout.
@@ -141,7 +141,8 @@ the evidence.
 - **Missing/dirty source data:** route to `data-acquisition` with coverage gaps and tables.
 - **Freshness/health check:** route to `observability-nightly-verification` with `audit.nightly_runs`/`audit.nightly_checks`.
 - **Security/secret risk:** route to `security-compliance` (do not share secret values).
-- **Scoring/labeling policy:** route to `analysis-scoring` or `modeling-evaluation` per boundaries above.
+- **Investment validation, KPI/risk interpretation or a report:** route to `financial-analysis`.
+- **Scoring/labeling policy:** route to `financial-scoring` or `modeling-evaluation` per boundaries above.
 
 ## Stop conditions
 

@@ -25,7 +25,9 @@ Use when:
 
 Do not use when:
 
-- the task is the screener or composite score (`analysis-scoring`);
+- the task is the screener or composite score (`financial-scoring`);
+- the task is KPI interpretation, portfolio risk or a dashboard report
+  (`financial-analysis`);
 - the task is raw data acquisition for the worksheet (`data-acquisition`);
 - the task is the macro memo inputs (`data-transformation`).
 
@@ -122,7 +124,8 @@ Pass when:
 - **Missing/dirty source data:** route to `data-acquisition` with coverage gaps and tables.
 - **Freshness/health check:** route to `observability-nightly-verification` with `audit.nightly_runs`/`audit.nightly_checks`.
 - **Security/secret risk:** route to `security-compliance` (do not share secret values).
-- **Scoring/labeling policy:** route to `analysis-scoring` or `modeling-evaluation` per boundaries above.
+- **Investment validation, KPI/risk interpretation or a report:** route to `financial-analysis`.
+- **Scoring/labeling policy:** route to `financial-scoring` or `modeling-evaluation` per boundaries above.
 
 ## Stop conditions
 

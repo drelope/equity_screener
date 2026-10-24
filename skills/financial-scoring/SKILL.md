@@ -1,18 +1,19 @@
 ---
-name: analysis-scoring
-description: "Use when changing factor weights, the composite score, ranking, regime weights or prediction thresholds, or when explaining why a security's score changed. Do not use for model evaluation or for feature construction."
+name: financial-scoring
+description: "Use when changing factor weights, the composite score, ranking, regime weights or prediction thresholds, or when re-scoring a historical date. Do not use for investment validation, KPI/risk interpretation or reporting (financial-analysis), the worksheet (investment-analysis), or model evaluation."
 version: 1
 risk: write
 owner: analysis
 entrypoint: none  # none|fixed|list
-tags: []
+tags: [scoring, ranking]
 ---
 
-# Analysis and Scoring
+# Financial Scoring
 
 Own the rule-based composite, its component percentiles, rankings and the
 `model.predictions` threshold. The composite is the product; it is not a
-calibrated probability.
+calibrated probability. Interpretation, risk and reporting belong to
+`financial-analysis`.
 
 ## When to use / when not to use
 
@@ -27,8 +28,11 @@ Do not use when:
 
 - the feature inputs are wrong (`data-transformation`);
 - the task is the walk-forward model gate (`modeling-evaluation`);
-- the task is UI presentation only (`investment-analysis` or the Streamlit
-  view).
+- the task is investment validation, KPI/risk interpretation or a report
+  (`financial-analysis`);
+- the task is the 18-step worksheet or a Final recommendation
+  (`investment-analysis`);
+- the task is UI presentation only (the Streamlit view).
 
 ## Inputs
 
@@ -123,7 +127,8 @@ Pass when:
 - **Missing/dirty source data:** route to `data-acquisition` with coverage gaps and tables.
 - **Freshness/health check:** route to `observability-nightly-verification` with `audit.nightly_runs`/`audit.nightly_checks`.
 - **Security/secret risk:** route to `security-compliance` (do not share secret values).
-- **Scoring/labeling policy:** route to `analysis-scoring` or `modeling-evaluation` per boundaries above.
+- **Investment validation, KPI/risk interpretation or a report:** route to `financial-analysis`.
+- **Scoring/labeling policy:** route to `financial-scoring` or `modeling-evaluation` per boundaries above.
 
 ## Stop conditions
 
