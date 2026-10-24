@@ -28,8 +28,9 @@ not adopted; `modeling-evaluation` is diagnostic only.
 ```text
 intake
   -> classify (one primary skill)
-  -> load (this file + skills/<name>/SKILL.md)
+  -> load (this file + skills/<name>/SKILL.md; validate via src/agent/schemas)
   -> preflight (git status, env presence, migrate --check)
+  -> tool-scope (load only skill.tools via src/agent/tools; deny by default)
   -> execute (one command or stage at a time)
   -> verify (the skill's verifier)
   -> record (artifacts/runs/<run-id>/)

@@ -148,11 +148,15 @@ It must:
 3. print the planned argv and require `--yes` for write/`heavy` actions outside
    an explicitly non-interactive scheduler invocation;
 4. capture stdout/stderr and exit codes into `artifacts/runs/<run-id>/`;
-5. run read-only preflight (`git status`, `migrate --check` for DB-touching
+5. validate contracts with Pydantic schemas (`src/agent/schemas`); fall back to
+   the built-in parser when unavailable.
+6. run read-only preflight (`git status`, `migrate --check` for DB-touching
    skills, required env vars by name) and write `preflight.json`;
-6. block a write/heavy run when preflight fails;
-7. never interpolate request text into a shell string;
-8. never read or print `.env` values.
+7. block a write/heavy run when preflight fails.
+8. load only skill-declared tools dynamically (deny by default) to prevent
+   context bloat.
+9. never interpolate request text into a shell string;
+10. never read or print `.env` values.
 
 The executor is **not** an LLM. Model choice, if any, belongs to the client
 invoking the workflow. This keeps the run reproducible.
@@ -169,6 +173,7 @@ version: 1
 risk: read | write | heavy
 owner: data-engineering
 entrypoint: none | fixed | list
+tools: []  # optional; pass Python tools only when skill demands them
 tags: []
 ---
 
@@ -207,6 +212,8 @@ Rules:
 - `risk` drives the executor's confirmation policy.
 - `entrypoint` is `fixed` only when `scripts.agent_runner.py` declares the
   skill's commands; otherwise it is `none` or `list`.
+- `tools` (optional) lists Python tool names made available only when this skill
+  is selected (dynamic tooling to prevent context bloat). Empty by default.
 - `Runner` states whether the deterministic executor may run the skill and
   repeats the confirmation rule.
 - `Preflight` mirrors the orchestrator preflight for this skill.
