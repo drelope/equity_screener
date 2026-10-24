@@ -140,3 +140,49 @@ def test_dashboard_renders_with_the_simulated_label():
     assert tuple(tab.label for tab in at.tabs) == TAB_NAMES
     captions = [caption.value for caption in at.caption]
     assert any("Simulated 15 long / 8 short" in caption for caption in captions)
+    subheaders = [subheader.value for subheader in at.subheader]
+    assert "Walk-forward backtest" in subheaders
+
+
+def test_the_backtest_loader_takes_the_newest_run_with_all_outputs(tmp_path):
+    import json
+
+    from app.views.dashboard import _load_latest_backtest
+
+    index = pd.bdate_range("2026-01-05", periods=3)
+    daily = pd.DataFrame(
+        {"return": [0.01, -0.02, 0.0], "benchmark": [0.0, 0.0, 0.0], "nav": [1.0, 0.98, 0.98]},
+        index=index,
+    )
+    periods = pd.DataFrame(
+        {
+            "formation": [index[0]],
+            "end": [index[-1]],
+            "status": ["held"],
+            "long_names": [15],
+            "short_names": [8],
+            "period_return": [-0.02],
+            "benchmark_return": [0.0],
+            "turnover": [0.5],
+            "missing_days": [0],
+        }
+    )
+    for stamp in ("20260101_0000", "20260102_0000"):
+        (tmp_path / f"metrics_{stamp}.json").write_text(
+            json.dumps({"held_periods": 1, "cash_periods": 0}), encoding="utf-8"
+        )
+    # Only the older run has its CSV outputs; the newer one is incomplete.
+    daily.to_csv(tmp_path / "daily_20260101_0000.csv")
+    periods.to_csv(tmp_path / "periods_20260101_0000.csv", index=False)
+
+    run = _load_latest_backtest(str(tmp_path))
+
+    assert run["stamp"] == "20260101_0000"
+    assert run["metrics"]["held_periods"] == 1
+    assert list(run["daily"].columns) == ["return", "benchmark", "nav"]
+
+
+def test_the_backtest_loader_reports_no_run_when_the_directory_is_empty(tmp_path):
+    from app.views.dashboard import _load_latest_backtest
+
+    assert _load_latest_backtest(str(tmp_path)) is None

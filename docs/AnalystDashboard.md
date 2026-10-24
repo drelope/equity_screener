@@ -65,11 +65,19 @@ interpretation:
 | F-Score | `fundamentals.periodic_financials` | two latest `FY` periods filed on or before formation |
 | Research status | `analysis.investment_analyses` | latest saved rows |
 | Catalysts | OPENBB `raw.dividend_data` ex-dates | next 90 days for held names |
+| Risk-free rate | `raw.macro_series`, `UST_3M` (percent p.a.) | daily, compounded; forward-filled |
 
 ## Model portfolio construction
 
-1. **Universe.** Every security with a published composite on the rebalance
-   date and `score_coverage >= 0.50`. Names below the score floor are not ranked.
+1. **Universe.** Every **common stock** (`reference.securities.security_type =
+   'common_stock'`) with a published composite on the rebalance date and
+   `score_coverage >= 0.50`. Names below the score floor are not ranked.
+   Preferreds, bonds, derivatives, futures and the ambiguous `equity` and
+   `other` types are excluded because the dividend score is not a valid
+   ranking for them.
+   The formation-date close must be at least **$1** (`MIN_PRICE`). Below that,
+   the warehouse holds corrupt closes (for example 0.0006 followed by 1.50), and
+   a name without a close on the formation date is excluded.
 2. **Rebalance date.** The last score date of the most recent **completed**
    month. A partial current month is not used, so opening the dashboard on a
    different day cannot silently change the book. If no month has completed,
@@ -91,10 +99,63 @@ interpretation:
    corporate-action adjustments beyond the stored close and dividend series, or
    intraday execution.
 
-This is a model portfolio, not a walk-forward strategy validation. The score
-history currently begins in September 2026, so the dashboard usually shows one
-completed rebalance and a short performance window. A longer history is required
-before treating any ratio as evidence of skill.
+This is a model portfolio. The Portfolio and Risk tabs describe **one** book built
+from the latest completed month, so their performance window is short. The
+Performance tab also shows the walk-forward backtest over the stored history
+(see the next section). Scores are stored point-in-time for 93 month-ends from
+2019-01-31 to 2026-08-31, plus the daily scores from September 2026. No single
+ratio is evidence of skill; the backtest is the basis for any such claim, with its
+limits. The historical scored universe grows from 1,760 names in 2019 to about
+2,800 in 2026, which reflects fundamentals coverage rather than the market; early
+rebalances are therefore built on a narrower universe.
+
+## Walk-forward backtest
+
+`src/crispdm/backtest.py` chains the model book across all stored month-ends.
+At each rebalance date the book is built from that date's scores, using the same
+selection and sizing as the dashboard, and held until the next rebalance date.
+
+- **Timing.** A holding period earns returns strictly after its formation close
+  and through the next rebalance close. A name is never credited with the return of
+  the day its score was known.
+- **Costs.** None. Turnover is reported, so costs can be judged against it.
+- **Cash.** A period with too few scored names is held in cash and recorded.
+- **Benchmark.** The equal-weight scored universe at the same formation date.
+- **Schedule.** The last score date of each calendar month, plus the newest date.
+
+Run: `python -m scripts.backtest` (about four minutes). It writes the daily series,
+the per-period table and the metrics to `artifacts/backtests/` (gitignored). The
+Performance tab shows the newest complete run.
+
+Result for 2019-01-31 to 2026-10-23 (93 rebalances, 1,943 daily observations,
+after the $1 price floor):
+
+| Metric | Value |
+|---|---|
+| Cumulative return | -55.4% |
+| Annualised return | -9.9% |
+| Annualised volatility | 19.6% |
+| Sharpe (3M UST excess) | -0.63 |
+| Sortino | -0.55 |
+| Max drawdown | -76.9% |
+| Information ratio vs universe | -0.92 |
+| Periods beating the universe | 40% |
+| Average one-way turnover | 712% per year |
+
+The model did not beat its own equal-weight universe on this history. Costs are
+excluded, so net results would be lower. Treat this as the first honest number,
+not as a conclusion about the score in general: the sample is one regime history,
+one construction rule, and the universe is survivor-biased.
+
+**Data-quality finding.** Before the $1 floor, the backtest's worst day was -57%.
+That came from corrupt closes on sub-$1 names, which the composite ranks highly.
+The floor removed those days; the worst remaining day is -14.4%.
+
+**Event risk.** That -14.4% day came from one short, ADAMG, whose price moved from
+8.72 to 25.33 and stayed there, on normal volume. The pattern fits a corporate
+event rather than a bad print. The warehouse cannot confirm the event, so the
+result is kept. The short sleeve carries event risk that the equal-weight
+construction does not limit.
 
 ## Conventions
 
@@ -104,8 +165,10 @@ before treating any ratio as evidence of skill.
   negative, and a falling price on a short is a gain.
 - Annualisation uses 252 trading days. Volatility uses the sample standard
   deviation (`ddof = 1`).
-- The risk-free rate is **zero** until a T-bill series is wired in. Sharpe is
-  therefore an excess-to-zero ratio, not an excess-over-cash ratio.
+- The risk-free rate is the **3-month Treasury yield** (`UST_3M` in
+  `raw.macro_series`, percent per annum), converted to a compounded daily rate
+  over 252 days. If the series does not cover every return date, Sharpe falls
+  back to a zero rate and the Performance tab says so.
 - A ratio is shown as `n/a` when its denominator is zero or the sample is too
   short to define it. It is never shown as zero.
 - Every metric card or table names its window and observation count.
@@ -119,7 +182,8 @@ Let `r_t` be the daily portfolio return over `N` observations.
 - **Cumulative return:** `NAV_T / NAV_0 - 1`, compounded daily.
 - **Annualised return:** `(1 + cumulative)^(252 / N) - 1`.
 - **Annualised volatility:** `stdev(r_t) * sqrt(252)`.
-- **Sharpe:** `mean(r_t) / stdev(r_t) * sqrt(252)`, with rf = 0 (see Conventions).
+- **Sharpe:** `mean(r_t - rf_t) / stdev(r_t - rf_t) * sqrt(252)`, where `rf_t` is
+  the daily risk-free return (see Conventions).
 - **Sortino (standard definition):** `mean(r_t) / DD * sqrt(252)`, where the
   downside deviation is `DD = sqrt( (1/N) * sum(min(r_t, 0)^2) )`. The
   denominator uses **all** `N` observations with a target of zero. Sortino is
@@ -149,23 +213,29 @@ stated otherwise.
   VaR quantile.
 - **Parametric VaR 95:** `1.645 * sigma_p`, where `sigma_p = sqrt(w' Sigma w)` uses
   signed weights `w` and the sample covariance `Sigma` of position returns.
-  Zero mean is assumed.
+  Zero mean is assumed. `Sigma` is estimated on a **common window**: only dates on
+  which every held name has a return. The window length is reported with the risk
+  metrics. A pairwise estimate over uneven histories is not guaranteed positive
+  semi-definite, so it is not used.
+  **Reliability flag:** a sample covariance of `n` names is full rank only with
+  more than `n` common dates. When the window has `n` dates or fewer, the Risk
+  Monitor shows a warning and parametric VaR should not be used. Passing the
+  flag is necessary, not sufficient: a window of a few times `n` is still noisy.
 - **Component VaR:** `w_i * (Sigma w)_i / sigma_p * 1.645`. Components sum to
   parametric VaR (Euler decomposition). Hedges contribute negatively.
 - **Annualised portfolio volatility:** `sigma_p * sqrt(252)`.
 - **Stress tests (historical):** the worst compounded return over 1, 5 and 20
   trading days in the loaded window. These are realised windows, not
   hypothetical shocks. Scenario stresses are listed under gaps.
-- **Correlation matrix:** pairwise correlation of daily position returns over the
-  same window.
+- **Correlation matrix:** correlation of daily position returns over the same
+  common window as `Sigma`.
 - **Limit dashboard:** illustrative research limits of 200% gross, 75% absolute
   net, 10% single name and 35% single sector. A breach is displayed as a breach.
   The limits are not regulatory or investment-policy limits.
 
-*Known limitation:* the covariance matrix is computed pairwise over whatever
-history each name has. With short or uneven histories the matrix may not be
-positive semi-definite, and parametric VaR can be misstated. Parametric VaR should
-be read alongside historical VaR until the window is complete for every held name.
+*Known limitation:* the common window is as short as the newest held name's
+history. A short window makes `Sigma` noisy, so parametric VaR should be read
+alongside historical VaR and the reported window length.
 
 ### Position Book
 
@@ -240,7 +310,6 @@ yet, and each is listed with the reason.
 
 | Measure | Why it matters | Blocker |
 |---|---|---|
-| Sharpe over T-bill excess return | Comparability with fund reporting | No risk-free series in the warehouse. |
 | Market beta and alpha vs a benchmark | Separates exposure from selection | No benchmark index series stored; only the equal-weight universe. |
 | Beta-adjusted net exposure | Standard net exposure measure for a long/short book | Requires beta (above). |
 | Explicit tracking error | Active risk, reported beside IR | Computed inside IR but not displayed. |
@@ -267,21 +336,29 @@ The page uses cached read-only queries via `app.ui.query`.
 ruff check .
 ruff format --check .
 pytest -q tests/test_financial_analysis_skill.py tests/test_portfolio.py \
-  tests/test_dashboard_view.py tests/test_requirements_weights.py
+  tests/test_dashboard_view.py tests/test_requirements_weights.py tests/test_backtest.py
 ```
 
 The full suite (`pytest -q`) also runs `tests/test_streamlit_app.py`, which opens
 every registered page through the app shell. It is slower and is not part of the
 targeted command above.
 
-Last verified on 2026-10-24: `ruff check .` and `ruff format --check .` pass, and
-the four targeted files pass (30 tests). The full suite passed (1538 tests) on
-the same day.
+Last verified on 2026-10-24: `ruff check .` and `ruff format --check .` pass. The
+targeted files pass: 39 tests across the skill, portfolio, requirements and backtest
+files, and 7 dashboard tests, including the render with the backtest section. The
+full suite passed (1540 tests) before the $1 price floor, the backtest and the
+dashboard section were added; it has not been rerun since.
 
 ## Known limitations
 
-- Score history is short; one completed monthly rebalance does not validate a
-  strategy.
+- The Portfolio and Risk tabs show one book. The backtest on the Performance tab
+  reads the newest saved run in `artifacts/backtests/`; it does not recompute on
+  page load, so it can lag the warehouse until `python -m scripts.backtest` is run
+  again. Its result is negative on this history.
+- The scorer reads features only up to each as-of date, but the scored universe
+  is the current `active` list, so securities delisted before today are absent
+  from every historical date (survivorship bias). Filing-date point-in-time for
+  fundamentals is not yet verified.
 - F-Score coverage is incomplete because annual fundamentals are not available
   for every ranked name. Missing scores are shown as `n/a`.
 - The equal-weight universe benchmark is not a published index and carries the
@@ -293,5 +370,7 @@ the same day.
 - Daily prices are not adjusted by the provider (`adjusted_close` is NULL), so
   total return depends on the stored dividend series and the ex-date mapping.
 - Corporate actions other than cash dividends are not modelled.
-- Parametric VaR uses a pairwise covariance matrix that can be unstable with
-  short or uneven histories.
+- `security_type` is the current classification, not point-in-time, so a
+  historical rebalance uses today's label.
+- Parametric VaR is estimated on the common window of held names, which is only
+  as long as the newest held name's history.

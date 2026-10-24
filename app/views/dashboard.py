@@ -9,6 +9,9 @@ on the position book and the risk monitor cannot disagree.
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
 import plotly.express as px
@@ -80,7 +83,8 @@ def _load_context() -> dict | None:
     benchmark_prices = pf.load_prices(universe["security_id"], formed, latest, query=ui.query)
     if not benchmark_prices.empty:
         benchmark = pf.total_return_matrix(benchmark_prices).mean(axis=1, skipna=True)
-    performance = pf.performance_metrics(path["return"], benchmark)
+    risk_free = pf.load_risk_free(path.index, query=ui.query)
+    performance = pf.performance_metrics(path["return"], benchmark, risk_free=risk_free)
     risk = pf.risk_metrics(returns, book)
     f_scores = pf.load_f_scores(book["security_id"], formed, query=ui.query)
     table = pf.holdings_table(book, returns, f_scores, risk)
@@ -227,8 +231,111 @@ def _monthly_heatmap(monthly: pd.DataFrame) -> None:
     st.plotly_chart(figure, width="stretch")
 
 
+BACKTEST_DIR = Path(__file__).resolve().parents[2] / "artifacts" / "backtests"
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def _load_latest_backtest(directory: str) -> dict | None:
+    """The newest run with all three outputs written: metrics, daily series, periods."""
+    for metrics_path in sorted(Path(directory).glob("metrics_*.json"), reverse=True):
+        stamp = metrics_path.stem.removeprefix("metrics_")
+        daily_path = metrics_path.with_name(f"daily_{stamp}.csv")
+        periods_path = metrics_path.with_name(f"periods_{stamp}.csv")
+        if not (daily_path.exists() and periods_path.exists()):
+            continue
+        return {
+            "stamp": stamp,
+            "metrics": json.loads(metrics_path.read_text(encoding="utf-8")),
+            "daily": pd.read_csv(daily_path, index_col=0, parse_dates=True),
+            "periods": pd.read_csv(periods_path, parse_dates=["formation", "end"]),
+        }
+    return None
+
+
+def _backtest_section() -> None:
+    run = _load_latest_backtest(str(BACKTEST_DIR))
+    with st.container(border=True):
+        st.subheader("Walk-forward backtest")
+        if run is None:
+            st.info(
+                "No backtest run found. Run `python -m scripts.backtest` to build it "
+                "from the stored month-end scores (about four minutes)."
+            )
+            return
+        metrics = run["metrics"]
+        daily = run["daily"]
+        periods = run["periods"]
+        held = int(metrics.get("held_periods", 0))
+        cash = int(metrics.get("cash_periods", 0))
+        st.caption(
+            f"Run {run['stamp']}: {held} monthly rebalances held, {cash} in cash, "
+            f"{daily.index.min():%Y-%m-%d} to {daily.index.max():%Y-%m-%d}. "
+            "Costs, borrow and financing are excluded. Each book is built from that "
+            "month-end's scores and held to the next month-end, and it is compared with "
+            "the equal-weight scored universe at the same formation dates."
+        )
+        with st.container(horizontal=True):
+            st.metric("Cumulative return", _pct(metrics.get("cumulative_return")), border=True)
+            st.metric("Sharpe", _ratio(metrics.get("sharpe")), border=True)
+            st.metric("Max drawdown", _pct(metrics.get("max_drawdown")), border=True)
+            st.metric(
+                "Information ratio",
+                _ratio(metrics.get("information_ratio")),
+                border=True,
+            )
+            st.metric(
+                "Avg one-way turnover / yr",
+                _pct(metrics.get("average_one_way_turnover_annual")),
+                border=True,
+            )
+        nav = pd.DataFrame(
+            {
+                "Model portfolio": daily["nav"],
+                "Equal-weight universe": (1.0 + daily["benchmark"].fillna(0.0)).cumprod()
+                * pf.BASE_NAV,
+            }
+        )
+        st.line_chart(nav, y_label="NAV ($)")
+        with st.expander("Rebalance periods"):
+            st.dataframe(
+                periods[
+                    [
+                        "formation",
+                        "end",
+                        "status",
+                        "long_names",
+                        "short_names",
+                        "period_return",
+                        "benchmark_return",
+                        "turnover",
+                        "missing_days",
+                    ]
+                ],
+                hide_index=True,
+                width="stretch",
+                column_config={
+                    "formation": st.column_config.DateColumn("Formed"),
+                    "end": st.column_config.DateColumn("Next rebalance"),
+                    "status": "Status",
+                    "long_names": st.column_config.NumberColumn("Longs", format="%d"),
+                    "short_names": st.column_config.NumberColumn("Shorts", format="%d"),
+                    "period_return": st.column_config.NumberColumn("Model", format="percent"),
+                    "benchmark_return": st.column_config.NumberColumn("Universe", format="percent"),
+                    "turnover": st.column_config.NumberColumn("One-way turnover", format="percent"),
+                    "missing_days": st.column_config.NumberColumn(
+                        "Missing-return days", format="%d"
+                    ),
+                },
+            )
+
+
 def _performance_tab(context: dict) -> None:
     performance = context["performance"]
+    if not performance.get("risk_free_applied", False):
+        st.caption(
+            "Sharpe uses a zero risk-free rate: the 3-month Treasury series does not "
+            "cover every return date in this window."
+        )
     with st.container(horizontal=True):
         st.metric("Sharpe", _ratio(performance.get("sharpe")), border=True)
         st.metric("Sortino", _ratio(performance.get("sortino")), border=True)
@@ -278,6 +385,7 @@ def _performance_tab(context: dict) -> None:
                 "return": st.column_config.NumberColumn("Return", format="percent"),
             },
         )
+    _backtest_section()
 
 
 def _component_var_chart(components: pd.DataFrame) -> None:
@@ -348,6 +456,13 @@ def _risk_tab(context: dict) -> None:
         st.metric("Expected shortfall 95", _pct(risk["expected_shortfall"]), border=True)
         st.metric("Parametric VaR 95", _pct(risk["parametric_var"]), border=True)
         st.metric("Annualised volatility", _pct(risk["annual_volatility"]), border=True)
+    if not risk.get("parametric_reliable", False):
+        st.warning(
+            f"Parametric VaR is not reliable: the covariance window has "
+            f"{risk.get('covariance_observations', 0)} common dates for "
+            f"{len(risk['components'])} names. It needs more dates than names. "
+            "Read historical VaR instead."
+        )
     components = risk["components"].merge(
         book[["security_id", "ticker", "sector", "side", "weight"]], on="security_id", how="left"
     )
