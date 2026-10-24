@@ -5,6 +5,7 @@ version: 1
 risk: read  # read|write|heavy
 owner: unassigned
 entrypoint: none  # none|fixed|list
+tools: []  # optional: Python tool names only when skill demands them
 tags: []
 ---
 
