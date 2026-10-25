@@ -142,6 +142,8 @@ def test_dashboard_renders_with_the_simulated_label():
     assert any("Simulated 15 long / 8 short" in caption for caption in captions)
     subheaders = [subheader.value for subheader in at.subheader]
     assert "Walk-forward backtest" in subheaders
+    warnings = [warning.value for warning in at.warning]
+    assert any("Under review" in text for text in warnings)
 
 
 def test_the_backtest_loader_takes_the_newest_run_with_all_outputs(tmp_path):

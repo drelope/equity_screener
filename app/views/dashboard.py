@@ -267,6 +267,13 @@ def _backtest_section() -> None:
         periods = run["periods"]
         held = int(metrics.get("held_periods", 0))
         cash = int(metrics.get("cash_periods", 0))
+        if metrics.get("price_filter", "none") == "none":
+            st.warning(
+                "Under review: this run uses unfiltered warehouse prices. Stale prints "
+                "(for example, near-zero-volume closes that jump and revert) and "
+                "survivor-only history are not corrected, so the figures below are not "
+                "evidence about the score."
+            )
         st.caption(
             f"Run {run['stamp']}: {held} monthly rebalances held, {cash} in cash, "
             f"{daily.index.min():%Y-%m-%d} to {daily.index.max():%Y-%m-%d}. "

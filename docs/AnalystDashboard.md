@@ -106,8 +106,9 @@ Performance tab also shows the walk-forward backtest over the stored history
 2019-01-31 to 2026-08-31, plus the daily scores from September 2026. No single
 ratio is evidence of skill; the backtest is the basis for any such claim, with its
 limits. The historical scored universe grows from 1,760 names in 2019 to about
-2,800 in 2026, which reflects fundamentals coverage rather than the market; early
-rebalances are therefore built on a narrower universe.
+2,800 in 2026. Part of that growth is real coverage; part is identity fragmentation
+(see Survivorship and identity below), so early rebalances use a narrower universe
+than the market.
 
 ## Walk-forward backtest
 
@@ -127,25 +128,18 @@ Run: `python -m scripts.backtest` (about four minutes). It writes the daily seri
 the per-period table and the metrics to `artifacts/backtests/` (gitignored). The
 Performance tab shows the newest complete run.
 
-Result for 2019-01-31 to 2026-10-23 (93 rebalances, 1,943 daily observations,
-after the $1 price floor):
+**Under review.** Two results exist for 2019-01-31 to 2026-10-23, and neither is
+reliable yet:
 
-| Metric | Value |
-|---|---|
-| Cumulative return | -55.4% |
-| Annualised return | -9.9% |
-| Annualised volatility | 19.6% |
-| Sharpe (3M UST excess) | -0.63 |
-| Sortino | -0.55 |
-| Max drawdown | -76.9% |
-| Information ratio vs universe | -0.92 |
-| Periods beating the universe | 40% |
-| Average one-way turnover | 712% per year |
+- Before V0092 (narrower universe, 1,760 scored names in 2019): cumulative
+  -55.4%, Sharpe -0.63, information ratio -0.92 against the universe.
+- After V0092 (historical identities now priced): cumulative +175.6%, Sharpe
+  0.45, maximum drawdown -72.2%, information ratio -0.00. The equal-weight
+  universe itself returns +290% over the same window.
 
-The model did not beat its own equal-weight universe on this history. Costs are
-excluded, so net results would be lower. Treat this as the first honest number,
-not as a conclusion about the score in general: the sample is one regime history,
-one construction rule, and the universe is survivor-biased.
+The reversal comes from the universe composition and from bad prints, not from a
+change in the score. Do not report either figure as a conclusion about the score.
+Costs are excluded throughout, so net results would be lower.
 
 **Data-quality finding.** Before the $1 floor, the backtest's worst day was -57%.
 That came from corrupt closes on sub-$1 names, which the composite ranks highly.
@@ -156,6 +150,57 @@ The floor removed those days; the worst remaining day is -14.4%.
 event rather than a bad print. The warehouse cannot confirm the event, so the
 result is kept. The short sleeve carries event risk that the equal-weight
 construction does not limit.
+
+## Survivorship and identity
+
+Two defects limit what the backtest can say. Both were measured on 2026-10-24
+against the warehouse; neither has been repaired.
+
+**1. No delisted securities before 2026.** In `raw.market_data`, 6,423 of 6,424
+securities end their price history in 2026 (one ends in 2025, none earlier). The
+price source returns only names trading now, so a company that stopped trading
+before 2026 is absent from every historical date. This cannot be fixed in code;
+it needs a delisting history from a data provider. Survivorship bias is therefore
+structural in the backtest, and its direction is mixed. Long-book returns are
+overstated, because failed longs are missing. Short-book returns are understated,
+because the big gains on shorts that later delisted are missing. The net effect
+on the long/short result is not known.
+
+**2. Identities split a company's history.** `reference.securities.security_id`
+is a UUID derived from ticker, CIK, security type and the dividend flag
+(`scripts/populate_reference_tables.py`). When any of those change, the reseed
+creates a new identity with no price history and marks the old one inactive,
+because the old one still has child rows. Measured:
+
+- 6,618 active common-stock identities; 1,999 have any price row, and 4,619 have
+  none.
+- January 2019: 2,526 common-stock companies (by CIK) have a price. For 982 of
+  them (39%), only a superseded identity carries the price, so the backtest,
+  which scores active identities, never sees them.
+- Reseeds that created most of the new identities ran on 2026-09-22, 09-25,
+  10-06, 10-07 and 10-08.
+
+**Fixed (V0092, applied 2026-10-24).** A security's identity is now
+`(cik, ticker, security_type)`. `dividend` is an attribute, so a flag flip updates
+the row in place. The migration merged the 2,787 split groups: the row with the
+most price history keeps its `security_id`, the childless twin is removed, and
+the children of the removed rows are re-pointed. Measured after the migration:
+
+- one identity index, `ux_security_cik_ticker_type`; no duplicate identities;
+- companies (by CIK) unchanged at 8,169; active identities unchanged at 10,746;
+- active common-stock identities with prices: 1,999 before, 3,867 after;
+- the current universe on 2026-10-23 is unchanged at 1,891 names. The change is
+  in history: the winners carry prices and features back to 2019.
+
+Still open:
+
+- 2,751 active common-stock identities have no price rows. For 540 of them, the
+  same CIK has a priced identity under a different ticker or security type.
+  Those are classification or ticker flips, which V0092 deliberately does not
+  merge, because a security type can be a real distinction.
+- Price quality in the warehouse is not clean. A stale print can look like a
+  real move: PNYG printed 0.90, then 4.99 on near-zero volume for four sessions,
+  then 0.80. The backtest is sensitive to such prints (see the next section).
 
 ## Conventions
 
@@ -355,16 +400,16 @@ dashboard section were added; it has not been rerun since.
   reads the newest saved run in `artifacts/backtests/`; it does not recompute on
   page load, so it can lag the warehouse until `python -m scripts.backtest` is run
   again. Its result is negative on this history.
-- The scorer reads features only up to each as-of date, but the scored universe
-  is the current `active` list, so securities delisted before today are absent
-  from every historical date (survivorship bias). Filing-date point-in-time for
-  fundamentals is not yet verified.
+- Survivorship and identity: see the section below. In short, the price source
+  has no delisted securities before 2026, and each company's history is split
+  across identities, so the backtest universe is a subset of the market.
+  Filing-date point-in-time for fundamentals is not yet verified.
 - F-Score coverage is incomplete because annual fundamentals are not available
   for every ranked name. Missing scores are shown as `n/a`.
 - The equal-weight universe benchmark is not a published index and carries the
   same data gaps as the portfolio.
 - The security master is current, not point-in-time, so the model can inherit
-  survivorship bias.
+  survivorship bias (see below).
 - The short book assumes the names can be borrowed; no borrow availability or
   cost data exists in the warehouse.
 - Daily prices are not adjusted by the provider (`adjusted_close` is NULL), so
