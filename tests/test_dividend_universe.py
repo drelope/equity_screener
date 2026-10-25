@@ -78,12 +78,16 @@ class _Scan:
         self.commits = 0
 
     def execute(self, stmt, params=None):
+        # An identity lookup on reference.securities finds no existing row, so the
+        # id is minted from (ticker, cik, security_type) as for a new security.
+        is_identity_lookup = "reference.securities" in str(stmt)
+
         class _Result:
             def mappings(self):
                 return iter([])
 
             def scalar(self):
-                return {"entityName": "Acme"}
+                return None if is_identity_lookup else {"entityName": "Acme"}
 
         return _Result()
 
@@ -154,9 +158,7 @@ def test_the_security_id_of_an_overridden_payer_matches_the_one_stage_1_derives(
     (stage0_id,) = payer["security_ids"].values()
     security_type = payer["security_types"][0]
 
-    stage1_id = uuid.uuid5(
-        uuid.NAMESPACE_URL, f"dividend-equity:AAA:0000000001:{security_type}:True"
-    )
+    stage1_id = uuid.uuid5(uuid.NAMESPACE_URL, f"dividend-equity:AAA:0000000001:{security_type}")
 
     assert stage0_id == stage1_id
 

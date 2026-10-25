@@ -332,7 +332,8 @@ migrations = [
       AND duplicate.security_type = keeper.security_type
       AND duplicate.dividend = keeper.dividend
     """,
-    "CREATE UNIQUE INDEX IF NOT EXISTS ux_security_cik_ticker_type_dividend ON reference.securities(cik, ticker, security_type, dividend)",
+    "DROP INDEX IF EXISTS reference.ux_security_cik_ticker_type_dividend",
+    "CREATE UNIQUE INDEX IF NOT EXISTS ux_security_cik_ticker_type ON reference.securities(cik, ticker, security_type)",
     "ALTER TABLE raw.company_ticker DROP CONSTRAINT IF EXISTS company_ticker_cik_key",
     "CREATE UNIQUE INDEX IF NOT EXISTS ux_company_ticker_ticker_cik ON raw.company_ticker(ticker, cik)",
     "ALTER TABLE reference.securities DROP CONSTRAINT IF EXISTS securities_cik_fkey",

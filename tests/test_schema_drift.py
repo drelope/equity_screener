@@ -195,7 +195,7 @@ class TestBootstrapIsRebuildable:
         it outside schema.sql.
         """
         schema = (ROOT / "sql" / "schema.sql").read_text()
-        assert "ux_security_cik_ticker_type_dividend" in schema, (
+        assert "ux_security_cik_ticker_type" in schema, (
             "schema.sql does not create the unique index that prevents duplicate "
             "securities; a rebuild would reintroduce the V0039 problem"
         )

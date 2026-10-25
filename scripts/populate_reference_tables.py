@@ -800,10 +800,22 @@ def populate_securities(limit=None, repopulate=False, reclassify=False, *, ticke
                 )
                 security_type = instrument.security_type
                 dividend = classification["dividend"] or (cik, sec["ticker"]) in observed_payers
-                row_id = uuid.uuid5(
-                    uuid.NAMESPACE_URL,
-                    f"dividend-equity:{sec['ticker'].upper()}:{cik}:{security_type}:{dividend}",
-                )
+                # Identity is (cik, ticker, security_type); `dividend` is an attribute.
+                # Reuse the existing row's id so a dividend-flag flip updates the row
+                # in place instead of minting a second identity (see V0092).
+                row_id = conn.execute(
+                    text(
+                        "SELECT security_id FROM reference.securities "
+                        "WHERE cik = :cik AND ticker = :ticker AND security_type = :type "
+                        "ORDER BY active DESC, updated_at DESC LIMIT 1"
+                    ),
+                    {"cik": cik, "ticker": sec["ticker"], "type": security_type},
+                ).scalar()
+                if row_id is None:
+                    row_id = uuid.uuid5(
+                        uuid.NAMESPACE_URL,
+                        f"dividend-equity:{sec['ticker'].upper()}:{cik}:{security_type}",
+                    )
                 title_match = match_security_title(
                     cik_titles or classification.get("security_titles", []),
                     security_type,
@@ -845,7 +857,8 @@ def populate_securities(limit=None, repopulate=False, reclassify=False, *, ticke
                         :type, :dividend, :dividend_last_paid, :status, :exchange_id,
                             :currency, :active,
                             :classify_source, :classify_confidence, CAST(:classify_evidence AS jsonb))
-                    ON CONFLICT (cik, ticker, security_type, dividend) DO UPDATE SET
+                    ON CONFLICT (cik, ticker, security_type) DO UPDATE SET
+                        dividend = EXCLUDED.dividend,
                         issuer_id = EXCLUDED.issuer_id,
                         security_name = EXCLUDED.security_name,
                         dividend_last_paid = EXCLUDED.dividend_last_paid,

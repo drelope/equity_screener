@@ -77,10 +77,10 @@ CREATE INDEX IF NOT EXISTS ix_securities_ticker_cik
 -- One row per economic security. cik+ticker is not unique on its own: a
 -- re-classification mints a second row for the same instrument with a different
 -- security_type, which is how 61 duplicate active pairs got scored twice (V0039).
--- Carrying security_type and dividend in the key is what makes it hold the right
--- rows instead of forcing a merge of rows that are legitimately distinct.
-CREATE UNIQUE INDEX IF NOT EXISTS ux_security_cik_ticker_type_dividend
-  ON reference.securities (cik, ticker, security_type, dividend);
+-- dividend is an attribute, not part of the identity (V0092): a dividend-flag
+-- flip updates the row in place rather than minting a second identity.
+CREATE UNIQUE INDEX IF NOT EXISTS ux_security_cik_ticker_type
+  ON reference.securities (cik, ticker, security_type);
 
 -- Converge databases created before the XBRL-term columns existed so the
 -- COMMENT statements below and the profile/taxonomy writers always apply.

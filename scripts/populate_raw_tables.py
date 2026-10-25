@@ -608,13 +608,21 @@ def _identify_dividend_payers(limit=None, reuse_max_age_days=None):
                 dei_titles=[exact_title] if exact_title else None,
             )
             security_types = [security_type]
-            security_ids = {
-                security_type: uuid.uuid5(
+            # Identity is (cik, ticker, security_type); `dividend` is an attribute (V0092).
+            security_ids = {}
+            for security_type in security_types:
+                existing_id = conn.execute(
+                    text(
+                        "SELECT security_id FROM reference.securities "
+                        "WHERE cik = :cik AND ticker = :ticker AND security_type = :type "
+                        "ORDER BY active DESC, updated_at DESC LIMIT 1"
+                    ),
+                    {"cik": cik, "ticker": row["ticker"], "type": security_type},
+                ).scalar()
+                security_ids[security_type] = existing_id or uuid.uuid5(
                     uuid.NAMESPACE_URL,
-                    f"dividend-equity:{row['ticker'].upper()}:{cik}:{security_type}:{classification['dividend']}",
+                    f"dividend-equity:{row['ticker'].upper()}:{cik}:{security_type}",
                 )
-                for security_type in security_types
-            }
             payers.append(
                 {
                     "ticker": row["ticker"],
@@ -654,7 +662,7 @@ def _upsert_minimal_securities(conn, payer):
         # current row, and re-keying legacy rows touches 13 child FKs.
         holder = conn.execute(
             text(
-                "SELECT cik, ticker, security_type, dividend FROM reference.securities "
+                "SELECT cik, ticker, security_type FROM reference.securities "
                 "WHERE security_id = :id"
             ),
             {"id": payer["security_ids"][security_type]},
@@ -663,7 +671,6 @@ def _upsert_minimal_securities(conn, payer):
             payer["cik"],
             payer["ticker"],
             security_type,
-            classification["dividend"],
         ):
             return False
         security_name = match_security_title(
@@ -678,7 +685,8 @@ def _upsert_minimal_securities(conn, payer):
              security_type, dividend, dividend_last_paid, sec_data_status, currency, active)
             VALUES (:ticker, :cik, :id, :security_name,
                     :type, :dividend, :dividend_last_paid, :status, 'USD', TRUE)
-            ON CONFLICT (cik, ticker, security_type, dividend) DO UPDATE SET
+            ON CONFLICT (cik, ticker, security_type) DO UPDATE SET
+                dividend = EXCLUDED.dividend,
                 security_name = EXCLUDED.security_name,
                 dividend_last_paid = COALESCE(
                     EXCLUDED.dividend_last_paid, reference.securities.dividend_last_paid
@@ -699,17 +707,16 @@ def _upsert_minimal_securities(conn, payer):
                 "status": classification["status"],
             },
         )
-        # The key carries `dividend` and `security_type`, so a flipped flag mints
-        # a new row beside the old one. Retire the older twin now rather than
-        # leaving two active rows until the reference stage reconciles them
-        # (V0047). Deactivated, not deleted: raw.ticker_profile may reference it.
+        # Identity is (cik, ticker, security_type). A second active row of the same
+        # type with a different id is a superseded identity: retire it. Deactivated,
+        # not deleted: raw.ticker_profile may reference it.
         conn.execute(
             text("""
             UPDATE reference.securities
             SET active = FALSE, updated_at = now()
             WHERE cik = :cik AND ticker = :ticker AND active
               AND security_id <> :id
-              AND (security_type, dividend) IS DISTINCT FROM (:type, :dividend)
+              AND security_type = :type
         """),
             {
                 "ticker": payer["ticker"],
