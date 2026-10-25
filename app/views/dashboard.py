@@ -74,14 +74,19 @@ def _load_context() -> dict | None:
     if universe.empty:
         return None
     book = pf.select_portfolio(universe)
-    prices, _ = pf.clean_prices(pf.load_prices(book["security_id"], formed, latest, query=ui.query))
+    split_events = pf.load_split_events(query=ui.query)
+    prices, _ = pf.clean_prices(
+        pf.load_prices(book["security_id"], formed, latest, query=ui.query),
+        split_events=split_events,
+    )
     returns = pf.total_return_matrix(prices)
     path = pf.portfolio_returns(returns, book)
     if path.empty:
         return None
     benchmark = None
     benchmark_prices, _ = pf.clean_prices(
-        pf.load_prices(universe["security_id"], formed, latest, query=ui.query)
+        pf.load_prices(universe["security_id"], formed, latest, query=ui.query),
+        split_events=split_events,
     )
     if not benchmark_prices.empty:
         benchmark = pf.total_return_matrix(benchmark_prices).mean(axis=1, skipna=True)

@@ -128,11 +128,12 @@ Run: `python -m scripts.backtest` (about four minutes). It writes the daily seri
 the per-period table and the metrics to `artifacts/backtests/` (gitignored). The
 Performance tab shows the newest complete run.
 
-**Price filter (`stale_reversal_absurd_v2`).** Applied per security to every holding
-period before returns are computed (`src/crispdm/portfolio.py`, `clean_prices`):
+**Price filter (`stale_reversal_absurd_split_v4`).** Applied per security to every
+holding period before returns are computed (`src/crispdm/portfolio.py`, `clean_prices`):
 
 - a close above 1e6 or below 1e-4 is a unit or feed error and is rejected
-  (1,924 such daily moves of 40% or more in the warehouse);
+  (1,924 such daily moves of 40% or more in the warehouse); a security with no
+  usable print in the window is blanked, so it earns no return rather than noise;
 - a print with zero volume is stale and is rejected;
 - a close more than 50% away from the last accepted close is a spike; it is
   rejected if a later accepted print, within 5 sessions, returns to within 20% of
@@ -142,19 +143,32 @@ period before returns are computed (`src/crispdm/portfolio.py`, `clean_prices`):
 - a move that persists is kept, because it may be a real event;
 - a missing volume is unknown, not zero, and is never rejected for volume;
 - prices are read 14 calendar days past each period end, so a spike near the end
-  can be confirmed. Returns are taken only up to the period end.
+  can be confirmed. Returns are taken only up to the period end;
+- the universe requires a formation close between 1e-4 and 1e6, so an absurd
+  print cannot enter the book at formation.
 
-Corporate actions were examined and are not handled. The warehouse has no
-historical split source: `clean.corporate_action` covers September to November
-2026 only, and the one 2026 reverse split it records (ITOC 1:16) shows no
-price jump in the warehouse. Volume-and-price split signatures are ambiguous:
-a real crash can match a forward split (PNYG, 2024-11-21), so they are not
-used to adjust prices.
+**Splits.** Split history comes from FMP (`/stable/splits`), fetched by
+`scripts/fetch_fmp_splits.py` into `artifacts/corporate_actions/fmp_splits.csv`
+(gitignored). The fetch covered all 4,101 common-stock tickers with prices, with
+no failures, and gave 7,400 events mapped to 2,124 identities. Coverage runs back
+to 2003 for large names. A split is applied only when the warehouse price shows
+the matching jump: the one-session move on the event date must be within 10% of
+the reported ratio (denominator over numerator), and the event must fall within
+5 days of a price. Earlier prints are then scaled, so the split day has no return.
 
-Effect. The filter rejected 202,763 prints over the run. On the short side it
-removed the bad prints that had produced the largest losses (PNYG alone added
-about +0.48 of cumulative contribution across two periods). Longs changed by
-about +0.01.
+Why the check comes first. On a 15-name sample, 3 of 67 FMP events showed their
+jump in the warehouse prices, 44 showed none (most of the warehouse is already
+adjusted by the provider), and 20 fell outside the price history. Applying every
+FMP event blindly would have scaled prices that were already right. Matching to
+the price jump is what prevents that. Some histories remain unusable even after
+the check: WHLR's closes sit near 20,000 to 30,000 after dozens of unadjusted
+reverse splits, and no single event matches, so that history is not adjusted.
+
+Effect. The filter rejected 199,017 prints and applied 145 split adjustments.
+On the short side it removed the bad prints that had produced the largest losses
+(PNYG alone added about +0.48 of cumulative contribution across two periods, and
+the WHLR history added the -21% day that the absurd-price fix and the usable-print
+rule now remove). Longs changed by about +0.01.
 
 Results, 2019-01-31 to 2026-10-23, 93 rebalances, costs excluded:
 
@@ -164,14 +178,15 @@ Results, 2019-01-31 to 2026-10-23, 93 rebalances, costs excluded:
 | After V0092, unfiltered | +175.6% | 0.45 | -72.2% | -0.00 |
 | After V0092, price filter v1 | +859.1% | 1.06 | -58.6% | 0.52 |
 | After V0092, price filter v2 (adds absurd-price rule) | +732.9% | 0.96 | -58.2% | 0.47 |
+| After V0092, filter v3 (adds FMP split confirmation) | +754.4% | 0.97 | -57.1% | 0.48 |
+| After V0092, filter v4 (adds usable-print and formation-bound rules) | +658.2% | 0.95 | -57.7% | 0.43 |
 
-The equal-weight universe returns +184% over the same window. The filtered figures
-are not a finding about the score, for three reasons. Corporate actions are not
-adjusted: the largest surviving moves include candidate splits (for example WHLR,
-CRTD and CISS), which the spike rule keeps because they never revert. Short
-squeezes are real and kept (AMC, January 2021, +301% in one session), but their
-short-side losses are not limited by the construction. The history is
-survivor-only.
+The equal-weight universe returns +185% over the same window. The filtered figures
+are still not a finding about the score, for three reasons. Some histories are
+unusable even after the checks (WHLR), and the survivor-only history remains. Short
+squeezes are real and kept (AMC, January 2021, +301% in one session), so their
+short-side losses are not limited by the construction. The largest remaining
+losses are the 2020 COVID drawdown and the January 2021 squeeze, both real events.
 
 **Event risk.** That -14.4% day came from one short, ADAMG, whose price moved from
 8.72 to 25.33 and stayed there, on normal volume. The pattern fits a corporate

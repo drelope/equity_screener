@@ -22,7 +22,7 @@ from src.crispdm.db import read_df
 
 PERIODS_PER_YEAR = 12
 #: Names the rules in src/crispdm/portfolio.py (clean_prices). Recorded per run.
-PRICE_FILTER = "stale_reversal_absurd_v2"
+PRICE_FILTER = "stale_reversal_absurd_split_v4"
 #: Calendar days of prices read past each period end to confirm a reversal.
 CLEANING_LOOKAHEAD = pd.Timedelta(days=14)
 
@@ -56,6 +56,7 @@ def run_walk_forward(
     prices_for,
     risk_free_for=None,
     *,
+    split_events=None,
     long_count: int = pf.LONG_COUNT,
     short_count: int = pf.SHORT_COUNT,
     base_nav: float = pf.BASE_NAV,
@@ -73,6 +74,7 @@ def run_walk_forward(
     daily_parts: list[pd.DataFrame] = []
     period_rows: list[dict] = []
     rejected_prints = 0
+    splits_applied = 0
     previous = pd.Series(dtype=float)
 
     for start, end in zip(dates[:-1], dates[1:]):
@@ -95,8 +97,12 @@ def run_walk_forward(
         ids = sorted(set(weights.index) | set(universe["security_id"].astype(str)))
         # Prices run past the period end so a spike near the end can be confirmed or
         # rejected. Returns are still taken only up to the end (see the window below).
-        prices, rejected = pf.clean_prices(prices_for(ids, start, end + CLEANING_LOOKAHEAD))
+        prices, rejected = pf.clean_prices(
+            prices_for(ids, start, end + CLEANING_LOOKAHEAD),
+            split_events=split_events,
+        )
         rejected_prints += rejected
+        splits_applied += prices.attrs.get("splits_adjusted", 0)
         returns = pf.total_return_matrix(prices) if not prices.empty else pd.DataFrame()
         window = (
             returns.loc[(returns.index > start) & (returns.index <= end)]
@@ -157,6 +163,7 @@ def run_walk_forward(
     held_periods = periods[periods["status"] == "held"]
     metrics["price_filter"] = PRICE_FILTER
     metrics["rejected_prints"] = int(rejected_prints)
+    metrics["splits_adjusted"] = int(splits_applied)
     metrics["periods"] = int(len(periods))
     metrics["held_periods"] = int(len(held_periods))
     metrics["cash_periods"] = int(len(periods) - len(held_periods))
@@ -211,5 +218,6 @@ def run_from_warehouse(query=read_df, **kwargs) -> BacktestResult:
         universe_for=lambda day: pf.load_universe(day, query=query),
         prices_for=lambda ids, start, end: pf.load_prices(ids, start, end, query=query),
         risk_free_for=lambda index: pf.load_risk_free(index, query=query),
+        split_events=pf.load_split_events(query=query),
         **kwargs,
     )

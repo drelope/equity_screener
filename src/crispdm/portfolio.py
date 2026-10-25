@@ -25,6 +25,7 @@ without Postgres.
 
 from __future__ import annotations
 
+from pathlib import Path
 from statistics import NormalDist
 
 import numpy as np
@@ -79,7 +80,7 @@ JOIN LATERAL (
     WHERE md.security_id = sc.security_id
       AND md.observation_date = sc.as_of_date
     LIMIT 1
-) px ON px.close >= :min_price
+) px ON px.close >= :min_price AND px.close <= :max_price
 WHERE sc.as_of_date = COALESCE(CAST(:as_of AS date), (SELECT max(as_of_date) FROM model.scores))
   AND sc.composite_score IS NOT NULL
   AND sc.score_coverage >= :min_coverage
@@ -216,7 +217,12 @@ def load_universe(as_of_date, min_coverage=MIN_COVERAGE, query=read_df) -> pd.Da
     """The scored, sufficiently covered universe on one date."""
     frame = query(
         UNIVERSE_SQL,
-        {"as_of": as_of_date, "min_coverage": min_coverage, "min_price": MIN_PRICE},
+        {
+            "as_of": as_of_date,
+            "min_coverage": min_coverage,
+            "min_price": MIN_PRICE,
+            "max_price": ABSURD_PRICE_HIGH,
+        },
     )
     frame["security_id"] = frame["security_id"].astype(str)
     for column in (
@@ -631,13 +637,27 @@ REVERSION_BAND = 0.20
 # on 2026-10-24: 1,924 daily moves of 40% or more had a close above 1e6 or
 # below 1e-4 (WHLR alone printed closes in the hundreds of billions).
 ABSURD_PRICE_HIGH = 1e6
+#: A split is applied only if the observed one-session move is within this
+#: fraction of the reported ratio, and the move falls within this many days of the event.
+SPLIT_TOLERANCE = 0.10
+SPLIT_EVENT_WINDOW_DAYS = 5
 ABSURD_PRICE_LOW = 1e-4
 
 
-def clean_prices(prices: pd.DataFrame) -> tuple[pd.DataFrame, int]:
+def clean_prices(
+    prices: pd.DataFrame,
+    split_events: pd.DataFrame | None = None,
+) -> tuple[pd.DataFrame, int]:
     """Replace stale and spike-and-revert closes with the last accepted close.
 
-    Returns the cleaned frame and the number of rejected prints. A missing volume
+    ``split_events`` (columns security_id, date, ratio) is applied only where the
+    price itself shows the split: the one-session move on the event date must be
+    within ``SPLIT_TOLERANCE`` of the reported ratio. Earlier prints are then scaled
+    by the observed move, so the split day has no return. Events the warehouse has
+    already adjusted show no jump and change nothing.
+
+    Returns the cleaned frame and the number of rejected prints. The number of
+    splits applied is in ``frame.attrs["splits_adjusted"]``. A missing volume
     is treated as unknown, not as zero, so only an explicit zero rejects a print.
     The reversal test looks at later prints, so it uses the full holding window.
     Persistent moves are kept, and so are moves at the end of the window that have
@@ -649,11 +669,25 @@ def clean_prices(prices: pd.DataFrame) -> tuple[pd.DataFrame, int]:
     if "volume" not in frame:
         frame["volume"] = np.nan
     frame = frame.sort_values(["security_id", "observation_date"]).reset_index(drop=True)
+    events = {}
+    if split_events is not None and not split_events.empty:
+        for sid, event_frame in split_events.groupby("security_id"):
+            events[str(sid)] = list(zip(pd.to_datetime(event_frame["date"]), event_frame["ratio"]))
     rejected_total = 0
+    splits_adjusted = 0
     cleaned_parts = []
-    for _, group in frame.groupby("security_id", sort=False):
+    for sid, group in frame.groupby("security_id", sort=False):
         close = group["close"].to_numpy(dtype=float).copy()
         volume = group["volume"].to_numpy(dtype=float)
+        dates = pd.DatetimeIndex(group["observation_date"])
+        for event_date, expected in events.get(str(sid), []):
+            index = _event_index(dates, event_date)
+            if index is None or index == 0:
+                continue
+            observed = close[index] / close[index - 1]
+            if observed > 0 and abs(observed / expected - 1.0) <= SPLIT_TOLERANCE:
+                close[:index] *= observed
+                splits_adjusted += 1
         stale = volume == STALE_PRINT_VOLUME
         absurd = (close > ABSURD_PRICE_HIGH) | (close < ABSURD_PRICE_LOW)
         unusable = stale | absurd
@@ -676,7 +710,16 @@ def clean_prices(prices: pd.DataFrame) -> tuple[pd.DataFrame, int]:
                 base = value
         # Replace each rejected print with the last accepted close before it. Leading
         # rejected prints take the first accepted close.
-        last_accepted = close[good[0]] if len(good) else None
+        if len(good) == 0:
+            # No usable print at all: the series carries no return. Blanking the
+            # closes drops the rows, so the name earns nothing rather than noise.
+            close[:] = np.nan
+            rejected_total += len(close)
+            cleaned = group.copy()
+            cleaned["close"] = close
+            cleaned_parts.append(cleaned)
+            continue
+        last_accepted = close[good[0]]
         for index in range(len(close)):
             if rejected[index]:
                 if last_accepted is not None:
@@ -687,7 +730,55 @@ def clean_prices(prices: pd.DataFrame) -> tuple[pd.DataFrame, int]:
         cleaned = group.copy()
         cleaned["close"] = close
         cleaned_parts.append(cleaned)
-    return pd.concat(cleaned_parts, ignore_index=True), rejected_total
+    result = pd.concat(cleaned_parts, ignore_index=True)
+    result.attrs["splits_adjusted"] = splits_adjusted
+    return result, rejected_total
+
+
+def _event_index(dates: pd.DatetimeIndex, event_date: pd.Timestamp) -> int | None:
+    """Position of the first print on or after the event, within a few sessions."""
+    later = np.flatnonzero(dates >= event_date)
+    if len(later) == 0:
+        return None
+    index = int(later[0])
+    if (dates[index] - event_date).days > SPLIT_EVENT_WINDOW_DAYS:
+        return None
+    return index
+
+
+#: Split history fetched by scripts/fetch_fmp_splits.py (gitignored artifact).
+SPLIT_EVENTS_PATH = (
+    Path(__file__).resolve().parents[2] / "artifacts" / "corporate_actions" / "fmp_splits.csv"
+)
+
+SECURITY_TICKERS_SQL = """
+SELECT security_id::text AS security_id, ticker
+FROM reference.securities
+WHERE security_type = 'common_stock'
+"""
+
+
+def load_split_events(path=SPLIT_EVENTS_PATH, query=read_df) -> pd.DataFrame:
+    """Split events as (security_id, date, ratio), where ratio = denominator / numerator.
+
+    FMP reports a split by ticker. Each security_id with that ticker is given the
+    event, and ``clean_prices`` applies it only where the price shows the jump, so a
+    ticker shared by several identities cannot adjust the wrong one. Returns an
+    empty frame when the artifact is absent.
+    """
+    columns = ["security_id", "date", "ratio"]
+    if not Path(path).exists():
+        return pd.DataFrame(columns=columns)
+    raw = pd.read_csv(path, dtype={"ticker": str})
+    raw["numerator"] = pd.to_numeric(raw["numerator"], errors="coerce")
+    raw["denominator"] = pd.to_numeric(raw["denominator"], errors="coerce")
+    raw = raw.dropna(subset=["date", "numerator", "denominator"])
+    raw = raw[(raw["numerator"] > 0) & (raw["denominator"] > 0)]
+    raw["date"] = pd.to_datetime(raw["date"])
+    raw["ratio"] = raw["denominator"] / raw["numerator"]
+    securities = query(SECURITY_TICKERS_SQL, {})
+    merged = raw.merge(securities, on="ticker", how="inner")
+    return merged[columns].reset_index(drop=True)
 
 
 def load_prices(

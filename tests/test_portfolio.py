@@ -498,3 +498,110 @@ def test_a_sub_penny_close_inside_the_range_is_kept():
 
     assert rejected == 0
     assert cleaned["close"].tolist() == pytest.approx([0.0005, 0.00052, 0.00051])
+
+
+def test_a_split_the_price_shows_is_adjusted_so_the_split_day_has_no_return():
+    frame = _series("SP", [100.0, 101.0, 50.5, 51.0, 51.5])
+    events = pd.DataFrame(
+        {
+            "security_id": ["SP"],
+            "date": [pd.bdate_range("2026-09-01", periods=5)[2]],
+            "ratio": [0.5],
+        }
+    )
+
+    cleaned, rejected = clean_prices(frame, split_events=events)
+
+    assert cleaned.attrs["splits_adjusted"] == 1
+    assert rejected == 0
+    assert cleaned["close"].tolist() == pytest.approx([50.0, 50.5, 50.5, 51.0, 51.5])
+    returns = cleaned["close"].pct_change().tolist()
+    assert returns[1] == pytest.approx(0.01)  # the day before the split keeps its real move
+    assert returns[2] == pytest.approx(0.0)  # the split day itself has no return
+
+
+def test_a_reported_split_the_price_does_not_show_changes_nothing():
+    frame = _series("NS", [100.0, 101.0, 101.5, 102.0])
+    events = pd.DataFrame(
+        {
+            "security_id": ["NS"],
+            "date": [pd.bdate_range("2026-09-01", periods=4)[2]],
+            "ratio": [0.5],
+        }
+    )
+
+    cleaned, _ = clean_prices(frame, split_events=events)
+
+    assert cleaned.attrs["splits_adjusted"] == 0
+    assert cleaned["close"].tolist() == pytest.approx([100.0, 101.0, 101.5, 102.0])
+
+
+def test_split_events_are_mapped_from_ticker_to_each_identity_with_that_ticker(tmp_path):
+    from src.crispdm.portfolio import load_split_events
+
+    path = tmp_path / "fmp_splits.csv"
+    path.write_text(
+        "ticker,date,numerator,denominator,split_type\n"
+        "WHLR,2026-09-22,1,9,stock-split\n"
+        "AAPL,2020-08-31,4,1,stock-split\n"
+        "ZZZ,2020-01-01,,,stock-split\n",
+        encoding="utf-8",
+    )
+
+    def fake_query(sql, params):
+        return pd.DataFrame(
+            {"security_id": ["id-1", "id-2", "id-3"], "ticker": ["WHLR", "WHLR", "AAPL"]}
+        )
+
+    events = load_split_events(path=path, query=fake_query)
+
+    assert sorted(events["security_id"]) == ["id-1", "id-2", "id-3"]
+    whlr = events[events["security_id"].isin(["id-1", "id-2"])]
+    assert whlr["ratio"].tolist() == pytest.approx([9.0, 9.0])
+    aapl = events[events["security_id"] == "id-3"]
+    assert aapl["ratio"].tolist() == pytest.approx([0.25])
+
+
+def test_no_split_artifact_yields_an_empty_event_frame(tmp_path):
+    from src.crispdm.portfolio import load_split_events
+
+    events = load_split_events(
+        path=tmp_path / "missing.csv", query=lambda sql, params: pd.DataFrame()
+    )
+
+    assert events.empty
+    assert list(events.columns) == ["security_id", "date", "ratio"]
+
+
+def test_a_series_with_no_usable_print_is_blanked_rather_than_kept_at_absurd_values():
+    # The WHLR pattern in August 2024: every close is in the tens of millions.
+    frame = _series("X", [7.5e7, 6.4e7, 5.7e7], volumes=[0, 0, 0])
+
+    cleaned, rejected = clean_prices(frame)
+
+    assert rejected == 3
+    assert cleaned["close"].isna().all()
+
+
+def test_the_universe_query_also_bounds_the_formation_price_from_above():
+    captured = {}
+    columns = [
+        "security_id",
+        "dividend_income_score",
+        "sustainability_score",
+        "appreciation_score",
+        "risk_score",
+        "valuation_score",
+        "composite_score",
+        "score_coverage",
+    ]
+
+    def fake_query(sql, params):
+        captured["sql"] = sql
+        captured["params"] = params
+        return pd.DataFrame(columns=columns)
+
+    load_universe(pd.Timestamp("2026-10-23"), query=fake_query)
+
+    assert "px.close <= :max_price" in captured["sql"]
+    assert captured["params"]["max_price"] == pytest.approx(1e6)
