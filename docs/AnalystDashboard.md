@@ -128,9 +128,11 @@ Run: `python -m scripts.backtest` (about four minutes). It writes the daily seri
 the per-period table and the metrics to `artifacts/backtests/` (gitignored). The
 Performance tab shows the newest complete run.
 
-**Price filter (`stale_and_reversal_v1`).** Applied per security to every holding
+**Price filter (`stale_reversal_absurd_v2`).** Applied per security to every holding
 period before returns are computed (`src/crispdm/portfolio.py`, `clean_prices`):
 
+- a close above 1e6 or below 1e-4 is a unit or feed error and is rejected
+  (1,924 such daily moves of 40% or more in the warehouse);
 - a print with zero volume is stale and is rejected;
 - a close more than 50% away from the last accepted close is a spike; it is
   rejected if a later accepted print, within 5 sessions, returns to within 20% of
@@ -142,7 +144,14 @@ period before returns are computed (`src/crispdm/portfolio.py`, `clean_prices`):
 - prices are read 14 calendar days past each period end, so a spike near the end
   can be confirmed. Returns are taken only up to the period end.
 
-Effect. The filter rejected 202,664 prints over the run. On the short side it
+Corporate actions were examined and are not handled. The warehouse has no
+historical split source: `clean.corporate_action` covers September to November
+2026 only, and the one 2026 reverse split it records (ITOC 1:16) shows no
+price jump in the warehouse. Volume-and-price split signatures are ambiguous:
+a real crash can match a forward split (PNYG, 2024-11-21), so they are not
+used to adjust prices.
+
+Effect. The filter rejected 202,763 prints over the run. On the short side it
 removed the bad prints that had produced the largest losses (PNYG alone added
 about +0.48 of cumulative contribution across two periods). Longs changed by
 about +0.01.
@@ -153,7 +162,8 @@ Results, 2019-01-31 to 2026-10-23, 93 rebalances, costs excluded:
 |---|---|---|---|---|
 | Before V0092, unfiltered | -55.4% | -0.63 | -76.9% | -0.92 |
 | After V0092, unfiltered | +175.6% | 0.45 | -72.2% | -0.00 |
-| After V0092, price filter | +859.1% | 1.06 | -58.6% | 0.52 |
+| After V0092, price filter v1 | +859.1% | 1.06 | -58.6% | 0.52 |
+| After V0092, price filter v2 (adds absurd-price rule) | +732.9% | 0.96 | -58.2% | 0.47 |
 
 The equal-weight universe returns +184% over the same window. The filtered figures
 are not a finding about the score, for three reasons. Corporate actions are not

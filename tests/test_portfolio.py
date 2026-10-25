@@ -479,3 +479,22 @@ def test_each_security_is_cleaned_on_its_own_series():
     assert rejected == 1
     b = cleaned[cleaned["security_id"] == "B"]["close"].tolist()
     assert b == pytest.approx([2.0, 2.1])
+
+
+def test_an_absurd_close_is_replaced_by_the_last_accepted_close():
+    # The WHLR pattern: a close in the hundreds of billions between ordinary prints.
+    frame = _series("W", [2.0, 2.1, 4.3e11, 2.05, 2.1])
+
+    cleaned, rejected = clean_prices(frame)
+
+    assert rejected == 1
+    assert cleaned["close"].tolist() == pytest.approx([2.0, 2.1, 2.1, 2.05, 2.1])
+
+
+def test_a_sub_penny_close_inside_the_range_is_kept():
+    frame = _series("S", [0.0005, 0.00052, 0.00051])
+
+    cleaned, rejected = clean_prices(frame)
+
+    assert rejected == 0
+    assert cleaned["close"].tolist() == pytest.approx([0.0005, 0.00052, 0.00051])

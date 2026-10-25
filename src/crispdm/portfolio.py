@@ -627,6 +627,11 @@ STALE_PRINT_VOLUME = 0.0
 SPIKE_THRESHOLD = 0.50
 REVERSION_SESSIONS = 5
 REVERSION_BAND = 0.20
+# A close outside this range is a unit or feed error, not a price. Measured
+# on 2026-10-24: 1,924 daily moves of 40% or more had a close above 1e6 or
+# below 1e-4 (WHLR alone printed closes in the hundreds of billions).
+ABSURD_PRICE_HIGH = 1e6
+ABSURD_PRICE_LOW = 1e-4
 
 
 def clean_prices(prices: pd.DataFrame) -> tuple[pd.DataFrame, int]:
@@ -650,8 +655,10 @@ def clean_prices(prices: pd.DataFrame) -> tuple[pd.DataFrame, int]:
         close = group["close"].to_numpy(dtype=float).copy()
         volume = group["volume"].to_numpy(dtype=float)
         stale = volume == STALE_PRINT_VOLUME
-        rejected = stale.copy()
-        good = np.flatnonzero(~stale)
+        absurd = (close > ABSURD_PRICE_HIGH) | (close < ABSURD_PRICE_LOW)
+        unusable = stale | absurd
+        rejected = unusable.copy()
+        good = np.flatnonzero(~unusable)
         base = None
         for position, index in enumerate(good):
             value = close[index]

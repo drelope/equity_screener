@@ -22,7 +22,7 @@ from src.crispdm.db import read_df
 
 PERIODS_PER_YEAR = 12
 #: Names the rules in src/crispdm/portfolio.py (clean_prices). Recorded per run.
-PRICE_FILTER = "stale_and_reversal_v1"
+PRICE_FILTER = "stale_reversal_absurd_v2"
 #: Calendar days of prices read past each period end to confirm a reversal.
 CLEANING_LOOKAHEAD = pd.Timedelta(days=14)
 
