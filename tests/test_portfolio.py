@@ -10,6 +10,7 @@ from src.crispdm.portfolio import (
     BASE_NAV,
     MIN_PRICE,
     clean_prices,
+    exclude_unreliable,
     factor_exposures,
     holdings_table,
     load_risk_free,
@@ -605,3 +606,43 @@ def test_the_universe_query_also_bounds_the_formation_price_from_above():
 
     assert "px.close <= :max_price" in captured["sql"]
     assert captured["params"]["max_price"] == pytest.approx(1e6)
+
+
+def test_a_security_with_too_many_rejected_prints_is_flagged_unreliable():
+    # Three of ten prints are stale (30%), above the 20% threshold.
+    noisy = _series(
+        "N",
+        [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0],
+        volumes=[1000, 0, 1000, 0, 1000, 0, 1000, 1000, 1000, 1000],
+    )
+    clean = _series("C", [2.0] * 10, volumes=[1000] * 10)
+    cleaned, _ = clean_prices(pd.concat([noisy, clean], ignore_index=True))
+
+    assert cleaned.attrs["unreliable_ids"] == ["N"]
+
+
+def test_a_security_with_a_few_rejected_prints_is_kept():
+    # One of ten prints (10%) is stale: below the threshold.
+    frame = _series("K", [1.0] * 10, volumes=[1000, 0] + [1000] * 8)
+
+    cleaned, _ = clean_prices(frame)
+
+    assert cleaned.attrs["unreliable_ids"] == []
+
+
+def test_a_blanked_series_is_flagged_unreliable():
+    frame = _series("X", [7.5e7, 6.4e7, 5.7e7], volumes=[0, 0, 0])
+
+    cleaned, _ = clean_prices(frame)
+
+    assert cleaned.attrs["unreliable_ids"] == ["X"]
+
+
+def test_exclude_unreliable_drops_only_the_flagged_securities():
+    frame = _series("X", [7.5e7, 6.4e7, 5.7e7], volumes=[0, 0, 0])
+    cleaned, _ = clean_prices(frame)
+    universe = pd.DataFrame({"security_id": ["X", "Y"], "composite_score": [0.9, 0.1]})
+
+    kept = exclude_unreliable(universe, cleaned)
+
+    assert kept["security_id"].tolist() == ["Y"]

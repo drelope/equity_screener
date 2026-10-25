@@ -22,7 +22,7 @@ from src.crispdm.db import read_df
 
 PERIODS_PER_YEAR = 12
 #: Names the rules in src/crispdm/portfolio.py (clean_prices). Recorded per run.
-PRICE_FILTER = "stale_reversal_absurd_split_v4"
+PRICE_FILTER = "stale_reversal_absurd_split_unreliable_v5"
 #: Calendar days of prices read past each period end to confirm a reversal.
 CLEANING_LOOKAHEAD = pd.Timedelta(days=14)
 
@@ -75,10 +75,24 @@ def run_walk_forward(
     period_rows: list[dict] = []
     rejected_prints = 0
     splits_applied = 0
+    unreliable_excluded: set[str] = set()
     previous = pd.Series(dtype=float)
 
     for start, end in zip(dates[:-1], dates[1:]):
-        universe = universe_for(start)
+        scored = universe_for(start)
+        # Prices run past the period end so a spike near the end can be confirmed or
+        # rejected. Returns are still taken only up to the end (see the window below).
+        # The whole scored universe is cleaned first, so a name with an unreliable
+        # history is removed before the book is chosen, not after.
+        ids = sorted(set(scored["security_id"].astype(str)))
+        prices, rejected = pf.clean_prices(
+            prices_for(ids, start, end + CLEANING_LOOKAHEAD),
+            split_events=split_events,
+        )
+        rejected_prints += rejected
+        splits_applied += prices.attrs.get("splits_adjusted", 0)
+        unreliable_excluded.update(prices.attrs.get("unreliable_ids", []))
+        universe = pf.exclude_unreliable(scored, prices)
         try:
             book = pf.select_portfolio(
                 universe,
@@ -87,22 +101,13 @@ def run_walk_forward(
                 base_nav=base_nav,
             )
         except ValueError as err:
-            # Too few scored names: the book stays in cash for the period.
+            # Too few reliable scored names: the book stays in cash for the period.
             period_rows.append(_period_row(start, end, status=f"cash: {err}"))
             daily_parts.append(_cash_period(start, end))
             previous = pd.Series(dtype=float)
             continue
 
         weights = book.set_index("security_id")["weight"].astype(float)
-        ids = sorted(set(weights.index) | set(universe["security_id"].astype(str)))
-        # Prices run past the period end so a spike near the end can be confirmed or
-        # rejected. Returns are still taken only up to the end (see the window below).
-        prices, rejected = pf.clean_prices(
-            prices_for(ids, start, end + CLEANING_LOOKAHEAD),
-            split_events=split_events,
-        )
-        rejected_prints += rejected
-        splits_applied += prices.attrs.get("splits_adjusted", 0)
         returns = pf.total_return_matrix(prices) if not prices.empty else pd.DataFrame()
         window = (
             returns.loc[(returns.index > start) & (returns.index <= end)]
@@ -164,6 +169,7 @@ def run_walk_forward(
     metrics["price_filter"] = PRICE_FILTER
     metrics["rejected_prints"] = int(rejected_prints)
     metrics["splits_adjusted"] = int(splits_applied)
+    metrics["unreliable_securities_excluded"] = len(unreliable_excluded)
     metrics["periods"] = int(len(periods))
     metrics["held_periods"] = int(len(held_periods))
     metrics["cash_periods"] = int(len(periods) - len(held_periods))

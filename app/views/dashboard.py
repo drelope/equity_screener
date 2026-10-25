@@ -70,24 +70,27 @@ def _load_context() -> dict | None:
         return None
     formed = pf.rebalance_date(dates)
     latest = pd.Timestamp(dates[-1])
-    universe = pf.load_universe(formed, query=ui.query)
+    scored = pf.load_universe(formed, query=ui.query)
+    if scored.empty:
+        return None
+    split_events = pf.load_split_events(query=ui.query)
+    # One cleaned pass over the scored universe. Names with unreliable histories are
+    # removed before the book is chosen, the same rule the backtest applies.
+    cleaned, _ = pf.clean_prices(
+        pf.load_prices(scored["security_id"], formed, latest, query=ui.query),
+        split_events=split_events,
+    )
+    universe = pf.exclude_unreliable(scored, cleaned)
     if universe.empty:
         return None
     book = pf.select_portfolio(universe)
-    split_events = pf.load_split_events(query=ui.query)
-    prices, _ = pf.clean_prices(
-        pf.load_prices(book["security_id"], formed, latest, query=ui.query),
-        split_events=split_events,
-    )
+    prices = cleaned[cleaned["security_id"].isin(book["security_id"].astype(str))]
     returns = pf.total_return_matrix(prices)
     path = pf.portfolio_returns(returns, book)
     if path.empty:
         return None
     benchmark = None
-    benchmark_prices, _ = pf.clean_prices(
-        pf.load_prices(universe["security_id"], formed, latest, query=ui.query),
-        split_events=split_events,
-    )
+    benchmark_prices = cleaned[cleaned["security_id"].isin(universe["security_id"].astype(str))]
     if not benchmark_prices.empty:
         benchmark = pf.total_return_matrix(benchmark_prices).mean(axis=1, skipna=True)
     risk_free = pf.load_risk_free(path.index, query=ui.query)

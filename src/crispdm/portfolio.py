@@ -641,6 +641,10 @@ ABSURD_PRICE_HIGH = 1e6
 #: fraction of the reported ratio, and the move falls within this many days of the event.
 SPLIT_TOLERANCE = 0.10
 SPLIT_EVENT_WINDOW_DAYS = 5
+#: A security whose prints are rejected more than this share of the time, within
+#: the cleaned window, is not a usable price history. It is excluded from selection
+#: for that period rather than kept with a cleaned series (judgment call: 20%).
+UNRELIABLE_REJECT_SHARE = 0.20
 ABSURD_PRICE_LOW = 1e-4
 
 
@@ -664,7 +668,9 @@ def clean_prices(
     no later print to confirm them.
     """
     if prices.empty:
-        return prices, 0
+        empty = prices.copy()
+        empty.attrs["unreliable_ids"] = []
+        return empty, 0
     frame = prices.copy()
     if "volume" not in frame:
         frame["volume"] = np.nan
@@ -675,6 +681,7 @@ def clean_prices(
             events[str(sid)] = list(zip(pd.to_datetime(event_frame["date"]), event_frame["ratio"]))
     rejected_total = 0
     splits_adjusted = 0
+    unreliable: set[str] = set()
     cleaned_parts = []
     for sid, group in frame.groupby("security_id", sort=False):
         close = group["close"].to_numpy(dtype=float).copy()
@@ -715,11 +722,13 @@ def clean_prices(
             # closes drops the rows, so the name earns nothing rather than noise.
             close[:] = np.nan
             rejected_total += len(close)
+            unreliable.add(str(sid))
             cleaned = group.copy()
             cleaned["close"] = close
             cleaned_parts.append(cleaned)
             continue
         last_accepted = close[good[0]]
+        group_rejected = int(rejected.sum())
         for index in range(len(close)):
             if rejected[index]:
                 if last_accepted is not None:
@@ -727,12 +736,23 @@ def clean_prices(
                 rejected_total += 1
             else:
                 last_accepted = close[index]
+        if len(close) and group_rejected / len(close) > UNRELIABLE_REJECT_SHARE:
+            unreliable.add(str(sid))
         cleaned = group.copy()
         cleaned["close"] = close
         cleaned_parts.append(cleaned)
     result = pd.concat(cleaned_parts, ignore_index=True)
     result.attrs["splits_adjusted"] = splits_adjusted
+    result.attrs["unreliable_ids"] = sorted(unreliable)
     return result, rejected_total
+
+
+def exclude_unreliable(universe: pd.DataFrame, cleaned: pd.DataFrame) -> pd.DataFrame:
+    """Drop securities whose cleaned price history is flagged unreliable."""
+    flagged = set(cleaned.attrs.get("unreliable_ids", []))
+    if not flagged:
+        return universe
+    return universe[~universe["security_id"].astype(str).isin(flagged)].reset_index(drop=True)
 
 
 def _event_index(dates: pd.DatetimeIndex, event_date: pd.Timestamp) -> int | None:

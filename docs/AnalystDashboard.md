@@ -128,7 +128,7 @@ Run: `python -m scripts.backtest` (about four minutes). It writes the daily seri
 the per-period table and the metrics to `artifacts/backtests/` (gitignored). The
 Performance tab shows the newest complete run.
 
-**Price filter (`stale_reversal_absurd_split_v4`).** Applied per security to every
+**Price filter (`stale_reversal_absurd_split_unreliable_v5`).** Applied per security to every
 holding period before returns are computed (`src/crispdm/portfolio.py`, `clean_prices`):
 
 - a close above 1e6 or below 1e-4 is a unit or feed error and is rejected
@@ -146,6 +146,12 @@ holding period before returns are computed (`src/crispdm/portfolio.py`, `clean_p
   can be confirmed. Returns are taken only up to the period end;
 - the universe requires a formation close between 1e-4 and 1e6, so an absurd
   print cannot enter the book at formation.
+- **Unreliable histories are excluded.** A security whose cleaned window rejects
+  more than 20% of its prints (`UNRELIABLE_REJECT_SHARE`, a judgment call), or
+  whose window has no usable print, is removed from the scored universe for that
+  period. It is not kept with a cleaned series. The backtest records how many
+  securities were excluded (241 over the run). The dashboard applies the same
+  rule to its current book and benchmark.
 
 **Splits.** Split history comes from FMP (`/stable/splits`), fetched by
 `scripts/fetch_fmp_splits.py` into `artifacts/corporate_actions/fmp_splits.csv`
@@ -180,9 +186,10 @@ Results, 2019-01-31 to 2026-10-23, 93 rebalances, costs excluded:
 | After V0092, price filter v2 (adds absurd-price rule) | +732.9% | 0.96 | -58.2% | 0.47 |
 | After V0092, filter v3 (adds FMP split confirmation) | +754.4% | 0.97 | -57.1% | 0.48 |
 | After V0092, filter v4 (adds usable-print and formation-bound rules) | +658.2% | 0.95 | -57.7% | 0.43 |
+| After V0092, filter v5 (excludes unreliable histories) | +497.6% | 0.84 | -59.2% | 0.36 |
 
-The equal-weight universe returns +185% over the same window. The filtered figures
-are still not a finding about the score, for three reasons. Some histories are
+The equal-weight universe (reliable names only) returns +69% over the same window.
+The filtered figures are still not a finding about the score, for three reasons. Some histories are
 unusable even after the checks (WHLR), and the survivor-only history remains. Short
 squeezes are real and kept (AMC, January 2021, +301% in one session), so their
 short-side losses are not limited by the construction. The largest remaining
