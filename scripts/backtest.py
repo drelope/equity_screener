@@ -21,8 +21,6 @@ OUTPUT_DIR = Path(__file__).resolve().parents[1] / "artifacts" / "backtests"
 
 def main() -> int:
     result = run_from_warehouse()
-    # No stale-print filter is applied yet. The dashboard warns on "none".
-    result.metrics["price_filter"] = "none"
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     stamp = pd.Timestamp.now().strftime("%Y%m%d_%H%M%S")
     daily_path = OUTPUT_DIR / f"daily_{stamp}.csv"

@@ -131,6 +131,7 @@ div_on_row AS (
 SELECT m.security_id::text AS security_id,
        m.observation_date,
        m.close::float8 AS close,
+       m.volume::float8 AS volume,
        COALESCE(dv.amount, 0)::float8 AS dividend
 FROM raw.market_data m
 LEFT JOIN div_on_row dv
@@ -613,6 +614,73 @@ def load_risk_free(index, query=read_df) -> pd.Series:
         return pd.Series(np.nan, index=dates)
     carried = yields.reindex(yields.index.union(dates)).ffill().bfill().reindex(dates)
     return (1.0 + carried) ** (1.0 / TRADING_DAYS) - 1.0
+
+
+# Price-quality rules, applied per security to the prices inside a holding period.
+#
+# A print is rejected when it is stale (zero volume: no trade supports the close)
+# or when it spikes away from the last accepted close and reverts within a few
+# sessions (a bad tick). A move that persists is kept, because it may be a real
+# event, such as a takeover. A rejected print is replaced by the last accepted
+# close, so its return is zero and any dividend on that day is kept.
+STALE_PRINT_VOLUME = 0.0
+SPIKE_THRESHOLD = 0.50
+REVERSION_SESSIONS = 5
+REVERSION_BAND = 0.20
+
+
+def clean_prices(prices: pd.DataFrame) -> tuple[pd.DataFrame, int]:
+    """Replace stale and spike-and-revert closes with the last accepted close.
+
+    Returns the cleaned frame and the number of rejected prints. A missing volume
+    is treated as unknown, not as zero, so only an explicit zero rejects a print.
+    The reversal test looks at later prints, so it uses the full holding window.
+    Persistent moves are kept, and so are moves at the end of the window that have
+    no later print to confirm them.
+    """
+    if prices.empty:
+        return prices, 0
+    frame = prices.copy()
+    if "volume" not in frame:
+        frame["volume"] = np.nan
+    frame = frame.sort_values(["security_id", "observation_date"]).reset_index(drop=True)
+    rejected_total = 0
+    cleaned_parts = []
+    for _, group in frame.groupby("security_id", sort=False):
+        close = group["close"].to_numpy(dtype=float).copy()
+        volume = group["volume"].to_numpy(dtype=float)
+        stale = volume == STALE_PRINT_VOLUME
+        rejected = stale.copy()
+        good = np.flatnonzero(~stale)
+        base = None
+        for position, index in enumerate(good):
+            value = close[index]
+            if base is None:
+                base = value
+                continue
+            if abs(value / base - 1.0) <= SPIKE_THRESHOLD:
+                base = value
+                continue
+            later = good[position + 1 : position + 1 + REVERSION_SESSIONS]
+            reverts = any(abs(close[j] / base - 1.0) <= REVERSION_BAND for j in later)
+            if reverts:
+                rejected[index] = True
+            else:
+                base = value
+        # Replace each rejected print with the last accepted close before it. Leading
+        # rejected prints take the first accepted close.
+        last_accepted = close[good[0]] if len(good) else None
+        for index in range(len(close)):
+            if rejected[index]:
+                if last_accepted is not None:
+                    close[index] = last_accepted
+                rejected_total += 1
+            else:
+                last_accepted = close[index]
+        cleaned = group.copy()
+        cleaned["close"] = close
+        cleaned_parts.append(cleaned)
+    return pd.concat(cleaned_parts, ignore_index=True), rejected_total
 
 
 def load_prices(

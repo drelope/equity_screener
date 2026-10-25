@@ -21,6 +21,10 @@ from src.crispdm import portfolio as pf
 from src.crispdm.db import read_df
 
 PERIODS_PER_YEAR = 12
+#: Names the rules in src/crispdm/portfolio.py (clean_prices). Recorded per run.
+PRICE_FILTER = "stale_and_reversal_v1"
+#: Calendar days of prices read past each period end to confirm a reversal.
+CLEANING_LOOKAHEAD = pd.Timedelta(days=14)
 
 
 @dataclass(frozen=True)
@@ -68,6 +72,7 @@ def run_walk_forward(
 
     daily_parts: list[pd.DataFrame] = []
     period_rows: list[dict] = []
+    rejected_prints = 0
     previous = pd.Series(dtype=float)
 
     for start, end in zip(dates[:-1], dates[1:]):
@@ -88,7 +93,10 @@ def run_walk_forward(
 
         weights = book.set_index("security_id")["weight"].astype(float)
         ids = sorted(set(weights.index) | set(universe["security_id"].astype(str)))
-        prices = prices_for(ids, start, end)
+        # Prices run past the period end so a spike near the end can be confirmed or
+        # rejected. Returns are still taken only up to the end (see the window below).
+        prices, rejected = pf.clean_prices(prices_for(ids, start, end + CLEANING_LOOKAHEAD))
+        rejected_prints += rejected
         returns = pf.total_return_matrix(prices) if not prices.empty else pd.DataFrame()
         window = (
             returns.loc[(returns.index > start) & (returns.index <= end)]
@@ -147,6 +155,8 @@ def run_walk_forward(
     rf = risk_free_for(daily.index) if risk_free_for is not None else None
     metrics = pf.performance_metrics(daily["return"], daily["benchmark"], risk_free=rf)
     held_periods = periods[periods["status"] == "held"]
+    metrics["price_filter"] = PRICE_FILTER
+    metrics["rejected_prints"] = int(rejected_prints)
     metrics["periods"] = int(len(periods))
     metrics["held_periods"] = int(len(held_periods))
     metrics["cash_periods"] = int(len(periods) - len(held_periods))

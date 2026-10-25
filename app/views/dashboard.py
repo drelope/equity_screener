@@ -74,13 +74,15 @@ def _load_context() -> dict | None:
     if universe.empty:
         return None
     book = pf.select_portfolio(universe)
-    prices = pf.load_prices(book["security_id"], formed, latest, query=ui.query)
+    prices, _ = pf.clean_prices(pf.load_prices(book["security_id"], formed, latest, query=ui.query))
     returns = pf.total_return_matrix(prices)
     path = pf.portfolio_returns(returns, book)
     if path.empty:
         return None
     benchmark = None
-    benchmark_prices = pf.load_prices(universe["security_id"], formed, latest, query=ui.query)
+    benchmark_prices, _ = pf.clean_prices(
+        pf.load_prices(universe["security_id"], formed, latest, query=ui.query)
+    )
     if not benchmark_prices.empty:
         benchmark = pf.total_return_matrix(benchmark_prices).mean(axis=1, skipna=True)
     risk_free = pf.load_risk_free(path.index, query=ui.query)
@@ -267,13 +269,12 @@ def _backtest_section() -> None:
         periods = run["periods"]
         held = int(metrics.get("held_periods", 0))
         cash = int(metrics.get("cash_periods", 0))
-        if metrics.get("price_filter", "none") == "none":
-            st.warning(
-                "Under review: this run uses unfiltered warehouse prices. Stale prints "
-                "(for example, near-zero-volume closes that jump and revert) and "
-                "survivor-only history are not corrected, so the figures below are not "
-                "evidence about the score."
-            )
+        st.warning(
+            "Under review. The price filter removes stale prints and spike reversals, "
+            "but corporate actions (splits) are not adjusted, the history is survivor-only, "
+            "and short-squeeze risk is not limited. The figures below are not evidence "
+            "about the score."
+        )
         st.caption(
             f"Run {run['stamp']}: {held} monthly rebalances held, {cash} in cash, "
             f"{daily.index.min():%Y-%m-%d} to {daily.index.max():%Y-%m-%d}. "

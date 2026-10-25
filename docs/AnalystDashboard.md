@@ -128,22 +128,40 @@ Run: `python -m scripts.backtest` (about four minutes). It writes the daily seri
 the per-period table and the metrics to `artifacts/backtests/` (gitignored). The
 Performance tab shows the newest complete run.
 
-**Under review.** Two results exist for 2019-01-31 to 2026-10-23, and neither is
-reliable yet:
+**Price filter (`stale_and_reversal_v1`).** Applied per security to every holding
+period before returns are computed (`src/crispdm/portfolio.py`, `clean_prices`):
 
-- Before V0092 (narrower universe, 1,760 scored names in 2019): cumulative
-  -55.4%, Sharpe -0.63, information ratio -0.92 against the universe.
-- After V0092 (historical identities now priced): cumulative +175.6%, Sharpe
-  0.45, maximum drawdown -72.2%, information ratio -0.00. The equal-weight
-  universe itself returns +290% over the same window.
+- a print with zero volume is stale and is rejected;
+- a close more than 50% away from the last accepted close is a spike; it is
+  rejected if a later accepted print, within 5 sessions, returns to within 20% of
+  the last accepted close;
+- a rejected print is replaced by the last accepted close, so its return is zero
+  and any dividend on that day is kept;
+- a move that persists is kept, because it may be a real event;
+- a missing volume is unknown, not zero, and is never rejected for volume;
+- prices are read 14 calendar days past each period end, so a spike near the end
+  can be confirmed. Returns are taken only up to the period end.
 
-The reversal comes from the universe composition and from bad prints, not from a
-change in the score. Do not report either figure as a conclusion about the score.
-Costs are excluded throughout, so net results would be lower.
+Effect. The filter rejected 202,664 prints over the run. On the short side it
+removed the bad prints that had produced the largest losses (PNYG alone added
+about +0.48 of cumulative contribution across two periods). Longs changed by
+about +0.01.
 
-**Data-quality finding.** Before the $1 floor, the backtest's worst day was -57%.
-That came from corrupt closes on sub-$1 names, which the composite ranks highly.
-The floor removed those days; the worst remaining day is -14.4%.
+Results, 2019-01-31 to 2026-10-23, 93 rebalances, costs excluded:
+
+| Run | Cumulative | Sharpe | Max drawdown | Information ratio |
+|---|---|---|---|---|
+| Before V0092, unfiltered | -55.4% | -0.63 | -76.9% | -0.92 |
+| After V0092, unfiltered | +175.6% | 0.45 | -72.2% | -0.00 |
+| After V0092, price filter | +859.1% | 1.06 | -58.6% | 0.52 |
+
+The equal-weight universe returns +184% over the same window. The filtered figures
+are not a finding about the score, for three reasons. Corporate actions are not
+adjusted: the largest surviving moves include candidate splits (for example WHLR,
+CRTD and CISS), which the spike rule keeps because they never revert. Short
+squeezes are real and kept (AMC, January 2021, +301% in one session), but their
+short-side losses are not limited by the construction. The history is
+survivor-only.
 
 **Event risk.** That -14.4% day came from one short, ADAMG, whose price moved from
 8.72 to 25.33 and stayed there, on normal volume. The pattern fits a corporate

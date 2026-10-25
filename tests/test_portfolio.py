@@ -9,6 +9,7 @@ import pytest
 from src.crispdm.portfolio import (
     BASE_NAV,
     MIN_PRICE,
+    clean_prices,
     factor_exposures,
     holdings_table,
     load_risk_free,
@@ -406,3 +407,75 @@ def test_universe_query_restricts_the_book_to_common_stock():
     assert "sec.security_type = 'common_stock'" in captured["sql"]
     assert "px.close >= :min_price" in captured["sql"]
     assert captured["params"]["min_price"] == MIN_PRICE
+
+
+def _series(security_id, closes, volumes=None):
+    dates = pd.bdate_range("2026-09-01", periods=len(closes))
+    frame = pd.DataFrame(
+        {
+            "security_id": security_id,
+            "observation_date": dates,
+            "close": closes,
+            "volume": volumes if volumes is not None else [1000.0] * len(closes),
+        }
+    )
+    return frame
+
+
+def test_a_zero_volume_print_is_replaced_by_the_last_accepted_close():
+    frame = _series("A", [1.0, 1.02, 1.5, 1.03], volumes=[1000, 1000, 0, 1000])
+
+    cleaned, rejected = clean_prices(frame)
+
+    assert rejected == 1
+    assert cleaned["close"].tolist() == pytest.approx([1.0, 1.02, 1.02, 1.03])
+
+
+def test_a_spike_that_reverts_within_the_window_is_rejected():
+    # The PNYG pattern: a 0.90 close, a jump to 4.99 on low volume, then a return.
+    frame = _series("P", [0.90, 4.99, 0.80, 0.65], volumes=[5000, 820, 30000, 7000])
+
+    cleaned, rejected = clean_prices(frame)
+
+    assert rejected == 1
+    assert cleaned["close"].iloc[1] == pytest.approx(0.90)
+    assert cleaned["close"].iloc[2] == pytest.approx(0.80)
+
+
+def test_a_persistent_jump_is_kept_because_it_may_be_a_real_event():
+    # The ADAMG pattern: the level holds after the jump, so nothing reverts.
+    frame = _series("E", [8.7, 25.3, 25.2, 25.4, 25.1, 25.3, 25.2])
+
+    cleaned, rejected = clean_prices(frame)
+
+    assert rejected == 0
+    assert cleaned["close"].tolist() == pytest.approx(frame["close"].tolist())
+
+
+def test_a_move_inside_the_spike_threshold_is_kept():
+    frame = _series("N", [10.0, 14.0, 9.0, 12.0], volumes=[1000, 1000, 1000, 1000])
+
+    cleaned, rejected = clean_prices(frame)
+
+    assert rejected == 0
+    assert cleaned["close"].tolist() == pytest.approx([10.0, 14.0, 9.0, 12.0])
+
+
+def test_an_unknown_volume_is_not_treated_as_zero():
+    frame = _series("U", [1.0, 1.02, 1.05], volumes=[float("nan"), float("nan"), float("nan")])
+
+    cleaned, rejected = clean_prices(frame)
+
+    assert rejected == 0
+    assert cleaned["close"].tolist() == pytest.approx([1.0, 1.02, 1.05])
+
+
+def test_each_security_is_cleaned_on_its_own_series():
+    stale = _series("A", [1.0, 1.5], volumes=[1000, 0])
+    clean = _series("B", [2.0, 2.1], volumes=[1000, 1000])
+
+    cleaned, rejected = clean_prices(pd.concat([stale, clean], ignore_index=True))
+
+    assert rejected == 1
+    b = cleaned[cleaned["security_id"] == "B"]["close"].tolist()
+    assert b == pytest.approx([2.0, 2.1])
