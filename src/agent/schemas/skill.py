@@ -6,6 +6,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 SKILL_NAME = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
+TOOL_NAME = re.compile(r"^[a-z][a-z0-9_.-]*$")
 MODULE = re.compile(r"^scripts\.[a-z][a-z0-9_]*$")
 
 
@@ -35,8 +36,21 @@ class SkillFrontmatter(BaseModel):
         for t in v:
             if not isinstance(t, str) or not t.strip():
                 raise ValueError("tools must be non-empty strings")
-            out.append(t.strip())
+            name = t.strip()
+            if not TOOL_NAME.match(name):
+                raise ValueError(f"invalid tool name {name!r}")
+            out.append(name)
         return out
+
+
+class ToolPlan(BaseModel):
+    model_config = ConfigDict(extra="forbid", validate_assignment=True)
+
+    name: str
+    description: str
+    risk: Literal["read", "write", "heavy"]
+    requires_confirmation: bool = False
+    side_effects: bool = False
 
 
 class RunPlan(BaseModel):
@@ -51,6 +65,7 @@ class RunPlan(BaseModel):
     skill_file: str
     entrypoints: list[list[str]]
     verifiers: list[list[str]]
+    tools: list[ToolPlan] = Field(default_factory=list)
 
 
 class PreflightCheck(BaseModel):

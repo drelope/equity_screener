@@ -5,6 +5,7 @@ version: 1
 risk: read
 owner: security
 entrypoint: none  # none|fixed|list
+tools: [files.read]  # read-only, secret-safe repository inspection
 tags: []
 ---
 
@@ -118,8 +119,8 @@ Pass when:
 
 ## Runner
 
-- **Mode:** Follow this skill's procedure. The deterministic runner only executes allowlisted fixed entrypoints; most work here is manual unless stated otherwise.
-- **Confirmation:** Skills with `risk: write` or `risk: heavy` require `--yes` when executed via the runner. Never parse commands from Markdown.
+- **Mode:** Manual. The runner has no fixed entrypoint for this skill, but it resolves `files.read` (read-only, secret-safe) because this skill declares it.
+- **Confirmation:** `risk: read`, so no `--yes` is required. Never point `files.read` at `.env` or the OpenBB credentials file; it refuses those paths.
 
 ## Preflight
 

@@ -9,6 +9,7 @@ Usage:
     python -m scripts.agent_runner --skill data-validation --dry-run
     python -m scripts.agent_runner --skill data-validation
     python -m scripts.agent_runner --skill data-refresh-operations --yes
+    python -m scripts.agent_runner --tools-for <name>
     python -m scripts.agent_runner --verify <run-id>
 
 Write and heavy skills require ``--yes``. A skill with no entrypoint can still be
@@ -18,8 +19,8 @@ The runner performs read-only preflight checks (git status, migrate --check when
 DB-touching) and records them in ``preflight.json``. No environment values are
 printed.
 
-Validation uses Pydantic schemas where available (``src.agent``) with fallback
-to the built-in parser for compatibility.
+Contracts are validated with Pydantic schemas (``src.agent``), and each skill
+resolves only the tools it declares (deny by default).
 """
 
 from __future__ import annotations
@@ -34,6 +35,9 @@ import sys
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
+
+from src.agent.core.loader import SkillLoadError, load_skill_validated
+from src.agent.tools import Tool, ToolResolutionError, build_registry, resolve_tools
 
 ROOT = Path(__file__).resolve().parents[1]
 SKILLS_DIR = ROOT / "skills"
@@ -91,62 +95,36 @@ class Skill:
     path: Path
     entrypoint_mode: str | None = None
     owner: str | None = None
+    tools: list[str] | None = None
 
 
 class SkillError(ValueError):
     """The requested skill is missing or violates the SKILL.md contract."""
 
 
-def _frontmatter(text: str, path: Path) -> dict[str, str]:
-    match = re.match(r"^---\n(.*?)\n---\n", text, re.S)
-    if not match:
-        raise SkillError(f"{path}: missing YAML frontmatter")
-    fields: dict[str, str] = {}
-    for line in match.group(1).splitlines():
-        if not line.strip() or line.lstrip().startswith("#"):
-            continue
-        key, separator, value = line.partition(":")
-        if not separator:
-            raise SkillError(f"{path}: malformed frontmatter line {line!r}")
-        raw = value.strip()
-        if raw[:1] in ("'", '"'):
-            raw = raw.strip('"').strip("'")
-        else:
-            raw = raw.split(" #", 1)[0].strip()
-        fields[key.strip()] = raw
-    return fields
-
-
 def load_skill(name: str, skills_dir: Path | None = None) -> Skill:
     """Load and validate one skill. Raise ``SkillError`` on any violation."""
-    if not SKILL_NAME.match(name):
-        raise SkillError(f"invalid skill name {name!r}; use kebab-case")
-    path = (skills_dir or SKILLS_DIR) / name / "SKILL.md"
-    if not path.is_file():
-        raise SkillError(f"unknown skill {name!r}: {path} does not exist")
-
-    text = path.read_text(encoding="utf-8")
-    fields = _frontmatter(text, path)
-    declared = fields.get("name")
-    if declared != name:
-        raise SkillError(f"{path}: frontmatter name {declared!r} does not match {name!r}")
-    risk = fields.get("risk")
-    if risk not in RISKS:
-        raise SkillError(f"{path}: risk must be one of {RISKS}, got {risk!r}")
-    description = fields.get("description", "")
-    if len(description) < 30:
-        raise SkillError(f"{path}: description is missing or too short")
-    missing = [section for section in REQUIRED_SECTIONS if section not in text]
-    if missing:
-        raise SkillError(f"{path}: missing sections: {', '.join(missing)}")
+    try:
+        frontmatter, _text, path = load_skill_validated(name, skills_dir)
+    except SkillLoadError as exc:
+        raise SkillError(str(exc)) from exc
     return Skill(
-        name=name,
-        description=description,
-        risk=risk,
+        name=frontmatter.name,
+        description=frontmatter.description,
+        risk=frontmatter.risk,
         path=path,
-        entrypoint_mode=fields.get("entrypoint"),
-        owner=fields.get("owner"),
+        entrypoint_mode=frontmatter.entrypoint,
+        owner=frontmatter.owner,
+        tools=list(frontmatter.tools),
     )
+
+
+def skill_tools(skill: Skill) -> list[Tool]:
+    """Resolve the skill's declared tools, denying by default."""
+    try:
+        return resolve_tools(build_registry(), skill.name, skill.tools)
+    except ToolResolutionError as exc:
+        raise SkillError(str(exc)) from exc
 
 
 def list_skills(skills_dir: Path | None = None) -> list[Skill]:
@@ -269,7 +247,11 @@ def _preflight(skill: Skill) -> dict:
     return {"skill": skill.name, "risk": skill.risk, "checks": checks}
 
 
-def _plan(skill: Skill, entrypoint: tuple[tuple[str, ...], ...] | None) -> dict:
+def _plan(
+    skill: Skill,
+    entrypoint: tuple[tuple[str, ...], ...] | None,
+    tools: list[Tool],
+) -> dict:
     return {
         "skill": skill.name,
         "description": skill.description,
@@ -279,17 +261,33 @@ def _plan(skill: Skill, entrypoint: tuple[tuple[str, ...], ...] | None) -> dict:
         "skill_file": str(skill.path.relative_to(ROOT)),
         "entrypoints": [list(command) for command in entrypoint or ()],
         "verifiers": [list(command) for command in VERIFIERS.get(skill.name, ())],
+        "tools": [
+            {
+                "name": tool.name,
+                "description": tool.description,
+                "risk": tool.risk,
+                "requires_confirmation": tool.requires_confirmation,
+                "side_effects": tool.side_effects,
+            }
+            for tool in tools
+        ],
     }
 
 
-def _write_summary(path: Path, skill: Skill, results: list[dict], verified: bool) -> None:
+def _write_summary(
+    path: Path,
+    plan: dict,
+    results: list[dict],
+    verified: bool,
+) -> None:
     lines = [
-        f"# Run: {skill.name}",
+        f"# Run: {plan['skill']}",
         "",
-        f"- Risk: `{skill.risk}`",
-        f"- Entrypoint mode: `{skill.entrypoint_mode or 'none'}`",
-        f"- Owner: `{skill.owner or 'unassigned'}`",
-        f"- Skill: `{skill.path.relative_to(ROOT)}`",
+        f"- Risk: `{plan['risk']}`",
+        f"- Entrypoint mode: `{plan['entrypoint_mode'] or 'none'}`",
+        f"- Owner: `{plan['owner'] or 'unassigned'}`",
+        f"- Skill: `{plan['skill_file']}`",
+        f"- Tools: {', '.join(tool['name'] for tool in plan['tools']) or 'none'}",
         f"- Commands: {len(results)}",
         "",
         "| Command | Exit | Result |",
@@ -315,6 +313,7 @@ def run_skill(
 ) -> int:
     """Validate one skill, then plan or execute its fixed entrypoint."""
     skill = load_skill(name, skills_dir)
+    tools = skill_tools(skill)
     entrypoint = ENTRYPOINTS.get(name)
     verifiers = VERIFIERS.get(name)
     if entrypoint and not verifiers:
@@ -326,7 +325,7 @@ def run_skill(
         raise SkillError(f"run id {identifier!r} already exists: {run_dir}")
     run_dir.mkdir(parents=True)
 
-    plan = _plan(skill, entrypoint)
+    plan = _plan(skill, entrypoint, tools)
     plan["run_id"] = identifier
     preflight = _preflight(skill)
     _write_json(run_dir / "plan.json", plan)
@@ -337,6 +336,10 @@ def run_skill(
             print(f"python -m {' '.join(command)}")
         if not entrypoint:
             print(f"No executable entrypoint for {name}; follow {skill.path}.")
+        for tool in tools:
+            print(f"tool: {tool.name} ({tool.risk})")
+        if not tools:
+            print("tools: none declared")
         print(f"plan: {run_dir / 'plan.json'}")
         print(f"preflight: {run_dir / 'preflight.json'}")
         return 0
@@ -377,11 +380,26 @@ def run_skill(
             "verifier": verify_results,
         },
     )
-    _write_summary(run_dir / "summary.md", skill, results + verify_results, verified)
+    _write_summary(run_dir / "summary.md", plan, results + verify_results, verified)
     print(f"run: {identifier}")
     print(f"verification: {'passed' if verified else 'failed'}")
     print(f"artifacts: {run_dir}")
     return 0 if verified else 1
+
+
+def show_tools(name: str, skills_dir: Path | None = None) -> int:
+    skill = load_skill(name, skills_dir)
+    tools = skill_tools(skill)
+    print(f"{skill.name} ({skill.risk})")
+    if not tools:
+        print("tools: none declared")
+        return 0
+    for tool in tools:
+        print(f"- {tool.name} [{tool.risk}] {tool.description}")
+        for field, info in getattr(tool.input_schema, "model_fields", {}).items():
+            required = "required" if info.is_required() else "optional"
+            print(f"    {field}: {info.annotation} ({required})")
+    return 0
 
 
 def show_verification(run_id: str, artifacts_dir: Path | None = None) -> int:
@@ -405,6 +423,7 @@ def main(argv: list[str] | None = None, artifacts_dir: Path | None = None) -> in
     group.add_argument("--list", action="store_true", help="List valid skills")
     group.add_argument("--skill", help="Skill directory name to run")
     group.add_argument("--verify", metavar="RUN_ID", help="Show a run's verification record")
+    group.add_argument("--tools-for", metavar="SKILL", help="List tools available to a skill")
     parser.add_argument("--dry-run", action="store_true", help="Write the plan, run nothing")
     parser.add_argument("--yes", action="store_true", help="Confirm a write or heavy skill")
     parser.add_argument("--run-id", help="Explicit run id (default: UTC timestamp + suffix)")
@@ -418,6 +437,8 @@ def main(argv: list[str] | None = None, artifacts_dir: Path | None = None) -> in
             return 0
         if args.verify:
             return show_verification(args.verify, artifacts_dir)
+        if args.tools_for:
+            return show_tools(args.tools_for)
         return run_skill(
             args.skill,
             dry_run=args.dry_run,

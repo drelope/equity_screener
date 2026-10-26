@@ -25,12 +25,11 @@ REQUIRED_SECTIONS = (
     "## Evidence required",
     "## Source of truth",
 )
-MODULE = re.compile(r"^scripts\.[a-z][a-z0-9_]*$")
 RISKS = ("read", "write", "heavy")
 
 
 class SkillLoadError(ValueError):
-    pass
+    """The skill file is missing or violates the SKILL.md contract."""
 
 
 def _frontmatter_raw(text: str, path: Path) -> dict[str, str]:
@@ -53,30 +52,19 @@ def _frontmatter_raw(text: str, path: Path) -> dict[str, str]:
     return fields
 
 
-def _parse_tools(raw: str | None) -> list[str]:
+def _parse_list(raw: str | None) -> list[str]:
     if not raw:
         return []
     raw = raw.strip()
     if raw.startswith("[") and raw.endswith("]"):
-        inner = raw[1:-1].strip()
-        if not inner:
-            return []
-        parts = []
-        for p in inner.split(","):
-            p = p.strip().strip('"').strip("'")
-            if p:
-                parts.append(p)
-        return parts
-    # comma separated
-    parts = []
-    for p in raw.split(","):
-        p = p.strip().strip('"').strip("'")
-        if p:
-            parts.append(p)
-    return parts
+        raw = raw[1:-1]
+    return [part.strip().strip('"').strip("'") for part in raw.split(",") if part.strip()]
 
 
-def load_skill_validated(name: str, skills_dir: Path | None = None):
+def load_skill_validated(
+    name: str, skills_dir: Path | None = None
+) -> tuple[SkillFrontmatter, str, Path]:
+    """Parse and validate a skill, raising ``SkillLoadError`` on any violation."""
     if not SKILL_NAME.match(name):
         raise SkillLoadError(f"invalid skill name {name!r}; use kebab-case")
     path = (skills_dir or SKILLS_DIR) / name / "SKILL.md"
@@ -84,36 +72,25 @@ def load_skill_validated(name: str, skills_dir: Path | None = None):
         raise SkillLoadError(f"unknown skill {name!r}: {path} does not exist")
 
     text = path.read_text(encoding="utf-8")
-    raw_fm = _frontmatter_raw(text, path)
-    # inject parsed tools/tags if list form
-    if "tools" in raw_fm:
-        tools = _parse_tools(raw_fm["tools"])
-        raw_fm["tools"] = ",".join(tools) if tools else ""
-    if "tags" in raw_fm:
-        tags = _parse_tools(raw_fm["tags"])
-        raw_fm["tags"] = ",".join(tags) if tags else ""
-
-    # pydantic expects lists for tools/tags; coerce
-    fm_dict = dict(raw_fm)
-    fm_dict["tools"] = _parse_tools(raw_fm.get("tools"))
-    fm_dict["tags"] = _parse_tools(raw_fm.get("tags"))
-    if "owner" in fm_dict and fm_dict["owner"] == "":
-        fm_dict["owner"] = None
-    if "entrypoint" in fm_dict and fm_dict["entrypoint"] == "":
-        fm_dict["entrypoint"] = None
+    raw = _frontmatter_raw(text, path)
+    data: dict[str, object] = dict(raw)
+    data["tools"] = _parse_list(raw.get("tools"))
+    data["tags"] = _parse_list(raw.get("tags"))
+    if not data.get("owner"):
+        data["owner"] = None
+    if not data.get("entrypoint"):
+        data["entrypoint"] = None
 
     try:
-        fm = SkillFrontmatter.model_validate(fm_dict)
+        frontmatter = SkillFrontmatter.model_validate(data)
     except ValidationError as exc:
         raise SkillLoadError(f"{path}: frontmatter validation failed: {exc}") from exc
 
-    if fm.name != name:
-        raise SkillLoadError(f"{path}: frontmatter name {fm.name!r} does not match {name!r}")
-    if fm.risk not in RISKS:
-        raise SkillLoadError(f"{path}: risk must be one of {RISKS}, got {fm.risk!r}")
-    if len(fm.description) < 30:
-        raise SkillLoadError(f"{path}: description is missing or too short")
+    if frontmatter.name != name:
+        raise SkillLoadError(
+            f"{path}: frontmatter name {frontmatter.name!r} does not match {name!r}"
+        )
     missing = [section for section in REQUIRED_SECTIONS if section not in text]
     if missing:
         raise SkillLoadError(f"{path}: missing sections: {', '.join(missing)}")
-    return fm, text, path
+    return frontmatter, text, path

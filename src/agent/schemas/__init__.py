@@ -4,6 +4,7 @@ from .skill import (
     PreflightReport,
     RunPlan,
     SkillFrontmatter,
+    ToolPlan,
     VerificationRecord,
 )
 
@@ -13,5 +14,6 @@ __all__ = [
     "PreflightReport",
     "RunPlan",
     "SkillFrontmatter",
+    "ToolPlan",
     "VerificationRecord",
 ]

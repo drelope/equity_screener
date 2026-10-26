@@ -10,6 +10,9 @@ from ..registry import ToolRegistry
 
 ROOT = Path(__file__).resolve().parents[4]
 
+SECRET_NAMES = {".env", "ObbCredentials.json"}
+SECRET_PREFIXES = (".env.",)
+
 
 class ReadFileArgs(BaseModel):
     path: str = Field(description="Relative or absolute path within repo")
@@ -23,17 +26,20 @@ class RepoTools:
         if not p.is_absolute():
             p = ROOT / p
         p = p.resolve()
-        if not str(p).startswith(str(ROOT.resolve()) + "/") and p != ROOT.resolve():
+        if not p.is_relative_to(ROOT.resolve()):
             raise ValueError("path outside repo root")
+        if p.name in SECRET_NAMES or p.name.startswith(SECRET_PREFIXES):
+            raise ValueError(f"refusing to read secret file {p.name!r}")
         if not p.is_file():
             raise FileNotFoundError(str(p))
         data = p.read_bytes()
-        if len(data) > max_bytes:
+        truncated = len(data) > max_bytes
+        if truncated:
             data = data[:max_bytes]
         return {
             "path": str(p),
             "content": data.decode("utf-8", errors="replace"),
-            "truncated": len(p.read_bytes()) > max_bytes,
+            "truncated": truncated,
         }
 
 
@@ -41,7 +47,7 @@ def register_repo_tools(registry: ToolRegistry) -> None:
     registry.register(
         Tool(
             name="files.read",
-            description="Read a file from repo (read-only, scoped)",
+            description="Read a tracked repository file (read-only, secret-safe)",
             func=RepoTools.read_file,
             input_schema=ReadFileArgs,
             risk="read",

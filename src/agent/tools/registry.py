@@ -19,10 +19,16 @@ class ToolRegistry:
         return list(self._tools.values())
 
     def tools_for_skill(self, skill_name: str, allowed: list[str] | None = None) -> list[Tool]:
-        allowed_set = set(allowed or [])
+        """Return only tools explicitly allowed for this skill.
+
+        ``allowed=None`` means "scope only" (used for inspection). An explicit
+        list, including an empty one, is an allowlist: a skill that declares no
+        tools receives none. This is the deny-by-default contract.
+        """
+        allowed_set = None if allowed is None else set(allowed)
         out: list[Tool] = []
         for tool in self._tools.values():
-            if allowed_set and tool.name not in allowed_set:
+            if allowed_set is not None and tool.name not in allowed_set:
                 continue
             if not tool.is_allowed_for_skill(skill_name):
                 continue

@@ -16,9 +16,15 @@ class Tool:
     requires_confirmation: bool = False
     side_effects: bool = False
 
-    def is_allowed_for_skill(self, skill_name: str) -> bool:
+    def __post_init__(self) -> None:
+        if not self.name or not self.name.strip():
+            raise ValueError("tool name must be non-empty")
         if not self.scopes:
-            return False
+            raise ValueError(f"tool {self.name!r} must declare at least one scope")
+        if self.risk != "read" and not self.side_effects:
+            raise ValueError(f"tool {self.name!r}: non-read tools must declare side_effects=True")
+
+    def is_allowed_for_skill(self, skill_name: str) -> bool:
         if "*" in self.scopes:
             return True
         return skill_name in self.scopes

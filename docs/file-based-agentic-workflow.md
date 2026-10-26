@@ -141,6 +141,7 @@ the source doc it links to.
 ```text
 python -m scripts.agent_runner --skill <name> [--dry-run] [--run-id <id>]
 python -m scripts.agent_runner --list
+python -m scripts.agent_runner --tools-for <name>
 python -m scripts.agent_runner --verify <run-id>
 ```
 
@@ -151,8 +152,7 @@ It must:
 3. print the planned argv and require `--yes` for write/`heavy` actions outside
    an explicitly non-interactive scheduler invocation;
 4. capture stdout/stderr and exit codes into `artifacts/runs/<run-id>/`;
-5. validate contracts with Pydantic schemas (`src/agent/schemas`); fall back to
-   the built-in parser when unavailable.
+5. validate contracts with Pydantic schemas (`src/agent/schemas`).
 6. run read-only preflight (`git status`, `migrate --check` for DB-touching
    skills, required env vars by name) and write `preflight.json`;
 7. block a write/heavy run when preflight fails.
@@ -160,6 +160,11 @@ It must:
    context bloat.
 9. never interpolate request text into a shell string;
 10. never read or print `.env` values.
+
+`--tools-for` prints the tools a skill resolves, including each input schema.
+`--dry-run` records them in `plan.json` and prints them alongside the argv. A
+skill that declares no `tools` resolves none; a declared name that is unknown or
+out of scope stops the run before any artifact is executed.
 
 The executor is **not** an LLM. Model choice, if any, belongs to the client
 invoking the workflow. This keeps the run reproducible.
@@ -235,7 +240,7 @@ Each run writes a small, machine-readable record:
 
 | File | Content |
 |---|---|
-| `plan.json` | request summary, selected skill, CRISP-DM phase, intended argv |
+| `plan.json` | request summary, selected skill, intended argv, resolved tools |
 | `preflight.json` | git status, migration check, env-var presence by name |
 | `commands.log` | argv, start/end time, exit code, truncated output |
 | `verification.json` | verifier command, exit code, pass/fail, evidence paths |

@@ -77,6 +77,15 @@ def test_every_skill_satisfies_the_contract():
             assert section in text, f"{skill.name}: missing {section}"
 
 
+def test_skill_handoffs_point_at_existing_skills():
+    names = {skill.name for skill in runner.list_skills()}
+    for skill in runner.list_skills():
+        text = skill.path.read_text(encoding="utf-8")
+        refs = set(re.findall(r"(?:route to|→)\s*`([a-z0-9-]+)`", text))
+        missing = sorted(ref for ref in refs if ref not in names)
+        assert not missing, f"{skill.name}: unknown handoff(s) {missing}"
+
+
 def test_no_skill_references_a_missing_script():
     paths = [skill.path for skill in runner.list_skills()]
     paths.append(ROOT / "skills" / "_template" / "SKILL.md")
