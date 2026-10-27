@@ -136,16 +136,12 @@ Pass when:
 - [ ] `python -m scripts.migrate --check` exits 0 if the task touches the database or schema.
 - [ ] Required environment variables present by name only (never print values). Check `SEC_USER_AGENT` if calling SEC.
 - [ ] No pipeline lock held / no conflicting run in progress if executing `run_full_etl`.
-- [ ] Scope narrowed to the smallest change that satisfies the request.
 
 ## Handoffs
 
-- **DB/schema drift:** route to `data-storage-schema` with `migrate --check` output and affected tables.
-- **Missing/dirty source data:** route to `data-acquisition` with coverage gaps and tables.
-- **Freshness/health check:** route to `observability-nightly-verification` with `audit.nightly_runs`/`audit.nightly_checks`.
+- **Apply or replay the pipeline:** route to `data-refresh-operations` with the migration plan.
+- **Drift or freshness finding:** route to `observability-nightly-verification` with `check_schema_drift` output.
 - **Security/secret risk:** route to `security-compliance` (do not share secret values).
-- **Investment validation, KPI/risk interpretation or a report:** route to `financial-analysis`.
-- **Scoring/labeling policy:** route to `financial-scoring` or `modeling-evaluation` per boundaries above.
 
 ## Stop conditions
 
@@ -153,8 +149,7 @@ Pass when:
 - [ ] `python -m scripts.migrate --check` reports pending migrations before a write operation.
 - [ ] `--run-labels` requested with `--limit` or `--tickers` (partial runs must not be labeled).
 - [ ] Action would delete reference rows, prune historical features/returns outside the allowed command, or release a ticker conflict without its dedicated confirmed command.
-- [ ] Secret would be printed, logged, or committed.
-- [ ] Non-zero exit from a required command with no documented "finding" handling.
+- [ ] Secret would be printed, logged or committed, or a required command fails without documented "finding" handling.
 - [ ] Unexpected `git status` changes in the scoped area.
 
 ## Evidence required

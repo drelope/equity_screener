@@ -335,3 +335,16 @@ moves from "worn by the single owner" to an explicit named owner. **Nothing in
 this review requires an org change today** — it only marks which hats are
 already being worn well, which are worn partially, and which must be put on
 before the dividend-end Azure migration proceeds.
+## 8. Skill-authoring lifecycle addendum
+
+Skill changes now follow the same gate discipline as the product pipeline:
+Clarify, Design, Plan, Code, Verify ([skill-lifecycle.md](skill-lifecycle.md)).
+Each phase has a named role owner, a done condition, evidence, and a stop
+condition; `skill-verify` runs `python -m scripts.skill_audit --all`.
+
+This closes the earlier gap where `SKILL.md` files were reviewed only by
+inspection. The audit enforces routing/`SYSTEM.md` sync, link and source-path
+validity, required sections, least-privilege tool scope, secret hygiene,
+progressive-disclosure budgets, and durable design records for lifecycle-tagged
+skills. The five lifecycle skills are the authoring path; they do not replace
+the CRISP-DM execution skills.

@@ -471,6 +471,7 @@ def _sweep_orphan_securities(conn, log, repopulate=False):
                 FROM raw.company_ticker t
                 WHERE t.ticker = s.ticker AND t.cik = s.cik
             )
+              AND s.historical = FALSE
             ORDER BY s.ticker, s.cik
         """)
         )

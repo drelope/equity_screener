@@ -74,6 +74,8 @@ CIK. This is an expected unavailable-data response, not an API outage.
 - [File-based agentic workflow](docs/file-based-agentic-workflow.md) — skill
   layout, routing map, and CRISP-DM phase map; `SYSTEM.md` is the runtime
   contract.
+- [Skill lifecycle](docs/skill-lifecycle.md) — Clarify, Design, Plan, Code,
+  Verify gates, design records, token budgets and the deterministic audit.
 - [Requirements](docs/requirements.md) — screening universe, weights, and
   acceptance criteria.
 - [Model labeling plan](docs/model-labeling-plan.md) — how the offline ML

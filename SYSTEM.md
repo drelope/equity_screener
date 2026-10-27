@@ -53,6 +53,11 @@ The skill directory name must equal the frontmatter `name`.
 
 | Skill | Risk | Phase |
 |---|---|---|
+| `skill-clarify` | write | 3 |
+| `skill-design` | write | 3 |
+| `skill-plan` | write | 3 |
+| `skill-code` | write | 3 |
+| `skill-verify` | read | 3 |
 | `financial-analysis` | read | 2 |
 | `financial-scoring` | write | 2 |
 | `business-understanding` | write | 2 |
@@ -70,9 +75,10 @@ The skill directory name must equal the frontmatter `name`.
 | `observability-nightly-verification` | read | 1 |
 | `security-compliance` | read | 1 |
 
-All 16 skills exist. Only the skills with a fixed entrypoint can be executed by
+All 21 skills exist. Only the skills with a fixed entrypoint can be executed by
 the runner; for the rest, apply the skill procedure directly and report the
-evidence in the response.
+evidence in the response. Skill authoring follows
+[`docs/skill-lifecycle.md`](docs/skill-lifecycle.md).
 
 ## Hard stops
 
@@ -85,6 +91,8 @@ Stop and report when:
   conflict without its dedicated confirmed command;
 - `--run-labels` is requested with `--limit` or `--tickers`;
 - a secret value would be printed, logged, or committed;
+- a skill change skips a lifecycle gate or its design record has an open question;
+- `python -m scripts.skill_audit --all` fails;
 - a command is not in `src/crispdm/ops/catalog.py` when running as a queued task.
 
 ## Command policy
@@ -108,6 +116,7 @@ python -m pytest -q
 python -m pytest -m "not integration" -q
 python -m scripts.migrate --check
 python -m scripts.check_schema_drift --quiet
+python -m scripts.skill_audit --all
 ```
 
 Use the narrowest gate that proves the change, plus the repository gate for any

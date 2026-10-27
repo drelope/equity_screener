@@ -133,7 +133,6 @@ the evidence.
 - [ ] `python -m scripts.migrate --check` exits 0 if the task touches the database or schema.
 - [ ] Required environment variables present by name only (never print values). Check `SEC_USER_AGENT` if calling SEC.
 - [ ] No pipeline lock held / no conflicting run in progress if executing `run_full_etl`.
-- [ ] Scope narrowed to the smallest change that satisfies the request.
 
 ## Handoffs
 
@@ -150,8 +149,7 @@ the evidence.
 - [ ] `python -m scripts.migrate --check` reports pending migrations before a write operation.
 - [ ] `--run-labels` requested with `--limit` or `--tickers` (partial runs must not be labeled).
 - [ ] Action would delete reference rows, prune historical features/returns outside the allowed command, or release a ticker conflict without its dedicated confirmed command.
-- [ ] Secret would be printed, logged, or committed.
-- [ ] Non-zero exit from a required command with no documented "finding" handling.
+- [ ] Secret would be printed, logged or committed, or a required command fails without documented "finding" handling.
 - [ ] Unexpected `git status` changes in the scoped area.
 
 ## Evidence required

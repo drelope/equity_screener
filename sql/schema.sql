@@ -52,6 +52,8 @@ CREATE TABLE IF NOT EXISTS reference.securities (
   exchange_id INT REFERENCES reference.exchanges(exchange_id),
   currency VARCHAR(8) NOT NULL DEFAULT 'USD', liquidation_preference NUMERIC,
   call_date DATE, active BOOLEAN DEFAULT TRUE,
+  historical BOOLEAN NOT NULL DEFAULT FALSE,
+  delisted_date DATE,
   created_at TIMESTAMPTZ DEFAULT now(), updated_at TIMESTAMPTZ DEFAULT now(),
   -- Data-quality guards: CIKs are zero-padded digits, currency is an ISO code
   -- and security_type is drawn from the normalized vocabulary maintained in

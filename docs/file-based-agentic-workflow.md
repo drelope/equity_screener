@@ -1,8 +1,9 @@
 # File-Based Agentic Workflow
 
-Status: phase 3 complete. `SYSTEM.md`, `skills/_template/`, all 16 skills,
-the deterministic executor (`scripts/agent_runner.py`), gitignored run
-artifacts and the drift test exist. The pipeline they wrap is real and
+Status: phase 3 complete. `SYSTEM.md`, `skills/_template/`, all 21 skills,
+the deterministic executor (`scripts/agent_runner.py`), the skill lifecycle
+(`docs/skill-lifecycle.md`), the audit (`scripts/skill_audit.py`), gitignored
+run artifacts and the drift test exist. The pipeline they wrap is real and
 authoritative: `scripts.run_full_etl` and the stage scripts listed in
 [README](../README.md#data-workflow).
 
@@ -74,6 +75,11 @@ dividend_equity_crispdm/
 ├── skills/                                # Existing: one capability per directory
 │   ├── _template/                         # Existing (copy source)
 │   │   └── SKILL.md
+│   ├── skill-clarify/                     # Existing (write)
+│   ├── skill-design/                      # Existing (write)
+│   ├── skill-plan/                        # Existing (write)
+│   ├── skill-code/                        # Existing (write)
+│   ├── skill-verify/                      # Existing (read, fixed audit)
 │   ├── business-understanding/            # Existing (write)
 │   │   └── SKILL.md
 │   ├── data-understanding/                # Existing (read)
@@ -153,13 +159,19 @@ It must:
    an explicitly non-interactive scheduler invocation;
 4. capture stdout/stderr and exit codes into `artifacts/runs/<run-id>/`;
 5. validate contracts with Pydantic schemas (`src/agent/schemas`).
-6. run read-only preflight (`git status`, `migrate --check` for DB-touching
-   skills, required env vars by name) and write `preflight.json`;
+6. run read-only preflight (`git status`, `migrate --check` for the
+   `DB_TOUCHING` allowlist, required env vars by name) and write
+   `preflight.json`;
 7. block a write/heavy run when preflight fails.
 8. load only skill-declared tools dynamically (deny by default) to prevent
    context bloat.
 9. never interpolate request text into a shell string;
 10. never read or print `.env` values.
+
+A read-only fixed entrypoint does not imply database access. `skill-verify`
+runs only `python -m scripts.skill_audit --all`, so it is not in
+`DB_TOUCHING` and does not require the migration check. The allowlist currently
+contains `data-validation` and `observability-nightly-verification`.
 
 `--tools-for` prints the tools a skill resolves, including each input schema.
 `--dry-run` records them in `plan.json` and prints them alongside the argv. A
@@ -255,14 +267,15 @@ committed.
 intake
   -> classify (one primary skill + CRISP-DM phase)
   -> load (SYSTEM.md + SKILL.md; fail if missing)
-  -> preflight (git status, env presence, migrate --check)
+  -> preflight (git status, env presence, migrate --check when DB-touching)
   -> execute (one stage or command at a time)
   -> verify (skill verifier + targeted tests)
   -> record (artifacts + audit rows)
   -> escalate (stop, report, name the next safe action)
 ```
 
-Preflight is mandatory for write skills and checks, without printing values:
+Preflight is mandatory for write/heavy skills and every `DB_TOUCHING` skill,
+without printing values:
 
 - `git status --short` (no unexpected edits);
 - `python -m scripts.migrate --check` (no pending migrations);
@@ -270,7 +283,14 @@ Preflight is mandatory for write skills and checks, without printing values:
   `API_KEY`/`OPS_ADMIN_TOKEN` only where documented);
 - no other `run_full_etl` holds the pipeline lock.
 
-If preflight fails, the run stops before any write.
+A read-only skill with a fixed entrypoint still gets `git status`; it gets the
+migration check only when it is in `DB_TOUCHING`. If preflight fails, the run
+stops before any write.
+
+Skill authoring does not use this CRISP-DM execution loop. It follows the five
+gates in [`docs/skill-lifecycle.md`](skill-lifecycle.md): Clarify, Design, Plan,
+Code, Verify. `skill-verify` runs the deterministic repository audit through the
+same executor.
 
 ## 7. CRISP-DM phase map
 
@@ -283,6 +303,16 @@ If preflight fails, the run stops before any write.
 | Evaluation | `financial-analysis`, `modeling-evaluation`, `observability-nightly-verification` |
 | Deployment | `deployment-release`, `security-compliance`, `investment-analysis` |
 
+Skill authoring is a separate five-gate flow, not a CRISP-DM phase:
+
+| Gate | Primary skill | Evidence |
+|---|---|---|
+| Clarify | `skill-clarify` | `docs/skill-designs/<name>.md`, `clarify` gate row |
+| Design | `skill-design` | contract, tool scope, reference and token plan |
+| Plan | `skill-plan` | exact files, tests, verifiers and rollback |
+| Code | `skill-code` | scoped diff, targeted tests, `code` gate row |
+| Verify | `skill-verify` | `python -m scripts.skill_audit --all`, ruff, tests |
+
 The ML model is **not adopted** (see `docs/requirements.md`, section 4). The
 `modeling-evaluation` skill covers diagnostics and the walk-forward gate; it
 does not promote a model to production.
@@ -291,6 +321,11 @@ does not promote a model to production.
 
 | Intake | Primary skill | Entrypoint | Verifier |
 |---|---|---|---|
+| Clarify a new skill or a material skill change | `skill-clarify` | `docs/skill-lifecycle.md`, `docs/skill-designs/_template.md` | `python -m scripts.skill_audit --skill <name> --phase clarify` |
+| Design a skill's contract, tools and references | `skill-design` | `docs/skill-lifecycle.md`, `docs/skill-designs/<name>.md` | `python -m scripts.skill_audit --skill <name> --phase design` |
+| Plan a skill change to exact files and tests | `skill-plan` | `docs/skill-designs/<name>.md` | `python -m scripts.skill_audit --skill <name> --phase plan` |
+| Implement an approved skill plan | `skill-code` | `docs/skill-designs/<name>.md`, `skills/<name>/SKILL.md` | `python -m scripts.skill_audit --skill <name> --phase code` |
+| Run the final skill gates | `skill-verify` | `python -m scripts.skill_audit --all` | exit 0 + targeted tests + ruff |
 | Change screening rules, weights or acceptance criteria | `business-understanding` | `docs/requirements.md`, `src/crispdm/scoring.py` | `tests/test_scoring.py` |
 | Add or assess a data source or field | `data-understanding` | `docs/data-acquisition.md`, `src/crispdm/sec_client.py`, `src/crispdm/openbb_client.py` | relevant `tests/test_populate_*` |
 | Fetch raw SEC/OpenBB/FMP/FRED data | `data-acquisition` | `python -m scripts.populate_raw_tables`, `populate_reference_tables`, `populate_market_data`, `populate_dividend_data`, `populate_companyfacts`, `populate_sec_documents`, `populate_fmp_fundamentals`, `populate_macro_inputs` | stage exit 0 + population tests |
@@ -310,11 +345,18 @@ does not promote a model to production.
 
 ## 9. Skill inventory
 
-All 16 skills exist as phase-2 files. The "Existing anchors" column is the
-code and documentation each skill must link to rather than restate.
+All 21 skills exist; `_template` is excluded. The five lifecycle skills form
+the authoring flow in [`docs/skill-lifecycle.md`](skill-lifecycle.md). The
+"Existing anchors" column is the code and documentation each skill must link to
+rather than restate.
 
 | Skill | Purpose | Existing anchors |
 |---|---|---|
+| `skill-clarify` | Record the problem, scope, assumptions and success criteria | `docs/skill-lifecycle.md`, `docs/skill-designs/_template.md` |
+| `skill-design` | Define the skill contract, boundaries, tools and references | `docs/skill-lifecycle.md`, `docs/skill-designs/<name>.md` |
+| `skill-plan` | Map the design to files, tests, verifiers and rollback | `docs/skill-lifecycle.md`, `docs/skill-designs/<name>.md` |
+| `skill-code` | Implement only the approved skill plan | `docs/skill-lifecycle.md`, `docs/skill-designs/<name>.md` |
+| `skill-verify` | Run the audit, tests and style gates; record evidence | `scripts/skill_audit.py`, `scripts/agent_runner.py` |
 | `business-understanding` | Translate objectives into universe rules, weights and acceptance criteria | `docs/requirements.md`, `docs/GlobalMacroStrategy.md`, `src/crispdm/scoring.py` |
 | `data-understanding` | Profile sources, coverage and known gaps before fetching | `docs/data-acquisition.md`, `docs/data-health-workstreams.md` |
 | `data-acquisition` | Fetch and upsert raw SEC/OpenBB/FMP/FRED payloads | `scripts/populate_*.py`, `src/crispdm/sec_client.py`, `src/crispdm/openbb_client.py` |
@@ -363,7 +405,10 @@ Stop and report instead of proceeding when:
   release a ticker conflict without its dedicated confirmed command;
 - a partial run would write immutable labels (`--run-labels` with `--limit` or
   `--tickers`);
-- a secret value would be printed, logged or committed.
+- a secret value would be printed, logged or committed;
+- a skill change skips a lifecycle gate or its design record has an open
+  question;
+- `python -m scripts.skill_audit --all` fails.
 
 ### Repository gates
 
@@ -372,10 +417,13 @@ ruff check .
 ruff format --check .
 python -m pytest -q
 python -m pytest -m "not integration" -q   # fast lane
+python -m scripts.skill_audit --all
 ```
 
 SQL/schema changes also require a migration under `sql/migrations/`, a
 `COMMENT ON COLUMN` entry, and `python -m scripts.check_schema_drift`.
+Skill changes also require the targeted tests and the lifecycle audit through
+the phase being claimed.
 
 ### Data and security gates
 
@@ -405,7 +453,10 @@ table in the same change, mirroring the discipline enforced by
 3. asserts frontmatter `name` matches the directory and the risk is valid;
 4. asserts every skill has the required sections, including `## Verification`;
 5. asserts no skill references a script that is absent from the repo;
-6. asserts every executable entrypoint is a `scripts.*` module with a verifier.
+6. asserts every executable entrypoint is a `scripts.*` module with a verifier;
+7. asserts every skill declares a runner policy and its tools resolve;
+8. runs `python -m scripts.skill_audit --all` for links, budgets, design gates
+   and routing/`SYSTEM.md` sync.
 
 ### Rollout
 
@@ -415,12 +466,14 @@ table in the same change, mirroring the discipline enforced by
 | 1 | `SYSTEM.md`, `skills/_template/`, read-only skills (`observability-nightly-verification`, `security-compliance`, `data-understanding`) | manual review | Implemented; pending review |
 | 2 | Write skills and their verifiers, starting with `data-storage-schema` and `data-refresh-operations` | each skill's verifier proves it on a scratch database | Skills done; verifier runs pending |
 | 3 | `scripts/agent_runner.py`, `artifacts/`, `.gitignore` entry, drift test | `ruff`, `pytest`, one dry run | Done |
+| 4 | Five lifecycle skills, `docs/skill-lifecycle.md`, `scripts/skill_audit.py`, design records | `skill_audit --all`, lifecycle and runner tests | Implemented; verification in progress |
 
-Keep the executor out of CI until phase 3.
+The executor stays deterministic. `skill-verify` is the only read-only fixed
+entrypoint; all write/heavy execution still requires explicit confirmation.
 
 ### Open decisions
 
-- Which runtime discovers root `skills/`; if it only reads `.claude/skills`, add
-  a tracked symlink rather than duplicate files.
+- Resolved: `scripts/agent_runner.py` and the loader discover root `skills/`.
+  External clients should use the runner or follow the same root.
 - Whether run artifacts are retained indefinitely or pruned by age.
 - Whether the executor ever calls a model, or stays strictly deterministic.

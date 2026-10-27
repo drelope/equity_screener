@@ -95,10 +95,14 @@ def parse_date(value):
     return datetime.fromisoformat(str(value)[:10]).date()
 
 
-def get_target_securities(conn, tickers=None, dividend_only=True, limit=None):
+def get_target_securities(
+    conn, tickers=None, dividend_only=True, limit=None, include_historical=False
+):
     """Return ``(security_id, ticker)`` for the price-ingestion universe."""
     params = {}
-    clauses = ["s.active = TRUE"]
+    clauses = (
+        ["(s.active = TRUE OR s.historical = TRUE)"] if include_historical else ["s.active = TRUE"]
+    )
     if dividend_only:
         clauses.append("s.dividend = TRUE")
     if tickers:
@@ -217,7 +221,13 @@ def _fetch_with_retry(ticker, start, end, attempts=3):
 
 
 def populate_market_data(
-    tickers=None, dividend_only=True, limit=None, start_date=None, end_date=None
+    tickers=None,
+    dividend_only=True,
+    limit=None,
+    start_date=None,
+    end_date=None,
+    include_historical=False,
+    historical_only=False,
 ):
     """Upsert daily prices for the target universe.
 
@@ -237,7 +247,12 @@ def populate_market_data(
     unpriced = []
     with engine.connect() as conn:
         targets = get_target_securities(
-            conn, tickers=tickers, dividend_only=dividend_only, limit=limit
+            conn,
+            tickers=tickers,
+            dividend_only=dividend_only,
+            limit=limit,
+            include_historical=include_historical,
+            historical_only=historical_only,
         )
 
     print(f"Fetching prices from: openbb ({start} -> {end or 'now'}) for {len(targets)} securities")
@@ -307,6 +322,16 @@ def main():
         help="Include non-dividend securities (default: dividend payers only)",
     )
     parser.add_argument("--start-date", type=date.fromisoformat, default=None)
+    parser.add_argument(
+        "--include-historical",
+        action="store_true",
+        help="Also fetch prices for securities recovered from EDGAR after delisting",
+    )
+    parser.add_argument(
+        "--historical-only",
+        action="store_true",
+        help="Fetch only the recovered delisted securities",
+    )
     parser.add_argument("--end-date", type=date.fromisoformat, default=None)
     args = parser.parse_args()
 
@@ -322,6 +347,8 @@ def main():
             limit=args.limit,
             start_date=args.start_date,
             end_date=args.end_date,
+            include_historical=args.include_historical,
+            historical_only=args.historical_only,
         )
         # empty and no_data count as skipped: a security the provider does not
         # carry is a coverage gap, and a weekend on which nothing traded is not

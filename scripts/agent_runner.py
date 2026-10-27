@@ -72,7 +72,17 @@ ENTRYPOINTS: dict[str, tuple[tuple[str, ...], ...]] = {
     ),
     "data-storage-schema": (("scripts.migrate",),),
     "data-refresh-operations": (("scripts.run_full_etl",),),
+    "skill-verify": (("scripts.skill_audit", "--all"),),
 }
+
+#: Read-only skills that still need the migration ledger check. A read skill
+#: with a fixed entrypoint does not automatically touch the database.
+DB_TOUCHING: frozenset[str] = frozenset(
+    {
+        "data-validation",
+        "observability-nightly-verification",
+    }
+)
 
 #: Commands that prove a run. Run after the entrypoint and by ``--verify``
 #: through the recorded ``verification.json``.
@@ -84,6 +94,7 @@ VERIFIERS: dict[str, tuple[tuple[str, ...], ...]] = {
     ),
     "data-storage-schema": (("scripts.migrate", "--check"),),
     "data-refresh-operations": (("scripts.verify_nightly_run",),),
+    "skill-verify": (("scripts.skill_audit", "--all"),),
 }
 
 
@@ -213,7 +224,7 @@ def _preflight(skill: Skill) -> dict:
     except Exception as exc:  # noqa: BLE001
         checks.append({"name": "git_status", "ok": False, "error": str(exc)})
 
-    if skill.risk in ("write", "heavy") or skill.name in ENTRYPOINTS:
+    if skill.risk in ("write", "heavy") or skill.name in DB_TOUCHING:
         try:
             result = subprocess.run(
                 [sys.executable, "-m", "scripts.migrate", "--check"],

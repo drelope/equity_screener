@@ -163,7 +163,11 @@ def main():
     if prune_reason:
         print(f"{as_of_arg}: {prune_reason}")
     carry_days = carry_forward_days()
-    df = read_df(scoring_features_sql(), params={"carry_days": carry_days, "as_of": as_of_arg})
+    include_historical = "--include-historical" in sys.argv
+    df = read_df(
+        scoring_features_sql(include_historical=include_historical),
+        params={"carry_days": carry_days, "as_of": as_of_arg},
+    )
     if not df.empty:
         carried = int((df["as_of_date"] < df["as_of_date"].max()).sum())
         if carried:

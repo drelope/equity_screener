@@ -201,6 +201,22 @@ def test_run_plan_schema_accepts_recorded_tools():
     assert plan.tools[0].name == "files.read"
 
 
+def test_skill_verify_entrypoint_is_the_deterministic_audit():
+    assert runner.ENTRYPOINTS["skill-verify"] == (("scripts.skill_audit", "--all"),)
+    assert runner.VERIFIERS["skill-verify"] == (("scripts.skill_audit", "--all"),)
+    assert "skill-verify" not in runner.DB_TOUCHING
+
+
+def test_skill_verify_dry_run_skips_the_database_preflight(tmp_path, capsys):
+    code = runner.run_skill("skill-verify", dry_run=True, artifacts_dir=tmp_path)
+    assert code == 0
+
+    run_dir = next((tmp_path / "runs").iterdir())
+    preflight = json.loads((run_dir / "preflight.json").read_text(encoding="utf-8"))
+    assert [check["name"] for check in preflight["checks"]] == ["git_status"]
+    assert "python -m scripts.skill_audit --all" in capsys.readouterr().out
+
+
 def test_runner_records_dynamic_tools(tmp_path, capsys):
     code = runner.run_skill("security-compliance", dry_run=True, artifacts_dir=tmp_path)
     assert code == 0

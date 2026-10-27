@@ -559,16 +559,38 @@ def get_target_tickers(limit=None, tickers=None, ticker_map=None):
     return records
 
 
-def get_sec_ticker_map():
-    """Load the SEC ticker file once and return normalized ticker-to-CIK values."""
-    return {
+def get_sec_ticker_map(include_historical=False):
+    """Load the SEC ticker file once and return normalized ticker-to-CIK values.
+
+    ``include_historical`` adds the recovered delisted tickers from
+    reference.securities, which the current SEC file no longer lists.
+    """
+    mapping = {
         (entry.get("ticker") or "").strip().upper(): entry.get("cik_str")
         for entry in get_company_tickers().values()
         if entry.get("ticker") and entry.get("cik_str") is not None
     }
+    if include_historical:
+        with engine.connect() as conn:
+            rows = conn.execute(
+                text(
+                    "SELECT ticker, cik FROM reference.securities "
+                    "WHERE historical = TRUE AND cik IS NOT NULL"
+                )
+            ).all()
+        for ticker, cik in rows:
+            mapping.setdefault(str(ticker).strip().upper(), str(cik).zfill(10))
+    return mapping
 
 
-def get_target_dividend_tickers(conn, tickers=None, dividend_only=True, limit=None):
+def get_target_dividend_tickers(
+    conn,
+    tickers=None,
+    dividend_only=True,
+    limit=None,
+    include_historical=False,
+    historical_only=False,
+):
     """Resolve the dividend universe to fetch dividend events for.
 
     Returns active reference-securities tickers. By default only
@@ -576,7 +598,9 @@ def get_target_dividend_tickers(conn, tickers=None, dividend_only=True, limit=No
     are never made for tickers that do not pay a dividend. Explicit ``tickers``
     are intersected with the universe (unless ``dividend_only`` is False).
     """
-    filters = ["s.active = TRUE"]
+    filters = (
+        ["(s.active = TRUE OR s.historical = TRUE)"] if include_historical else ["s.active = TRUE"]
+    )
     params = {}
     if dividend_only:
         filters.append("s.dividend = TRUE")
@@ -611,10 +635,18 @@ def get_target_dividend_tickers(conn, tickers=None, dividend_only=True, limit=No
 
 
 def fetch_dividend_data(
-    tickers=None, limit=None, sources=None, start_date=None, end_date=None, full_history=False
+    tickers=None,
+    limit=None,
+    sources=None,
+    start_date=None,
+    end_date=None,
+    full_history=False,
+    include_historical=False,
 ):
     chosen_sources = set(sources or ["sec", "openbb"])
-    sec_ticker_map = get_sec_ticker_map() if "sec" in chosen_sources else {}
+    sec_ticker_map = (
+        get_sec_ticker_map(include_historical=include_historical) if "sec" in chosen_sources else {}
+    )
     target_tickers = get_target_tickers(
         limit=limit,
         tickers=tickers,
@@ -721,13 +753,16 @@ def _save_amount_checks(checks):
     print(f"Settled FMP/Yahoo amount disagreements: {chosen}")
 
 
-def load_security_ids(conn):
+def load_security_ids(conn, include_historical=False):
     """Load active ticker and CIK mappings once for the entire database write."""
+    universe = (
+        "(s.active = TRUE OR s.historical = TRUE)" if include_historical else "s.active = TRUE"
+    )
     rows = conn.execute(
-        text("""
+        text(f"""
         SELECT DISTINCT ON (s.ticker) s.ticker, s.security_id, s.cik
         FROM reference.securities s
-        WHERE s.active = TRUE
+        WHERE {universe}
         ORDER BY s.ticker, s.updated_at DESC NULLS LAST, s.security_id
     """)
     ).mappings()
@@ -988,7 +1023,9 @@ def fetch_ticker_profile(ticker, security_name=None, security_type=None):
     return summarize_ticker_profile(ticker, security_name, security_type, data)
 
 
-def get_dividend_paying_securities(conn, limit=None, tickers=None):
+def get_dividend_paying_securities(
+    conn, limit=None, tickers=None, include_historical=False, historical_only=False
+):
     """Return active dividend-flagged securities to profile.
 
     The base list comes from ``raw.company_ticker`` (the SEC ticker universe
@@ -997,8 +1034,14 @@ def get_dividend_paying_securities(conn, limit=None, tickers=None):
     evidence, which preserves profiles when SEC Company Facts is unavailable.
     """
     params = {}
+    if historical_only:
+        universe = "s.historical = TRUE"
+    elif include_historical:
+        universe = "(s.active = TRUE OR s.historical = TRUE)"
+    else:
+        universe = "s.active = TRUE"
     filters = [
-        "s.active = TRUE",
+        universe,
         "(s.dividend = TRUE OR EXISTS ("
         "SELECT 1 FROM raw.dividend_data d "
         "WHERE d.security_id = s.security_id AND d.amount > 0))",
@@ -1237,6 +1280,8 @@ def populate_dividend_data(
     populate_preferred_terms=True,
     populate_profiles=True,
     include_non_dividend=False,
+    include_historical=False,
+    historical_only=False,
 ):
     """Populate raw.dividend_data and raw.ticker_profile with normalized dividends and stock summaries."""
     normalized_sources = set((sources or ["sec", "openbb"]))
@@ -1248,6 +1293,8 @@ def populate_dividend_data(
             tickers=tickers,
             dividend_only=not include_non_dividend,
             limit=limit,
+            include_historical=include_historical,
+            historical_only=historical_only,
         )
     if include_non_dividend is False and not dividend_tickers:
         print(
@@ -1262,6 +1309,7 @@ def populate_dividend_data(
         start_date=start_date,
         end_date=end_date,
         full_history=full_history,
+        include_historical=include_historical,
     )
     print(f"Fetched {len(dividend_data)} normalized dividend records")
 
@@ -1279,7 +1327,9 @@ def populate_dividend_data(
         window_start = start_date or settings.dividend_lookback_start.isoformat()
 
     with engine.begin() as conn:
-        ticker_security_ids, cik_security_ids = load_security_ids(conn)
+        ticker_security_ids, cik_security_ids = load_security_ids(
+            conn, include_historical=include_historical, historical_only=historical_only
+        )
         pending = []
         insert_rows = []
         for div in dividend_data:
@@ -1417,6 +1467,16 @@ def main():
         action="store_true",
         help="Also fetch dividend events for securities not flagged as dividend payers",
     )
+    parser.add_argument(
+        "--include-historical",
+        action="store_true",
+        help="Also fetch dividend events for securities recovered from EDGAR after delisting",
+    )
+    parser.add_argument(
+        "--historical-only",
+        action="store_true",
+        help="Fetch dividends only for the recovered delisted securities",
+    )
 
     args = parser.parse_args()
 
@@ -1437,6 +1497,8 @@ def main():
             populate_preferred_terms=not args.skip_preferred_terms,
             populate_profiles=not args.skip_profiles,
             include_non_dividend=args.include_non_dividend,
+            include_historical=args.include_historical,
+            historical_only=args.historical_only,
         )
         # A re-run that finds every dividend already stored inserts nothing and
         # skips everything, which is the stage working. Failing on that would

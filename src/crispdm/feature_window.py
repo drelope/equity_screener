@@ -59,7 +59,7 @@ def _latest_row(sec_alias: str) -> str:
 """
 
 
-def scoring_features_sql() -> str:
+def scoring_features_sql(include_historical: bool = False) -> str:
     """One feature row per active security, newest first within the window.
 
     Driven off reference.securities with a LATERAL join on purpose. The obvious
@@ -75,14 +75,22 @@ def scoring_features_sql() -> str:
     a date to re-score that historical date point-in-time. The bound date can only
     move the window *earlier* than the newest row, never later, so it cannot read
     a future-dated feature.
+
+    ``include_historical`` also reads securities recovered from EDGAR after they
+    left the current snapshot (``historical = TRUE``). Off by default so the
+    nightly never scores a delisted name against carried-forward features; the
+    backfill stages turn it on for a chosen past date.
     """
+    universe = (
+        "(s.active = TRUE OR s.historical = TRUE)" if include_historical else "s.active = TRUE"
+    )
     return f"""
     SELECT f.*, s.ticker, s.security_type
     FROM reference.securities s
     JOIN LATERAL (
         {_latest_row("s")}
     ) f ON TRUE
-    WHERE s.active = TRUE
+    WHERE {universe}
     """
 
 

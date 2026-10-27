@@ -52,9 +52,15 @@ class FundamentalsResult:
     errors: int
 
 
-def _candidate_filters(tickers=None):
+def _candidate_filters(tickers=None, include_historical=False, historical_only=False):
     """Shared WHERE clauses so count and load agree on the universe."""
-    clauses = ["cf.cik IS NOT NULL", "s.active = TRUE", "s.dividend = TRUE"]
+    if historical_only:
+        universe = "s.historical = TRUE"
+    elif include_historical:
+        universe = "(s.active = TRUE OR s.historical = TRUE)"
+    else:
+        universe = "s.active = TRUE"
+    clauses = ["cf.cik IS NOT NULL", universe, "s.dividend = TRUE"]
     params = {}
     if tickers:
         clauses.append("UPPER(s.ticker) = ANY(:tickers)")
@@ -62,9 +68,13 @@ def _candidate_filters(tickers=None):
     return " AND ".join(clauses), params
 
 
-def count_candidates(conn, tickers=None, limit=None):
+def count_candidates(
+    conn, tickers=None, limit=None, include_historical=False, historical_only=False
+):
     """How many securities the stage will process; caps ``limit`` if given."""
-    where, params = _candidate_filters(tickers)
+    where, params = _candidate_filters(
+        tickers, include_historical=include_historical, historical_only=historical_only
+    )
     count = conn.execute(
         text(f"""
         SELECT count(*)
@@ -77,7 +87,14 @@ def count_candidates(conn, tickers=None, limit=None):
     return min(count, limit) if limit is not None else count
 
 
-def load_candidates(conn, tickers=None, limit=None, after_security_id=None):
+def load_candidates(
+    conn,
+    tickers=None,
+    limit=None,
+    after_security_id=None,
+    include_historical=False,
+    historical_only=False,
+):
     """One batch of securities with a stored companyfacts payload.
 
     The companyfacts payload is per-issuer CIK but periodic financials are
@@ -88,7 +105,9 @@ def load_candidates(conn, tickers=None, limit=None, after_security_id=None):
     ``security_id`` from the previous batch to get the next page in the same
     ``ORDER BY s.security_id`` order.
     """
-    where, params = _candidate_filters(tickers)
+    where, params = _candidate_filters(
+        tickers, include_historical=include_historical, historical_only=historical_only
+    )
     params["concepts"] = list(PERIODIC_FINANCIAL_CONCEPTS)
 
     if after_security_id is not None:
@@ -221,7 +240,13 @@ def upsert_periodic_financials(conn, security_id, rows):
     return inserted
 
 
-def populate_fundamentals(tickers=None, limit=None, batch_size=BATCH_SIZE):
+def populate_fundamentals(
+    tickers=None,
+    limit=None,
+    batch_size=BATCH_SIZE,
+    include_historical=False,
+    historical_only=False,
+):
     """Build fundamentals.periodic_financials from stored XBRL payloads."""
     periods = securities = errors = 0
     processed = 0
@@ -231,7 +256,13 @@ def populate_fundamentals(tickers=None, limit=None, batch_size=BATCH_SIZE):
     run_date = date.today()
 
     with engine.connect() as conn:
-        total = count_candidates(conn, tickers=tickers, limit=limit)
+        total = count_candidates(
+            conn,
+            tickers=tickers,
+            limit=limit,
+            include_historical=include_historical,
+            historical_only=historical_only,
+        )
 
     last_id = None
     remaining = total
@@ -242,7 +273,14 @@ def populate_fundamentals(tickers=None, limit=None, batch_size=BATCH_SIZE):
         # between batches instead of being held for the whole stage, and a
         # crash loses at most one batch of upserts instead of everything.
         with engine.begin() as conn:
-            batch = load_candidates(conn, tickers=tickers, limit=take, after_security_id=last_id)
+            batch = load_candidates(
+                conn,
+                tickers=tickers,
+                limit=take,
+                after_security_id=last_id,
+                include_historical=include_historical,
+                historical_only=historical_only,
+            )
             if not batch:
                 break
             for candidate in batch:
@@ -297,6 +335,16 @@ def main():
     parser.add_argument(
         "--limit", type=int, default=None, help="Limit to the first N securities (for testing)"
     )
+    parser.add_argument(
+        "--include-historical",
+        action="store_true",
+        help="Also build periods for securities recovered from EDGAR after delisting",
+    )
+    parser.add_argument(
+        "--historical-only",
+        action="store_true",
+        help="Build periods only for the recovered delisted securities",
+    )
     args = parser.parse_args()
 
     tickers = (
@@ -304,7 +352,12 @@ def main():
     )
 
     try:
-        result = populate_fundamentals(tickers=tickers, limit=args.limit)
+        result = populate_fundamentals(
+            tickers=tickers,
+            limit=args.limit,
+            include_historical=args.include_historical,
+            historical_only=args.historical_only,
+        )
     except Exception as exc:
         print(f"✗ Error populating fundamentals: {exc}", file=sys.stderr)
         return 1

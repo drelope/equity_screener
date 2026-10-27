@@ -370,3 +370,12 @@ class TestExplicitAsOfBinds:
         """An anchor with no observation must not silently score another date."""
         source = inspect.getsource(score_rank)
         assert "refusing to re-score the wrong date" in source
+
+
+def test_scoring_can_opt_into_historical_securities():
+    from src.crispdm.feature_window import scoring_features_sql
+
+    assert "s.active = TRUE" in scoring_features_sql()
+    assert "historical" not in scoring_features_sql()
+    opted_in = scoring_features_sql(include_historical=True)
+    assert "s.active = TRUE OR s.historical = TRUE" in opted_in

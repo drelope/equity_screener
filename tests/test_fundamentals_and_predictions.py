@@ -1554,7 +1554,7 @@ def test_populate_fundamentals_paginates_in_batches(monkeypatch, capsys):
     loads = []
     upserted = []
 
-    def fake_load(conn, tickers=None, limit=None, after_security_id=None):
+    def fake_load(conn, tickers=None, limit=None, after_security_id=None, include_historical=False, historical_only=False):
         loads.append((after_security_id, limit))
         rows = [
             c for c in universe if after_security_id is None or c["security_id"] > after_security_id
@@ -1627,7 +1627,7 @@ def test_a_count_overestimate_terminates_instead_of_looping(monkeypatch):
     engine = _FakeEngine()
     loads = []
 
-    def fake_load(conn, tickers=None, limit=None, after_security_id=None):
+    def fake_load(conn, tickers=None, limit=None, after_security_id=None, include_historical=False, historical_only=False):
         loads.append(after_security_id)
         rows = [
             c for c in universe if after_security_id is None or c["security_id"] > after_security_id

@@ -1,38 +1,56 @@
 ---
 name: financial-scoring
-description: "Use when changing factor weights, the composite score, ranking, regime weights or prediction thresholds, or when re-scoring a historical date. Do not use for investment validation, KPI/risk interpretation or reporting (financial-analysis), the worksheet (investment-analysis), or model evaluation."
+description: "Use when implementing an approved weight, composite, ranking, regime or threshold change, or when replaying scores for a historical date. Do not use for policy decisions, investment validation or reporting, the worksheet, or model evaluation."
 version: 1
 risk: write
 owner: analysis
-entrypoint: none  # none|fixed|list
-tags: [scoring, ranking]
+entrypoint: none
+tools: []
+tags: [scoring, ranking, lifecycle]
 ---
 
 # Financial Scoring
 
-Own the rule-based composite, its component percentiles, rankings and the
+Own the rule-based composite, component percentiles, rankings and the
 `model.predictions` threshold. The composite is the product; it is not a
-calibrated probability. Interpretation, risk and reporting belong to
-`financial-analysis`.
+calibrated probability. Policy is decided by `business-understanding`;
+interpretation, risk and reporting belong to `financial-analysis`.
 
 ## When to use / when not to use
 
 Use when:
 
-- changing `WEIGHTS` or a component formula;
-- re-scoring a historical date after a policy change;
-- changing the regime weight matrix or the prediction threshold;
+- implementing a weight or component change already approved in
+  `docs/requirements.md`;
+- replaying a historical date after an approved policy change;
+- implementing a regime weight matrix or prediction-threshold change;
 - explaining coverage, a NULL component or a ranking move.
 
 Do not use when:
 
+- deciding weights, universe or acceptance criteria
+  (`business-understanding`);
 - the feature inputs are wrong (`data-transformation`);
 - the task is the walk-forward model gate (`modeling-evaluation`);
 - the task is investment validation, KPI/risk interpretation or a report
   (`financial-analysis`);
 - the task is the 18-step worksheet or a Final recommendation
   (`investment-analysis`);
-- the task is UI presentation only (the Streamlit view).
+- the task is UI presentation only; use `developing-with-streamlit`.
+
+## Runner
+
+- **Mode:** Manual only. There is no executable entrypoint; never guess argv.
+- **Confirmation:** `risk: write`; write only after an approved policy decision.
+
+## Preflight
+
+- [ ] Read `SYSTEM.md` and confirm this skill owns the task.
+- [ ] `git status --short` reviewed.
+- [ ] `python -m scripts.migrate --check` exits 0 if the task touches schema.
+- [ ] Confirm the weight decision is recorded in `docs/requirements.md`.
+- [ ] Do not read `.env`; check env names only.
+- [ ] Confirm no data, feature or policy change is bundled into the replay.
 
 ## Inputs
 
@@ -42,15 +60,16 @@ Do not use when:
 | Table | `model.features` | yes | Point-in-time factor inputs. |
 | File | `src/crispdm/scoring.py` | yes | `WEIGHTS`, components, coverage floor. |
 | File | `src/crispdm/regime.py` | yes | Regime weight matrix. |
-| File | `docs/requirements.md` | yes | The agreed weights and acceptance criteria. |
-| Command | `python -m scripts.score_rank` | yes | Writes scores, predictions, rankings. |
+| File | `docs/requirements.md` | yes | Approved weights and acceptance criteria. |
+| Command | `python -m scripts.score_rank` | yes | Writes scores, predictions and rankings. |
 
 ## Procedure
 
-1. Run the preflight from `SYSTEM.md`.
-2. Read `docs/requirements.md` and confirm the weight decision is recorded
-   there before changing code. Weights must sum to 1; the tests enforce it.
-3. Change the smallest piece: one weight set, one component, or one threshold.
+1. Run the preflight.
+2. Read `docs/requirements.md` and confirm the policy decision, owner and date
+   are recorded before changing code. Weights must sum to 1; tests enforce it.
+3. Change the smallest piece: one weight set, one component, one threshold or
+   one regime input.
 4. Re-score the affected date(s):
 
    ```bash
@@ -62,22 +81,25 @@ Do not use when:
    regime layer is the intended change.
 5. For a policy change, recompute every affected historical date, not only the
    newest one. Older dates are point-in-time history.
-6. Update the Streamlit caption/requirements text when a user-visible weight or
-   definition changes.
-7. Run the scoring tests and the view test.
+6. Update the Streamlit caption/requirements text when a user-visible weight
+   or definition changes.
+7. Run the scoring tests and the relevant view test. Report the historical
+   rank diff and confirm it is the intended policy effect.
+8. Hand off interpretation and reporting to `financial-analysis`.
 
 ## Outputs
 
-- `model.scores`, `model.predictions`, `model.rankings` for the scored
+- `model.scores`, `model.predictions` and `model.rankings` for the scored
   `as_of_date`.
 - Updated weights/thresholds and, when user-visible, the requirements/UI
   caption.
+- A replay diff when historical rankings change.
 
 ## Verification
 
 Pass when:
 
-- `tests/test_scoring.py` passes, including the weights-sum-to-1 assertion;
+- `tests/test_scoring.py` passes, including weights-sum-to-1;
 - `tests/test_score_pruning.py`, `tests/test_regime.py` and
   `tests/test_regime_pipeline.py` pass when the relevant path changed;
 - `tests/test_current_predictions_view.py` passes when the output contract
@@ -86,17 +108,55 @@ Pass when:
   `MIN_PRESENT_WEIGHT` is not silently scored as zero;
 - `model.predictions` rows at the scored date agree with `model.scores`.
 
+```bash
+python -m scripts.skill_audit --skill financial-scoring
+python -m pytest -q tests/test_scoring.py tests/test_score_pruning.py \
+  tests/test_regime.py tests/test_regime_pipeline.py
+```
+
 ## Failure handling
 
-- Weights do not sum to 1: stop; that is a test failure, not a rounding issue.
-- A component is all NULL: report the upstream gap; do not substitute a
-  constant.
+- Weights do not sum to 1: stop; it is a test failure, not rounding.
+- No recorded policy decision: stop and route to `business-understanding`.
+- A component is all NULL: report the upstream gap; do not substitute zero.
 - Pruning would delete rows from an older date: stop; only the scored date may
   be pruned.
-- A replay changes historical rankings: report the diff and confirm it is the
-  intended policy effect.
-- Do not describe `model.predictions` or the composite as a probability or a
+- A replay changes historical rankings: report the diff and confirm the policy
+  effect before claiming success.
+- Never describe `model.predictions` or the composite as a probability or
   calibrated forecast.
+
+## Handoffs
+
+- **Weight/universe/acceptance policy:** route to `business-understanding`.
+- **Feature or fundamentals defect:** route to `data-transformation`.
+- **Missing source data:** route to `data-acquisition`.
+- **Schema drift or migration:** route to `data-storage-schema`.
+- **Nightly freshness or health:** route to
+  `observability-nightly-verification`.
+- **Interpretation, risk or reporting:** route to `financial-analysis`.
+- **ML gate:** route to `modeling-evaluation`.
+- **Secrets or access:** route to `security-compliance`.
+- **Screener presentation:** use `developing-with-streamlit`.
+
+## Stop conditions
+
+- [ ] Task is outside this skill's scope.
+- [ ] The weight change has no approved `docs/requirements.md` decision.
+- [ ] Weights do not sum to 1.
+- [ ] A score/rank would treat NULL or an under-covered security as zero.
+- [ ] Pruning would remove rows from an older date.
+- [ ] A data, schema or feature change is bundled into the scoring run.
+- [ ] The composite would be described as a probability.
+- [ ] A secret would be printed, logged or committed.
+- [ ] Unexpected `git status` changes appear in the scoped area.
+
+## Evidence required
+
+- **Commands:** argv, cwd, exit codes and timestamps.
+- **State:** affected tables/rows, scored date and policy decision path.
+- **Findings:** weight/definition diff, historical rank diff and coverage.
+- **Handoffs:** target skill, reason and evidence.
 
 ## Source of truth
 
@@ -107,42 +167,15 @@ Pass when:
 - `docs/requirements.md`
 - `app/views/screener.py`
 
-## Runner
+## References
 
-- **Mode:** Follow this skill's procedure. The deterministic runner only executes allowlisted fixed entrypoints; most work here is manual unless stated otherwise.
-- **Confirmation:** Skills with `risk: write` or `risk: heavy` require `--yes` when executed via the runner. Never parse commands from Markdown.
+- [Scoring model](references/scoring-model.md) — load when implementing a
+  weight, component, coverage, regime or threshold change.
+- [Change and replay](references/change-and-replay.md) — load when replaying a
+  historical date, pruning or reviewing a rank diff.
 
-## Preflight
+## Context budget
 
-- [ ] Read `SYSTEM.md` and confirm this skill owns the task.
-- [ ] `git status --short` reviewed (note exceptions if any).
-- [ ] `python -m scripts.migrate --check` exits 0 if the task touches the database or schema.
-- [ ] Required environment variables present by name only (never print values). Check `SEC_USER_AGENT` if calling SEC.
-- [ ] No pipeline lock held / no conflicting run in progress if executing `run_full_etl`.
-- [ ] Scope narrowed to the smallest change that satisfies the request.
-
-## Handoffs
-
-- **DB/schema drift:** route to `data-storage-schema` with `migrate --check` output and affected tables.
-- **Missing/dirty source data:** route to `data-acquisition` with coverage gaps and tables.
-- **Freshness/health check:** route to `observability-nightly-verification` with `audit.nightly_runs`/`audit.nightly_checks`.
-- **Security/secret risk:** route to `security-compliance` (do not share secret values).
-- **Investment validation, KPI/risk interpretation or a report:** route to `financial-analysis`.
-- **Scoring/labeling policy:** route to `financial-scoring` or `modeling-evaluation` per boundaries above.
-
-## Stop conditions
-
-- [ ] Task is outside this skill's scope (see "Do not use when").
-- [ ] `python -m scripts.migrate --check` reports pending migrations before a write operation.
-- [ ] `--run-labels` requested with `--limit` or `--tickers` (partial runs must not be labeled).
-- [ ] Action would delete reference rows, prune historical features/returns outside the allowed command, or release a ticker conflict without its dedicated confirmed command.
-- [ ] Secret would be printed, logged, or committed.
-- [ ] Non-zero exit from a required command with no documented "finding" handling.
-- [ ] Unexpected `git status` changes in the scoped area.
-
-## Evidence required
-
-- **Commands:** argv list, cwd, exit codes, timestamps.
-- **State:** affected tables/rows, `audit.nightly_runs`/`audit.nightly_checks`, migration ledger state, or files written.
-- **Findings:** relation/filter/as-of for quantitative claims; diffs for schema/config changes.
-- **Handoffs:** target skill + reason + evidence attached.
+- Always load: this file, the design record and the approved policy decision.
+- Load only the reference named by the current change.
+- Use tests and code for exact formulas; do not restate them from memory.

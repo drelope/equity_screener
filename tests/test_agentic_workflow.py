@@ -51,7 +51,7 @@ def _system_skills() -> set[str]:
 
 def test_every_routed_skill_directory_exists():
     routed = _routing_skills()
-    assert len(routed) == 16
+    assert len(routed) == 21
     on_disk = {skill.name for skill in runner.list_skills()}
     assert routed == on_disk
 

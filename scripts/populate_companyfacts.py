@@ -84,13 +84,18 @@ def payload_hash(payload):
     return hashlib.sha256(encoded).hexdigest()
 
 
-def load_securities(conn, tickers=None, dividend_only=True):
-    """Active securities to ingest.
+def load_securities(
+    conn, tickers=None, dividend_only=True, include_historical=False, historical_only=False
+):
+    """Securities to ingest.
 
-    Defaults to ``dividend = TRUE`` so SEC submissions and XBRL companyfacts
-    are only downloaded for the dividend universe, never for non-payers.
+    Defaults to active ``dividend = TRUE`` so SEC submissions and XBRL
+    companyfacts are only downloaded for the dividend universe, never for
+    non-payers. ``include_historical`` adds the recovered delisted rows.
     """
-    clauses = ["s.active = TRUE"]
+    clauses = (
+        ["(s.active = TRUE OR s.historical = TRUE)"] if include_historical else ["s.active = TRUE"]
+    )
     params = {}
     if dividend_only:
         clauses.append("s.dividend = TRUE")
@@ -101,7 +106,7 @@ def load_securities(conn, tickers=None, dividend_only=True):
     return (
         conn.execute(
             text(f"""
-        SELECT s.security_id, s.ticker
+        SELECT s.security_id, s.ticker, s.cik, s.security_name, s.historical
         FROM reference.securities s
         WHERE {" AND ".join(clauses)}
         ORDER BY s.ticker
@@ -113,7 +118,9 @@ def load_securities(conn, tickers=None, dividend_only=True):
     )
 
 
-def load_companyfacts_targets(conn, tickers=None, dividend_only=True):
+def load_companyfacts_targets(
+    conn, tickers=None, dividend_only=True, include_historical=False, historical_only=False
+):
     """Combine the audited dividend universe with preferred profile targets.
 
     A profile is the durable handoff for preferred dividend securities. Keep
@@ -122,7 +129,12 @@ def load_companyfacts_targets(conn, tickers=None, dividend_only=True):
     """
     targets = {
         row["ticker"].upper(): row
-        for row in load_securities(conn, tickers=tickers, dividend_only=dividend_only)
+        for row in load_securities(
+            conn,
+            tickers=tickers,
+            dividend_only=dividend_only,
+            include_historical=include_historical,
+        )
     }
     for row in load_ticker_profile_targets(conn, tickers=tickers):
         targets.setdefault(row["ticker"].upper(), row)
@@ -551,7 +563,14 @@ def _ingest_cik(conn, cik, linked_entries, stats):
             print(f"Error fetching companyfacts for {ticker} (CIK {cik}): {exc}")
 
 
-def populate_companyfacts(tickers=None, dividend_only=True, max_ciks=None, refresh_after_days=None):
+def populate_companyfacts(
+    tickers=None,
+    dividend_only=True,
+    max_ciks=None,
+    refresh_after_days=None,
+    include_historical=False,
+    historical_only=False,
+):
     """Fetch one submissions and one XBRL payload per unique SEC CIK.
 
     Only downloads payloads for active securities (dividend-flagged by
@@ -592,8 +611,22 @@ def populate_companyfacts(tickers=None, dividend_only=True, max_ciks=None, refre
     with engine.connect() as conn:
         securities = {
             row["ticker"].upper(): row
-            for row in load_companyfacts_targets(conn, tickers, dividend_only)
+            for row in load_companyfacts_targets(
+                conn,
+                tickers,
+                dividend_only,
+                include_historical=include_historical,
+                historical_only=historical_only,
+            )
         }
+        if include_historical or historical_only:
+            for ticker, security in securities.items():
+                if security["historical"] and ticker not in ticker_entries:
+                    ticker_entries[ticker] = {
+                        "ticker": ticker,
+                        "cik_str": security["cik"],
+                        "title": security["security_name"] or "",
+                    }
         entries_by_cik = {}
         for ticker, entry in ticker_entries.items():
             security = securities.get(ticker)
@@ -1040,6 +1073,8 @@ def main():
             dividend_only=dividend_only,
             max_ciks=args.max_ciks,
             refresh_after_days=refresh_after_days,
+            include_historical=args.include_historical,
+            historical_only=args.historical_only,
         )
     except Exception as exc:
         print(f"Companyfacts ingestion failed: {exc}", file=sys.stderr)
