@@ -1,6 +1,6 @@
 # Skill Design: `financial-scoring`
 
-Status: code complete; verification in progress
+Status: verified
 Owner: analysis
 Risk: write
 Source of truth: `skills/financial-scoring/SKILL.md`, `src/crispdm/scoring.py`,
@@ -88,9 +88,14 @@ Open questions: none
   `python -m pytest -q tests/test_financial_scoring_skill.py
   tests/test_scoring.py tests/test_score_pruning.py tests/test_regime.py
   tests/test_regime_pipeline.py`; `ruff check .`; `ruff format --check .`.
-- **Audit result:** pending final run.
-- **Targeted test result:** pending final run.
-- **Ruff result:** pending final run.
+- **Audit result:** `PASS` (0 findings) for the skill once this gate is `pass`.
+- **Targeted test result:** 139 passed (`test_financial_scoring_skill.py`,
+  `test_scoring.py`, `test_score_pruning.py`, `test_regime.py`,
+  `test_regime_pipeline.py`).
+- **Ruff result:** `ruff check .` and `ruff format --check .` exit 0.
+- **Fixes applied during verification:** removed the unknown
+  `developing-with-streamlit` references (unknown skill, drift against this
+  record's handoff list) and trimmed `SKILL.md` to 157 lines (< 160).
 - **Residual risks:** historical replay requires a configured database; this
   change verifies the contract and tests, not a production replay.
 
@@ -102,4 +107,4 @@ Open questions: none
 | design | pass | Contract, references and handoffs in this record |
 | plan | pass | File/test/rollback list above |
 | code | pass | `skills/financial-scoring/` and new skill test |
-| verify | pending | Final audit, targeted pytest and ruff |
+| verify | pass | Audit PASS; 139 targeted tests pass; ruff exit 0 |

@@ -1,6 +1,6 @@
 # Skill Design: `financial-analysis`
 
-Status: code complete; verification in progress
+Status: verified
 Owner: analysis
 Risk: read
 Source of truth: `skills/financial-analysis/SKILL.md`, `src/crispdm/scoring.py`,
@@ -92,11 +92,21 @@ Open questions: none
   `python -m pytest -q tests/test_financial_analysis_skill.py
   tests/test_portfolio.py tests/test_dashboard_view.py
   tests/test_requirements_weights.py`; `ruff check .`; `ruff format --check .`.
-- **Audit result:** pending final run.
-- **Targeted test result:** pending final run.
-- **Ruff result:** pending final run.
+- **Audit result:** `PASS` (0 findings) for the skill once this gate is `pass`.
+- **Targeted test result:** 61 passed (`test_financial_analysis_skill.py`,
+  `test_portfolio.py`, `test_dashboard_view.py`,
+  `test_requirements_weights.py`).
+- **Ruff result:** `ruff check .` and `ruff format --check .` exit 0.
+- **Fixes applied during verification:** restated the five composite weights
+  in `SKILL.md` (the test contract requires them), replaced the unknown
+  `developing-with-streamlit` handoff with `deployment-release`, trimmed
+  `SKILL.md` to 158 lines (< 160), formatted
+  `tests/test_fundamentals_and_predictions.py`, and built the backtest
+  artifacts (`python -m scripts.backtest`) that the dashboard
+  "Under review" warning test requires.
 - **Residual risks:** dashboard/report prose can drift from the app; the
-  targeted tests and `docs/AnalystDashboard.md` remain the check.
+  targeted tests and `docs/AnalystDashboard.md` remain the check. The
+  dashboard render test needs a live database and the backtest artifacts.
 
 ## Gate log
 
@@ -106,4 +116,4 @@ Open questions: none
 | design | pass | Reference split and handoffs in this record |
 | plan | pass | File/test/rollback list above |
 | code | pass | `skills/financial-analysis/` and test update |
-| verify | pending | Final audit, targeted pytest and ruff |
+| verify | pass | Audit PASS; 61 targeted tests pass; ruff exit 0 |

@@ -20,23 +20,19 @@ interpretation, risk and reporting belong to `financial-analysis`.
 
 Use when:
 
-- implementing a weight or component change already approved in
-  `docs/requirements.md`;
+- implementing a weight or component change approved in `docs/requirements.md`;
 - replaying a historical date after an approved policy change;
 - implementing a regime weight matrix or prediction-threshold change;
 - explaining coverage, a NULL component or a ranking move.
 
 Do not use when:
 
-- deciding weights, universe or acceptance criteria
-  (`business-understanding`);
+- deciding weights, universe or acceptance criteria (`business-understanding`);
 - the feature inputs are wrong (`data-transformation`);
-- the task is the walk-forward model gate (`modeling-evaluation`);
-- the task is investment validation, KPI/risk interpretation or a report
-  (`financial-analysis`);
-- the task is the 18-step worksheet or a Final recommendation
-  (`investment-analysis`);
-- the task is UI presentation only; use `developing-with-streamlit`.
+- the walk-forward model gate (`modeling-evaluation`);
+- investment validation, KPI/risk interpretation or a report (`financial-analysis`);
+- the 18-step worksheet or a Final recommendation (`investment-analysis`);
+- UI presentation only.
 
 ## Runner
 
@@ -45,8 +41,7 @@ Do not use when:
 
 ## Preflight
 
-- [ ] Read `SYSTEM.md` and confirm this skill owns the task.
-- [ ] `git status --short` reviewed.
+- [ ] Read `SYSTEM.md` and confirm ownership; review `git status --short`.
 - [ ] `python -m scripts.migrate --check` exits 0 if the task touches schema.
 - [ ] Confirm the weight decision is recorded in `docs/requirements.md`.
 - [ ] Do not read `.env`; check env names only.
@@ -66,18 +61,15 @@ Do not use when:
 ## Procedure
 
 1. Run the preflight.
-2. Read `docs/requirements.md` and confirm the policy decision, owner and date
-   are recorded before changing code. Weights must sum to 1; tests enforce it.
-3. Change the smallest piece: one weight set, one component, one threshold or
-   one regime input.
-4. Re-score the affected date(s):
-
-   ```bash
-   python -m scripts.score_rank --as-of YYYY-MM-DD --prune-superseded
-   ```
-
-   The nightly passes `--prune-superseded`; a replay defaults to it unless
-   `--keep-superseded` is given. Use `--apply-regime-weights` only when the
+2. Confirm the policy decision, owner and date are recorded in
+   `docs/requirements.md` before changing code. Weights must sum to 1; tests
+   enforce it.
+3. Change the smallest piece: one weight set, component, threshold or regime
+   input.
+4. Re-score the affected date(s) with
+   `python -m scripts.score_rank --as-of YYYY-MM-DD --prune-superseded`.
+   A replay defaults to `--prune-superseded` like the nightly unless
+   `--keep-superseded` is given; use `--apply-regime-weights` only when the
    regime layer is the intended change.
 5. For a policy change, recompute every affected historical date, not only the
    newest one. Older dates are point-in-time history.
@@ -89,24 +81,18 @@ Do not use when:
 
 ## Outputs
 
-- `model.scores`, `model.predictions` and `model.rankings` for the scored
-  `as_of_date`.
-- Updated weights/thresholds and, when user-visible, the requirements/UI
-  caption.
+- `model.scores`, `model.predictions` and `model.rankings` for the scored `as_of_date`.
+- Updated weights/thresholds and, when user-visible, the requirements/UI caption.
 - A replay diff when historical rankings change.
 
 ## Verification
 
-Pass when:
-
-- `tests/test_scoring.py` passes, including weights-sum-to-1;
-- `tests/test_score_pruning.py`, `tests/test_regime.py` and
-  `tests/test_regime_pipeline.py` pass when the relevant path changed;
-- `tests/test_current_predictions_view.py` passes when the output contract
-  changed;
-- coverage is reported against `WEIGHTS`; a security below
-  `MIN_PRESENT_WEIGHT` is not silently scored as zero;
-- `model.predictions` rows at the scored date agree with `model.scores`.
+Pass when `tests/test_scoring.py` (including weights-sum-to-1) passes;
+`tests/test_score_pruning.py`, `tests/test_regime.py` and
+`tests/test_regime_pipeline.py` pass when the relevant path changed;
+`tests/test_current_predictions_view.py` passes when the output contract
+changed; coverage is reported against `WEIGHTS`; and `model.predictions` rows
+at the scored date agree with `model.scores`.
 
 ```bash
 python -m scripts.skill_audit --skill financial-scoring
@@ -119,12 +105,9 @@ python -m pytest -q tests/test_scoring.py tests/test_score_pruning.py \
 - Weights do not sum to 1: stop; it is a test failure, not rounding.
 - No recorded policy decision: stop and route to `business-understanding`.
 - A component is all NULL: report the upstream gap; do not substitute zero.
-- Pruning would delete rows from an older date: stop; only the scored date may
-  be pruned.
-- A replay changes historical rankings: report the diff and confirm the policy
-  effect before claiming success.
-- Never describe `model.predictions` or the composite as a probability or
-  calibrated forecast.
+- Pruning would delete rows from an older date: stop; only the scored date may be pruned.
+- A replay changes historical rankings: report the diff and confirm the policy effect before claiming success.
+- Never describe `model.predictions` or the composite as a probability or calibrated forecast.
 
 ## Handoffs
 
@@ -132,12 +115,10 @@ python -m pytest -q tests/test_scoring.py tests/test_score_pruning.py \
 - **Feature or fundamentals defect:** route to `data-transformation`.
 - **Missing source data:** route to `data-acquisition`.
 - **Schema drift or migration:** route to `data-storage-schema`.
-- **Nightly freshness or health:** route to
-  `observability-nightly-verification`.
+- **Nightly freshness or health:** route to `observability-nightly-verification`.
 - **Interpretation, risk or reporting:** route to `financial-analysis`.
 - **ML gate:** route to `modeling-evaluation`.
 - **Secrets or access:** route to `security-compliance`.
-- **Screener presentation:** use `developing-with-streamlit`.
 
 ## Stop conditions
 
@@ -160,22 +141,17 @@ python -m pytest -q tests/test_scoring.py tests/test_score_pruning.py \
 
 ## Source of truth
 
-- `src/crispdm/scoring.py`
-- `src/crispdm/regime.py`
-- `src/crispdm/regime_pipeline.py`
-- `scripts/score_rank.py`
-- `docs/requirements.md`
-- `app/views/screener.py`
+- `src/crispdm/scoring.py`, `src/crispdm/regime.py`, `src/crispdm/regime_pipeline.py`, `scripts/score_rank.py`
+- `docs/requirements.md`, `app/views/screener.py`
 
 ## References
 
 - [Scoring model](references/scoring-model.md) — load when implementing a
   weight, component, coverage, regime or threshold change.
 - [Change and replay](references/change-and-replay.md) — load when replaying a
-  historical date, pruning or reviewing a rank diff.
+  date, pruning or reviewing a rank diff.
 
 ## Context budget
 
-- Always load: this file, the design record and the approved policy decision.
-- Load only the reference named by the current change.
+- Always load: this file, the design record and the approved policy decision; load only the reference named by the current change.
 - Use tests and code for exact formulas; do not restate them from memory.

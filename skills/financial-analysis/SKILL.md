@@ -22,8 +22,7 @@ Use when:
 - validating a dividend candidate or explaining a score, rank or coverage move;
 - interpreting a KPI, component percentile, risk figure or dashboard tab;
 - preparing a morning note, performance report, risk report, IC memo or
-  research note;
-- checking whether a recommendation has the evidence and risk work it needs.
+  research note with the evidence and risk work it needs.
 
 Do not use when:
 
@@ -66,9 +65,8 @@ Do not use when:
    as-of date. Name the universe and benchmark.
 3. Load point-in-time evidence and record coverage/freshness. Stop if the
    as-of date is stale or the security is below the score floor.
-4. Decompose the composite into its five components; state each weight and
-   coverage. Explain a score move as a component and universe move, not a
-   forecast.
+4. Decompose the composite into its five weighted components with coverage.
+   Explain a score move as a component and universe move, not a forecast.
 5. Work the validation checklist and risk decomposition. Label every item
    observed, derived, inferred or unavailable.
 6. Form the view: variant perception, scenarios, base rate, catalysts and kill
@@ -79,6 +77,7 @@ Do not use when:
 9. Hand off policy to `business-understanding`, scoring to
    `financial-scoring`, and worksheet/Final to `investment-analysis`.
 
+Weights: dividend income 1/3 (33.33%), sustainability 4/15 (26.67%), appreciation 1/5 (20.00%), risk 2/15 (13.33%), valuation 1/15 (6.67%).
 `MIN_PRESENT_WEIGHT` is 0.50. The regime layer only changes the blend after a
 security clears that floor. `model.predictions` is a relative rank, never a
 calibrated probability.
@@ -94,11 +93,9 @@ calibrated probability.
 
 ## Verification
 
-Pass when:
-
-- `tests/test_financial_analysis_skill.py` confirms the contract and tabs.
-- Portfolio, dashboard and requirements-weight tests pass.
-- Every metric has a source/as-of; the composite is never called a probability.
+Pass when `tests/test_financial_analysis_skill.py`, the portfolio, dashboard
+and requirements-weight tests pass; every metric has a source/as-of and the
+composite is never called a probability.
 
 ```bash
 python -m scripts.skill_audit --skill financial-analysis
@@ -110,8 +107,8 @@ python -m pytest -q tests/test_financial_analysis_skill.py tests/test_portfolio.
 
 - Stale or missing as-of data: stop and report the latest date.
 - Coverage below `MIN_PRESENT_WEIGHT`: do not score or rank the security.
-- All-NULL component: report the upstream gap; never substitute zero.
-- Unavailable metric: show N/A and the reason; never infer it from peers.
+- All-NULL component or unavailable metric: report the gap or show N/A with
+  the reason; never substitute zero or infer it from peers.
 - No Final worksheet: no IC memo; show Draft or "no call".
 - Weights disagree with code: code wins; route the docs fix to `business-understanding`.
 - The local LLM returns a number or recommendation: discard it.
@@ -126,9 +123,7 @@ python -m pytest -q tests/test_financial_analysis_skill.py tests/test_portfolio.
 - **Schema:** route to `data-storage-schema` with the drift output.
 - **Health:** route to `observability-nightly-verification`.
 - **ML gate:** route to `modeling-evaluation`.
-- **Security:** route to `security-compliance`.
-- **Dashboard UI:** route to `developing-with-streamlit`; release via
-  `deployment-release`.
+- **Security:** route to `security-compliance`; **dashboard UI release:** route to `deployment-release`.
 
 ## Stop conditions
 
@@ -144,16 +139,13 @@ python -m pytest -q tests/test_financial_analysis_skill.py tests/test_portfolio.
 
 ## Evidence required
 
-- **Commands:** argv, cwd, exit codes and timestamps.
-- **State:** tables/rows read and the as-of date.
-- **Findings:** relation/filter/as-of; component and coverage attribution.
-- **Reports:** type, artifact path, source and caveats shown.
+- **Commands:** argv, cwd, exit codes and timestamps; **state:** tables/rows read with the as-of date.
+- **Findings/reports:** relation/filter/as-of, component and coverage attribution; report type, artifact path, source and caveats shown.
 
 ## Source of truth
 
-- `src/crispdm/scoring.py`, `src/crispdm/regime.py`, `src/crispdm/returns.py`
-- `src/crispdm/portfolio.py`, `app/views/dashboard.py`, `app/analysis_schema.py`
-- `docs/AnalystDashboard.md`, `docs/InvestmentAnalysisWorkflow.md`
+- `src/crispdm/scoring.py`, `src/crispdm/regime.py`, `src/crispdm/returns.py`, `src/crispdm/portfolio.py`
+- `app/views/dashboard.py`, `app/analysis_schema.py`, `docs/AnalystDashboard.md`, `docs/InvestmentAnalysisWorkflow.md`
 - `docs/requirements.md`, `docs/FinancialAnalyst.md` (partial reference only)
 
 ## References
@@ -162,6 +154,5 @@ python -m pytest -q tests/test_financial_analysis_skill.py tests/test_portfolio.
 - [Validation and risk](references/validation-and-risk.md) — load for risk or sizing.
 - [Reports and dashboard](references/reports-and-dashboard.md) — load for a report or tab.
 
-## Context budget
-
-- Always load this file, the design record and the as-of evidence; otherwise load only the named reference.
+Load only the reference the current question names; always load the design
+record and the as-of evidence.
