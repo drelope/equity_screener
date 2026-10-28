@@ -512,6 +512,28 @@ Phase 2 scratch-database evidence (2026-10-28, scratch database
   sweeps the full SEC ticker file. `--limit` is the working narrow scope for a
   scratch proof.
 
+Heavy-skill drill evidence (2026-10-28, against the live warehouse):
+
+- `data-backup-recovery`: full §3 dump (`backup_20261028.dump`, custom format,
+  2.6 GB, 1100 TOC entries) verified readable with `pg_restore --list`, copied
+  out of the volume to `data/backups/`, and restored into a scratch database
+  (`restore_drill`, 10 GB, zero restore errors). Verification clauses all
+  passed: six checked tables matched live row counts exactly
+  (`reference.securities` 12,495; `raw.market_data` 9,852,886;
+  `raw.dividend_data` 320,527; `model.features` 9,745,254; `model.scores`
+  440,138; `audit.nightly_runs` 36), `migrate --check` exited 0 at V0094, and
+  `verify_nightly_run` reported the expected state (a faithful copy of live,
+  including the 2026-10-27 stage-2 failure fixed in `daa5a70`). Scratch
+  dropped after the drill.
+- `data-archiving`: `resolve_ticker_conflict review --json` runs clean and
+  classifies the one open conflict (`SATS`) as `STALE` -- release-eligible but
+  deferred, since the release path is the dedicated confirmed command.
+  `audit.source_lineage` retained 25,976 rows, byte-identical after the
+  restore drill; `data/ticker_conflict_archive/` holds three prior release
+  archives; no point-in-time history was pruned. The superseded-prediction
+  prune path (`score_rank --prune-superseded`) ran as stage 8 of the phase-2
+  scratch ETL and is covered by `tests/test_score_pruning.py`.
+
 The executor stays deterministic. `skill-verify` is the only read-only fixed
 entrypoint; all write/heavy execution still requires explicit confirmation.
 
