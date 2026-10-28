@@ -848,10 +848,7 @@ def test_a_selected_ticker_outside_the_default_universe_is_kept(without_token):
 def test_a_shared_link_selects_the_ticker(without_token):
     with engine.connect() as conn:
         ticker = conn.execute(
-            text(
-                "SELECT ticker FROM reference.securities "
-                "WHERE active ORDER BY ticker LIMIT 1"
-            )
+            text("SELECT ticker FROM reference.securities WHERE active ORDER BY ticker LIMIT 1")
         ).scalar()
     assert ticker, "expected at least one active security"
 
