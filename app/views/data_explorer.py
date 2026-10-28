@@ -20,7 +20,7 @@ NO_SORT = "(none)"
 ROW_LIMITS = [100, 500, 1000, explorer.MAX_ROWS]
 
 
-@st.cache_data(ttl=300, show_spinner=False)
+@st.cache_data(ttl=300, show_spinner="Reflecting the database schema")
 def columns_of(relation: str) -> dict[str, str]:
     with ui.engine.connect() as conn:
         return explorer.reflect_columns(conn, relation)

@@ -47,7 +47,7 @@ WHERE a.attnum > 0 AND NOT a.attisdropped
 """
 
 
-@st.cache_data(ttl=300, show_spinner=False)
+@st.cache_data(ttl=300, show_spinner="Loading column documentation")
 def _comments() -> dict:
     """Read every column comment once.
 

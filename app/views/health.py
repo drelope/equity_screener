@@ -76,7 +76,7 @@ def _stage_rows(stages: dict | None) -> list[dict]:
     ]
 
 
-@st.cache_data(ttl=120, show_spinner=False)
+@st.cache_data(ttl=120, show_spinner="Running the verification check")
 def verification(run_date) -> dict:
     with ui.engine.connect() as conn:
         findings = verify.fetch_findings(conn, run_date, settings.dividend_lookback_start)

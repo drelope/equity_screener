@@ -262,7 +262,7 @@ def _monthly_heatmap(monthly: pd.DataFrame) -> None:
 BACKTEST_DIR = Path(__file__).resolve().parents[2] / "artifacts" / "backtests"
 
 
-@st.cache_data(ttl=300, show_spinner=False)
+@st.cache_data(ttl=300, show_spinner="Loading the latest backtest")
 def _load_latest_backtest(directory: str) -> dict | None:
     """The newest run with all three outputs written: metrics, daily series, periods."""
     for metrics_path in sorted(Path(directory).glob("metrics_*.json"), reverse=True):
