@@ -1034,6 +1034,16 @@ def main():
         "costs nothing on days when nothing can have changed. Implies refresh "
         "for any value, including 0 (= always re-fetch).",
     )
+    parser.add_argument(
+        "--include-historical",
+        action="store_true",
+        help="Also fetch payloads for securities recovered from EDGAR after delisting",
+    )
+    parser.add_argument(
+        "--historical-only",
+        action="store_true",
+        help="Fetch only the recovered delisted securities",
+    )
     args = parser.parse_args()
     refresh_after_days = args.refresh_after_days
     if refresh_after_days is None and args.refresh:

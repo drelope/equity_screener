@@ -753,11 +753,14 @@ def _save_amount_checks(checks):
     print(f"Settled FMP/Yahoo amount disagreements: {chosen}")
 
 
-def load_security_ids(conn, include_historical=False):
+def load_security_ids(conn, include_historical=False, historical_only=False):
     """Load active ticker and CIK mappings once for the entire database write."""
-    universe = (
-        "(s.active = TRUE OR s.historical = TRUE)" if include_historical else "s.active = TRUE"
-    )
+    if historical_only:
+        universe = "s.historical = TRUE"
+    elif include_historical:
+        universe = "(s.active = TRUE OR s.historical = TRUE)"
+    else:
+        universe = "s.active = TRUE"
     rows = conn.execute(
         text(f"""
         SELECT DISTINCT ON (s.ticker) s.ticker, s.security_id, s.cik

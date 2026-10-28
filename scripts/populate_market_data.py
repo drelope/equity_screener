@@ -96,13 +96,21 @@ def parse_date(value):
 
 
 def get_target_securities(
-    conn, tickers=None, dividend_only=True, limit=None, include_historical=False
+    conn,
+    tickers=None,
+    dividend_only=True,
+    limit=None,
+    include_historical=False,
+    historical_only=False,
 ):
     """Return ``(security_id, ticker)`` for the price-ingestion universe."""
     params = {}
-    clauses = (
-        ["(s.active = TRUE OR s.historical = TRUE)"] if include_historical else ["s.active = TRUE"]
-    )
+    if historical_only:
+        clauses = ["s.historical = TRUE"]
+    elif include_historical:
+        clauses = ["(s.active = TRUE OR s.historical = TRUE)"]
+    else:
+        clauses = ["s.active = TRUE"]
     if dividend_only:
         clauses.append("s.dividend = TRUE")
     if tickers:

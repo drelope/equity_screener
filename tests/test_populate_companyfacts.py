@@ -1,8 +1,10 @@
+import sys
 from unittest.mock import patch
 
 import pytest
 import requests
 
+from scripts import populate_companyfacts
 from scripts.populate_companyfacts import (
     PREFERRED_TAXONOMY_CONCEPTS,
     _ingest_taxonomy_cik,
@@ -168,3 +170,27 @@ def test_upsert_company_taxonomy_guards_payload_rewrite_on_unchanged_hash():
     assert sql.strip().startswith("INSERT INTO raw.company_taxonomy")
     assert "raw.company_taxonomy.content_hash IS DISTINCT FROM EXCLUDED.content_hash" in sql
     assert "ELSE raw.company_taxonomy.raw_payload END" in sql
+
+
+def test_main_dividend_sweep_passes_historical_flags(monkeypatch):
+    """Regression: main() read args.include_historical / args.historical_only
+    without defining the options, so the dividend-universe sweep (stage 4b)
+    exited 1 on every run while the preferred and unlinked sweeps passed."""
+    calls = {}
+
+    def fake_populate(**kwargs):
+        calls.update(kwargs)
+
+    monkeypatch.setattr(populate_companyfacts, "populate_companyfacts", fake_populate)
+    monkeypatch.setattr(sys, "argv", ["populate_companyfacts"])
+    assert populate_companyfacts.main() == 0
+    assert calls["include_historical"] is False
+    assert calls["historical_only"] is False
+
+    monkeypatch.setattr(sys, "argv", ["populate_companyfacts", "--historical-only"])
+    assert populate_companyfacts.main() == 0
+    assert calls["historical_only"] is True
+
+    monkeypatch.setattr(sys, "argv", ["populate_companyfacts", "--include-historical"])
+    assert populate_companyfacts.main() == 0
+    assert calls["include_historical"] is True

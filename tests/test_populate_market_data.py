@@ -55,6 +55,46 @@ def test_get_target_securities_can_include_non_dividend_securities():
     assert "s.dividend = TRUE" not in conn.statements[0]
 
 
+def test_get_target_securities_can_include_historical_securities():
+    conn = _FakeConnection()
+
+    populate_market_data.get_target_securities(conn, include_historical=True)
+
+    assert "(s.active = TRUE OR s.historical = TRUE)" in conn.statements[0]
+
+
+def test_get_target_securities_historical_only_excludes_active():
+    conn = _FakeConnection()
+
+    populate_market_data.get_target_securities(conn, historical_only=True)
+
+    assert "s.historical = TRUE" in conn.statements[0]
+    assert "s.active = TRUE" not in conn.statements[0]
+
+
+def test_populate_market_data_forwards_historical_only(tmp_path):
+    """Regression: populate_market_data passed historical_only to
+    get_target_securities, which did not accept it, so every run of the stage
+    exited 1 before fetching a single price. The nightly chain stopped here.
+    """
+
+    class _Engine:
+        def connect(self):
+            class _Ctx:
+                def __enter__(self):
+                    return _FakeConnection()
+
+                def __exit__(self, *exc):
+                    return False
+
+            return _Ctx()
+
+    with patch.object(populate_market_data, "engine", _Engine()):
+        result = populate_market_data.populate_market_data(historical_only=True)
+
+    assert result == (0, 0, 0, 0, 0)
+
+
 def test_normalize_price_rows_maps_openbb_columns():
     frame = pd.DataFrame(
         [

@@ -473,9 +473,44 @@ table in the same change, mirroring the discipline enforced by
 |---|---|---|---|
 | 0 | This document; delete the root sketch | `git diff --check` | Done |
 | 1 | `SYSTEM.md`, `skills/_template/`, read-only skills (`observability-nightly-verification`, `security-compliance`, `data-understanding`) | manual review | Implemented; pending review |
-| 2 | Write skills and their verifiers, starting with `data-storage-schema` and `data-refresh-operations` | each skill's verifier proves it on a scratch database | Skills done; verifier runs pending |
+| 2 | Write skills and their verifiers, starting with `data-storage-schema` and `data-refresh-operations` | each skill's verifier proves it on a scratch database | Done (evidence below) |
 | 3 | `scripts/agent_runner.py`, `artifacts/`, `.gitignore` entry, drift test | `ruff`, `pytest`, one dry run | Done |
 | 4 | Five lifecycle skills, `docs/skill-lifecycle.md`, `scripts/skill_audit.py`, design records | `skill_audit --all`, lifecycle and runner tests | Done |
+
+Phase 2 scratch-database evidence (2026-10-28, scratch database
+`skill_verify_scratch`, dropped after the runs):
+
+- `data-storage-schema`: `init_db` + `migrate` (92 versioned migrations
+  applied on top of the baseline), `migrate --check` exit 0,
+  `check_schema_drift --quiet` exit 0 (live 1218 = reference 1218 objects),
+  `tests/test_migrate.py` + `tests/test_schema_drift.py` 26 passed.
+- `data-refresh-operations`: `run_full_etl --limit 500 --trigger manual`
+  exit 0 (24 stages, none failed); `audit.nightly_runs` row for 2026-10-28
+  with `status=success, exit_code=0`; `verify_nightly_run` exit 0 with every
+  check OK; the limited run touched only the requested scope (500-ticker
+  snapshot, 273 dividend payers downstream).
+- The scratch run caught three stage-crashing defects from the
+  `historical_only` refactor in commit `a78bb42` before the nightly hit them:
+  `populate_market_data.get_target_securities` and
+  `populate_dividend_data.load_security_ids` were called with a
+  `historical_only` keyword they did not accept, and
+  `populate_companyfacts.main` read `args.include_historical` /
+  `args.historical_only` without defining the options. Fixed with regression
+  tests in `tests/test_populate_market_data.py`,
+  `tests/test_populate_dividend_data.py` and
+  `tests/test_populate_companyfacts.py`.
+- Remaining write-skill verifiers are their targeted suites:
+  `test_scoring.py` + `test_score_pruning.py` (44), `test_features.py` (78),
+  `test_fundamentals_and_predictions.py` (37),
+  `test_workflow_doc.py` + `test_analysis_schema.py` (50),
+  `test_portfolio.py` + `test_dashboard_view.py` +
+  `test_financial_analysis_skill.py` (57), `test_dry_run_walk_forward.py` +
+  `test_run_full_etl_stages.py` + `test_stage_exit_codes.py` (23) — all pass.
+- Scope note recorded from the runs: on a cold database,
+  `run_full_etl --tickers` does not bound stage 0 (`populate_raw_tables`
+  accepts only `--limit`), so a ticker-scoped refresh of an empty warehouse
+  sweeps the full SEC ticker file. `--limit` is the working narrow scope for a
+  scratch proof.
 
 The executor stays deterministic. `skill-verify` is the only read-only fixed
 entrypoint; all write/heavy execution still requires explicit confirmation.

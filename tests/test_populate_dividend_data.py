@@ -11,6 +11,7 @@ from scripts.populate_dividend_data import (
     extract_sec_dividend_data,
     get_latest_dividend_rate,
     infer_frequency,
+    load_security_ids,
     normalize_currency,
     normalize_openbb_dividend_rows,
     normalize_sec_dividend_rows,
@@ -304,6 +305,50 @@ class _QueueConn:
     def execute(self, sql, params=None):
         self.executed.append((str(sql), params))
         return self._results.pop(0)
+
+
+class _EmptyMappings:
+    def mappings(self):
+        return []
+
+
+class _MappingsConn:
+    """Records the statement and returns an empty mappings cursor."""
+
+    def __init__(self):
+        self.statements = []
+
+    def execute(self, sql, params=None):
+        self.statements.append(str(sql))
+        return _EmptyMappings()
+
+
+def test_load_security_ids_historical_only_uses_historical_universe():
+    """Regression: the writer passed historical_only to load_security_ids,
+    which did not accept it, so the dividend stage exited 1 mid-nightly."""
+    conn = _MappingsConn()
+
+    load_security_ids(conn, historical_only=True)
+
+    assert "s.historical = TRUE" in conn.statements[0]
+    assert "s.active = TRUE" not in conn.statements[0]
+
+
+def test_load_security_ids_include_historical_unions_both():
+    conn = _MappingsConn()
+
+    load_security_ids(conn, include_historical=True)
+
+    assert "(s.active = TRUE OR s.historical = TRUE)" in conn.statements[0]
+
+
+def test_load_security_ids_defaults_to_active():
+    conn = _MappingsConn()
+
+    load_security_ids(conn)
+
+    assert "s.active = TRUE" in conn.statements[0]
+    assert "s.historical" not in conn.statements[0]
 
 
 def _run_dividend_profile(monkeypatch, openbb_payload):
