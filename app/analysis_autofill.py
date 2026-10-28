@@ -524,8 +524,9 @@ def load_macro(query=None) -> dict:
         query = ui.query
     try:
         frame = query(
-            "SELECT DISTINCT ON (series_id) series_id, value, as_of, source "
-            "FROM raw.macro_series ORDER BY series_id, as_of DESC"
+            "SELECT DISTINCT ON (series_id) series_id, value, "
+            "observation_date AS as_of, source "
+            "FROM raw.macro_series ORDER BY series_id, observation_date DESC"
         )
     except Exception:  # noqa: BLE001 - an unloaded warehouse is not a page failure
         return {}

@@ -1,6 +1,6 @@
 # File-Based Agentic Workflow
 
-Status: phase 3 complete. `SYSTEM.md`, `skills/_template/`, all 21 skills,
+Status: phase 4 complete. `SYSTEM.md`, `skills/_template/`, all 21 skills,
 the deterministic executor (`scripts/agent_runner.py`), the skill lifecycle
 (`docs/skill-lifecycle.md`), the audit (`scripts/skill_audit.py`), gitignored
 run artifacts and the drift test exist. The pipeline they wrap is real and
@@ -69,17 +69,26 @@ the repository:
 ```text
 dividend_equity_crispdm/
 ├── SYSTEM.md                              # Existing: global rules + routing pointer
+├── docs/
+│   ├── skill-lifecycle.md                 # Existing: five-gate authoring contract
+│   └── skill-designs/                     # Existing: per-skill gate evidence
 ├── scripts/
 │   ├── run_full_etl.py                    # Existing: stage orchestrator
-│   └── agent_runner.py                    # Existing: thin workflow executor
+│   ├── agent_runner.py                    # Existing: thin workflow executor
+│   └── skill_audit.py                     # Existing: deterministic skill gate
 ├── skills/                                # Existing: one capability per directory
 │   ├── _template/                         # Existing (copy source)
 │   │   └── SKILL.md
 │   ├── skill-clarify/                     # Existing (write)
+│   │   └── SKILL.md
 │   ├── skill-design/                      # Existing (write)
+│   │   └── SKILL.md
 │   ├── skill-plan/                        # Existing (write)
+│   │   └── SKILL.md
 │   ├── skill-code/                        # Existing (write)
+│   │   └── SKILL.md
 │   ├── skill-verify/                      # Existing (read, fixed audit)
+│   │   └── SKILL.md
 │   ├── business-understanding/            # Existing (write)
 │   │   └── SKILL.md
 │   ├── data-understanding/                # Existing (read)
@@ -466,7 +475,7 @@ table in the same change, mirroring the discipline enforced by
 | 1 | `SYSTEM.md`, `skills/_template/`, read-only skills (`observability-nightly-verification`, `security-compliance`, `data-understanding`) | manual review | Implemented; pending review |
 | 2 | Write skills and their verifiers, starting with `data-storage-schema` and `data-refresh-operations` | each skill's verifier proves it on a scratch database | Skills done; verifier runs pending |
 | 3 | `scripts/agent_runner.py`, `artifacts/`, `.gitignore` entry, drift test | `ruff`, `pytest`, one dry run | Done |
-| 4 | Five lifecycle skills, `docs/skill-lifecycle.md`, `scripts/skill_audit.py`, design records | `skill_audit --all`, lifecycle and runner tests | Implemented; verification in progress |
+| 4 | Five lifecycle skills, `docs/skill-lifecycle.md`, `scripts/skill_audit.py`, design records | `skill_audit --all`, lifecycle and runner tests | Done |
 
 The executor stays deterministic. `skill-verify` is the only read-only fixed
 entrypoint; all write/heavy execution still requires explicit confirmation.
@@ -475,5 +484,6 @@ entrypoint; all write/heavy execution still requires explicit confirmation.
 
 - Resolved: `scripts/agent_runner.py` and the loader discover root `skills/`.
   External clients should use the runner or follow the same root.
+- Resolved: the executor stays strictly deterministic; model choice belongs to
+  the client invoking the workflow.
 - Whether run artifacts are retained indefinitely or pruned by age.
-- Whether the executor ever calls a model, or stays strictly deterministic.

@@ -474,6 +474,9 @@ def test_fetch_company_records_providers_and_keeps_going_after_a_failure():
 def test_load_macro_reads_the_latest_row_per_series():
     def query(sql, params=None):
         assert "raw.macro_series" in sql
+        # The real table names its date column observation_date; guard the mapping.
+        assert "observation_date AS as_of" in sql
+        assert "ORDER BY series_id, observation_date DESC" in sql
         return pd.DataFrame(
             [
                 {"series_id": "IG_OAS", "value": 0.8, "as_of": "2026-10-19", "source": "FRED"},
@@ -484,6 +487,7 @@ def test_load_macro_reads_the_latest_row_per_series():
     macro = autofill.load_macro(query=query)
 
     assert macro["IG_OAS"]["value"] == 0.8
+    assert macro["IG_OAS"]["as_of"] == "2026-10-19"
     assert macro["HY_OAS"]["source"] == "FRED"
 
 
