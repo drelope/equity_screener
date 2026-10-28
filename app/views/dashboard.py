@@ -65,62 +65,80 @@ def _ratio(value, digits: int = 2) -> str:
 
 
 def _load_context() -> dict | None:
-    dates = pf.load_score_dates(query=ui.query)
-    if len(dates) == 0:
-        return None
-    formed = pf.rebalance_date(dates)
-    latest = pd.Timestamp(dates[-1])
-    scored = pf.load_universe(formed, query=ui.query)
-    if scored.empty:
-        return None
-    split_events = pf.load_split_events(query=ui.query)
-    # One cleaned pass over the scored universe. Names with unreliable histories are
-    # removed before the book is chosen, the same rule the backtest applies.
-    cleaned, _ = pf.clean_prices(
-        pf.load_prices(scored["security_id"], formed, latest, query=ui.query),
-        split_events=split_events,
-    )
-    universe = pf.exclude_unreliable(scored, cleaned)
-    if universe.empty:
-        return None
-    book = pf.select_portfolio(universe)
-    prices = cleaned[cleaned["security_id"].isin(book["security_id"].astype(str))]
-    returns = pf.total_return_matrix(prices)
-    path = pf.portfolio_returns(returns, book)
-    if path.empty:
-        return None
-    benchmark = None
-    benchmark_prices = cleaned[cleaned["security_id"].isin(universe["security_id"].astype(str))]
-    if not benchmark_prices.empty:
-        benchmark = pf.total_return_matrix(benchmark_prices).mean(axis=1, skipna=True)
-    risk_free = pf.load_risk_free(path.index, query=ui.query)
-    performance = pf.performance_metrics(path["return"], benchmark, risk_free=risk_free)
-    risk = pf.risk_metrics(returns, book)
-    f_scores = pf.load_f_scores(book["security_id"], formed, query=ui.query)
-    table = pf.holdings_table(book, returns, f_scores, risk)
-    analyses = pf.load_analyses(query=ui.query)
-    catalysts = pf.load_catalysts(
-        book["security_id"], latest, latest + pd.Timedelta(days=90), query=ui.query
-    )
-    completed = [
-        period for period in dates.to_period("M").unique() if period <= formed.to_period("M")
-    ]
-    return {
-        "dates": dates,
-        "formed": formed,
-        "latest": latest,
-        "universe": universe,
-        "book": book,
-        "returns": returns,
-        "path": path,
-        "benchmark": benchmark,
-        "performance": performance,
-        "risk": risk,
-        "table": table,
-        "analyses": analyses,
-        "catalysts": catalysts,
-        "rebalances": len(completed),
-    }
+    try:
+        dates = pf.load_score_dates(query=ui.query)
+        if len(dates) == 0:
+            return None
+        formed = pf.rebalance_date(dates)
+        latest = pd.Timestamp(dates[-1])
+        scored = pf.load_universe(formed, query=ui.query)
+        if scored.empty:
+            return None
+        split_events = pf.load_split_events(query=ui.query)
+        # One cleaned pass over the scored universe. Names with unreliable histories are
+        # removed before the book is chosen, the same rule the backtest applies.
+        cleaned, _ = pf.clean_prices(
+            pf.load_prices(scored["security_id"], formed, latest, query=ui.query),
+            split_events=split_events,
+        )
+        universe = pf.exclude_unreliable(scored, cleaned)
+        if universe.empty:
+            return None
+        book = pf.select_portfolio(universe)
+        prices = cleaned[cleaned["security_id"].isin(book["security_id"].astype(str))]
+        returns = pf.total_return_matrix(prices)
+        path = pf.portfolio_returns(returns, book)
+        if path.empty:
+            return None
+        benchmark = None
+        benchmark_prices = cleaned[cleaned["security_id"].isin(universe["security_id"].astype(str))]
+        if not benchmark_prices.empty:
+            benchmark = pf.total_return_matrix(benchmark_prices).mean(axis=1, skipna=True)
+        risk_free = pf.load_risk_free(path.index, query=ui.query)
+        performance = pf.performance_metrics(path["return"], benchmark, risk_free=risk_free)
+        risk = pf.risk_metrics(returns, book)
+        f_scores = pf.load_f_scores(book["security_id"], formed, query=ui.query)
+        table = pf.holdings_table(book, returns, f_scores, risk)
+        analyses = pf.load_analyses(query=ui.query)
+        catalysts = pf.load_catalysts(
+            book["security_id"], latest, latest + pd.Timedelta(days=90), query=ui.query
+        )
+        completed = [
+            period for period in dates.to_period("M").unique() if period <= formed.to_period("M")
+        ]
+        return {
+            "dates": dates,
+            "formed": formed,
+            "latest": latest,
+            "universe": universe,
+            "book": book,
+            "returns": returns,
+            "path": path,
+            "benchmark": benchmark,
+            "performance": performance,
+            "risk": risk,
+            "table": table,
+            "analyses": analyses,
+            "catalysts": catalysts,
+            "rebalances": len(completed),
+        }
+    except Exception:
+        # Keep user-facing messages safe while logging context for debugging.
+        import logging
+        import uuid
+
+        incident = uuid.uuid4().hex[:10]
+        logging.getLogger("app.views.dashboard").exception(
+            "dashboard._load_context failed [incident=%s]", incident
+        )
+        st.error(f"Failed to load the model portfolio (incident {incident}). See logs for details.")
+        if st.button("Retry", key="dashboard_retry"):
+            try:
+                ui.refresh_button()
+            except Exception:
+                st.cache_data.clear()
+                st.rerun()
+        st.stop()
 
 
 def _nav_chart(path: pd.DataFrame) -> None:
@@ -902,6 +920,7 @@ def render() -> None:
         "Simulated 15 long / 8 short model portfolio built from the ranked dividend "
         "universe. Research construct, not an account or investment advice."
     )
+    st.warning("Simulated Portfolio — not an account or investment advice.", icon="⚠️")
     ui.refresh_button("dashboard_refresh")
     try:
         context = _load_context()

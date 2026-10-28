@@ -887,8 +887,19 @@ def holdings_table(
 
 
 def load_analyses(query=read_df) -> pd.DataFrame:
-    """Research worksheet status, newest first."""
-    return query(ANALYSES_SQL, {})
+    """Research worksheet status, latest per ticker."""
+    frame = query(ANALYSES_SQL, {})
+    if frame.empty:
+        return frame
+    # Keep only the most recent worksheet per ticker to avoid duplicates
+    # in the Research Pipeline join.
+    frame = frame.copy()
+    frame["updated_at"] = pd.to_datetime(frame["updated_at"], errors="coerce")
+    frame["created_at"] = pd.to_datetime(frame["created_at"], errors="coerce")
+    frame = frame.sort_values(
+        ["ticker", "updated_at", "created_at"], ascending=[True, False, False]
+    )
+    return frame.drop_duplicates(subset=["ticker"], keep="first").reset_index(drop=True)
 
 
 def load_catalysts(security_ids, date_from, date_to, query=read_df) -> pd.DataFrame:

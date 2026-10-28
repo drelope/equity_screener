@@ -1083,29 +1083,25 @@ def render() -> None:
 
     issuer_section(info.cik, info.ticker)
 
-    tabs = st.tabs(
-        [
-            "Price",
-            "Dividends",
-            "Scores",
-            "Features",
-            "Financials",
-            "Fundamentals",
-            "Recommendations",
-        ]
-    )
+    # Lazy sections: a segmented control reruns the page on change, so only the
+    # selected section queries and renders. st.tabs switches client-side with no
+    # rerun, which forces every section to render eagerly on each page load.
     sid = info.security_id
-    with tabs[0]:
-        price_section(sid)
-    with tabs[1]:
-        dividend_section(sid)
-    with tabs[2]:
-        score_section(sid)
-    with tabs[3]:
-        feature_section(sid)
-    with tabs[4]:
-        financials_section(sid)
-    with tabs[5]:
-        fundamentals_section(sid)
-    with tabs[6]:
-        recommendation_section(sid)
+    sections = {
+        "Price": price_section,
+        "Dividends": dividend_section,
+        "Scores": score_section,
+        "Features": feature_section,
+        "Financials": financials_section,
+        "Fundamentals": fundamentals_section,
+        "Recommendations": recommendation_section,
+    }
+    selected = st.segmented_control(
+        "Section",
+        list(sections),
+        default="Price",
+        key="security_active_section",
+        width="stretch",
+    )
+    if selected is not None:
+        sections[selected](sid)

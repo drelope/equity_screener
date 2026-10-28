@@ -407,16 +407,19 @@ def _both_provider_ticker():
         ).scalar()
 
 
-def _open_the_security_page(ticker: str) -> AppTest:
+def _open_the_security_page(ticker: str, section: str | None = None) -> AppTest:
     at = AppTest.from_function(page_script, args=("security",), default_timeout=TIMEOUT)
     at.session_state["selected_ticker"] = ticker
+    if section is not None:
+        # Sections render lazily behind the segmented control; pre-select one.
+        at.session_state["security_active_section"] = section
     return at.run()
 
 
 def test_the_dividend_tab_lists_events_and_named_cadence(without_token):
     ticker = _both_provider_ticker()
     assert ticker, "expected a security carrying both dividend providers"
-    at = _open_the_security_page(ticker)
+    at = _open_the_security_page(ticker, section="Dividends")
 
     assert not at.exception, [e.value for e in at.exception]
     assert any("Dividends" in s.value for s in at.subheader)
@@ -432,7 +435,7 @@ def test_the_dividend_tab_lists_events_and_named_cadence(without_token):
 def test_the_dividend_tab_defaults_to_the_recommended_true_ex_date_source(without_token):
     ticker = _both_provider_ticker()
     assert ticker, "expected a security carrying both dividend providers"
-    at = _open_the_security_page(ticker)
+    at = _open_the_security_page(ticker, section="Dividends")
 
     assert not at.exception, [e.value for e in at.exception]
     assert at.selectbox(key="detail_dividend_provider").value.startswith("Recommended")
@@ -448,7 +451,7 @@ def test_the_dividend_tab_defaults_to_the_recommended_true_ex_date_source(withou
 def test_the_dividend_tab_compares_all_sources_with_labels(without_token):
     ticker = _both_provider_ticker()
     assert ticker, "expected a security carrying both dividend providers"
-    at = _open_the_security_page(ticker)
+    at = _open_the_security_page(ticker, section="Dividends")
     at.selectbox(key="detail_dividend_provider").set_value("All sources (comparison)").run()
 
     assert not at.exception, [e.value for e in at.exception]
@@ -473,7 +476,7 @@ def test_the_dividend_tab_falls_back_to_sec_when_yahoo_has_nothing(without_token
         ).scalar()
     if ticker is None:
         pytest.skip("every SEC-only security also has OpenBB events")
-    at = _open_the_security_page(ticker)
+    at = _open_the_security_page(ticker, section="Dividends")
 
     assert not at.exception, [e.value for e in at.exception]
     assert any("showing the SEC XBRL filing fallback" in c.value for c in at.caption)
@@ -483,7 +486,7 @@ def test_the_dividend_tab_falls_back_to_sec_when_yahoo_has_nothing(without_token
 def test_the_dividend_tab_filters_by_provider(without_token):
     ticker = _both_provider_ticker()
     assert ticker, "expected a security carrying both dividend providers"
-    at = _open_the_security_page(ticker)
+    at = _open_the_security_page(ticker, section="Dividends")
     at.selectbox(key="detail_dividend_provider").set_value(
         "SEC XBRL filings (fiscal period-ends)"
     ).run()
@@ -507,7 +510,7 @@ def test_the_dividend_tab_says_when_nothing_is_stored(without_token):
         ).scalar()
     if not ticker:
         pytest.skip("no active security without stored dividend events")
-    at = _open_the_security_page(ticker)
+    at = _open_the_security_page(ticker, section="Dividends")
 
     assert not at.exception, [e.value for e in at.exception]
     assert any("No dividend events stored" in c.value for c in at.caption)
@@ -527,7 +530,7 @@ def test_the_security_financials_tab_renders_the_point_in_time_ratios(without_to
             )
         ).scalar()
     assert ticker, "expected a security carrying the V0068 ratios"
-    at = _open_the_security_page(ticker)
+    at = _open_the_security_page(ticker, section="Financials")
 
     assert not at.exception, [e.value for e in at.exception]
     assert any("Financial metrics" in s.value for s in at.subheader)
@@ -891,7 +894,7 @@ def test_the_security_page_tracks_the_recommendation_history(without_token):
                 updated_by=OPERATOR,
             )
 
-    at = _open_the_security_page(ticker)
+    at = _open_the_security_page(ticker, section="Recommendations")
     assert not at.exception, [e.value for e in at.exception]
 
     table = next(frame.value for frame in at.dataframe if "Call" in frame.value.columns)
