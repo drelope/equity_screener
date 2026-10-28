@@ -475,7 +475,7 @@ table in the same change, mirroring the discipline enforced by
 | Phase | Work | Gate | Status |
 |---|---|---|---|
 | 0 | This document; delete the root sketch | `git diff --check` | Done |
-| 1 | `SYSTEM.md`, `skills/_template/`, read-only skills (`observability-nightly-verification`, `security-compliance`, `data-understanding`) | manual review | Implemented; pending review |
+| 1 | `SYSTEM.md`, `skills/_template/`, read-only skills (`observability-nightly-verification`, `security-compliance`, `data-understanding`) | manual review | Done |
 | 2 | Write skills and their verifiers, starting with `data-storage-schema` and `data-refresh-operations` | each skill's verifier proves it on a scratch database | Done (evidence below) |
 | 3 | `scripts/agent_runner.py`, `artifacts/`, `.gitignore` entry, drift test | `ruff`, `pytest`, one dry run | Done |
 | 4 | Five lifecycle skills, `docs/skill-lifecycle.md`, `scripts/skill_audit.py`, design records | `skill_audit --all`, lifecycle and runner tests | Done |
