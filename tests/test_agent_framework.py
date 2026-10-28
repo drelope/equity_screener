@@ -236,3 +236,49 @@ def test_runner_rejects_an_unknown_declared_tool(tmp_path):
             skills_dir=tmp_path,
             artifacts_dir=tmp_path / "artifacts",
         )
+
+
+def _run_dir(base, name):
+    path = base / "runs" / name
+    path.mkdir(parents=True)
+    (path / "plan.json").write_text("{}", encoding="utf-8")
+    return path
+
+
+def test_prune_artifacts_removes_only_runs_older_than_the_window(tmp_path, capsys):
+    old = _run_dir(tmp_path, "20260701T000000Z-aaaaaa")
+    recent = _run_dir(tmp_path, "20990101T000000Z-bbbbbb")
+
+    code = runner.prune_artifacts(older_than_days=90, artifacts_dir=tmp_path)
+
+    assert code == 0
+    assert not old.exists()
+    assert recent.exists()
+    assert "pruned 1 run(s)" in capsys.readouterr().out
+
+
+def test_prune_artifacts_dry_run_keeps_everything(tmp_path, capsys):
+    old = _run_dir(tmp_path, "20260701T000000Z-aaaaaa")
+
+    code = runner.prune_artifacts(older_than_days=90, dry_run=True, artifacts_dir=tmp_path)
+
+    assert code == 0
+    assert old.exists()
+    out = capsys.readouterr().out
+    assert "would prune: 20260701T000000Z-aaaaaa" in out
+    assert "would prune 1 run(s)" in out
+
+
+def test_prune_artifacts_ignores_unparsable_names_and_files(tmp_path):
+    odd_dir = _run_dir(tmp_path, "keep-me")
+    note = tmp_path / "runs" / "notes.txt"
+    note.write_text("not a run", encoding="utf-8")
+
+    assert runner.prune_artifacts(older_than_days=1, artifacts_dir=tmp_path) == 0
+    assert odd_dir.exists()
+    assert note.exists()
+
+
+def test_prune_artifacts_rejects_a_non_positive_window(tmp_path):
+    with pytest.raises(runner.SkillError, match="at least 1"):
+        runner.prune_artifacts(older_than_days=0, artifacts_dir=tmp_path)

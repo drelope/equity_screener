@@ -11,6 +11,7 @@ Usage:
     python -m scripts.agent_runner --skill data-refresh-operations --yes
     python -m scripts.agent_runner --tools-for <name>
     python -m scripts.agent_runner --verify <run-id>
+    python -m scripts.agent_runner --prune-artifacts [--older-than-days 90] [--dry-run]
 
 Write and heavy skills require ``--yes``. A skill with no entrypoint can still be
 inspected with ``--dry-run``; its work is performed by following ``SKILL.md``.
@@ -30,10 +31,11 @@ import json
 import os
 import re
 import secrets
+import shutil
 import subprocess
 import sys
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from src.agent.core.loader import SkillLoadError, load_skill_validated
@@ -152,6 +154,53 @@ def list_skills(skills_dir: Path | None = None) -> list[Skill]:
 def _new_run_id() -> str:
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     return f"{stamp}-{secrets.token_hex(3)}"
+
+
+#: Run directories are named ``<UTC stamp>-<suffix>``; the stamp carries the
+#: age, so pruning never depends on filesystem mtimes (copies and restores
+#: reset those). Anything not matching the pattern is left alone.
+RUN_ID_STAMP = re.compile(r"^(\d{8}T\d{6}Z)-")
+
+
+def prune_artifacts(
+    *,
+    older_than_days: int = 90,
+    dry_run: bool = False,
+    artifacts_dir: Path | None = None,
+    now: datetime | None = None,
+) -> int:
+    """Delete run records older than the retention window.
+
+    The audit of record for pipeline writes is ``audit.*`` in the warehouse;
+    ``artifacts/runs/`` is operational convenience, so pruning it loses no
+    authoritative history. ``--dry-run`` lists what would be removed.
+    """
+    if older_than_days < 1:
+        raise SkillError("--older-than-days must be at least 1")
+    runs_dir = (artifacts_dir or ARTIFACTS_DIR) / "runs"
+    if not runs_dir.is_dir():
+        print(f"no runs directory: {runs_dir}")
+        return 0
+    now = now or datetime.now(timezone.utc)
+    cutoff = now - timedelta(days=older_than_days)
+    pruned = 0
+    for path in sorted(runs_dir.iterdir()):
+        if not path.is_dir():
+            continue
+        match = RUN_ID_STAMP.match(path.name)
+        if match is None:
+            continue
+        stamp = datetime.strptime(match.group(1), "%Y%m%dT%H%M%SZ").replace(tzinfo=timezone.utc)
+        if stamp >= cutoff:
+            continue
+        if dry_run:
+            print(f"would prune: {path.name}")
+        else:
+            shutil.rmtree(path)
+        pruned += 1
+    verb = "would prune" if dry_run else "pruned"
+    print(f"{verb} {pruned} run(s) older than {older_than_days} days in {runs_dir}")
+    return 0
 
 
 def _command_argv(tail: tuple[str, ...]) -> list[str]:
@@ -435,10 +484,21 @@ def main(argv: list[str] | None = None, artifacts_dir: Path | None = None) -> in
     group.add_argument("--skill", help="Skill directory name to run")
     group.add_argument("--verify", metavar="RUN_ID", help="Show a run's verification record")
     group.add_argument("--tools-for", metavar="SKILL", help="List tools available to a skill")
+    group.add_argument(
+        "--prune-artifacts",
+        action="store_true",
+        help="Delete run records older than --older-than-days",
+    )
     parser.add_argument("--dry-run", action="store_true", help="Write the plan, run nothing")
     parser.add_argument("--yes", action="store_true", help="Confirm a write or heavy skill")
     parser.add_argument("--run-id", help="Explicit run id (default: UTC timestamp + suffix)")
     parser.add_argument("--timeout", type=int, default=3600, help="Per-command timeout in seconds")
+    parser.add_argument(
+        "--older-than-days",
+        type=int,
+        default=90,
+        help="Retention window for --prune-artifacts (default: 90 days)",
+    )
     args = parser.parse_args(argv)
 
     try:
@@ -450,6 +510,12 @@ def main(argv: list[str] | None = None, artifacts_dir: Path | None = None) -> in
             return show_verification(args.verify, artifacts_dir)
         if args.tools_for:
             return show_tools(args.tools_for)
+        if args.prune_artifacts:
+            return prune_artifacts(
+                older_than_days=args.older_than_days,
+                dry_run=args.dry_run,
+                artifacts_dir=artifacts_dir,
+            )
         return run_skill(
             args.skill,
             dry_run=args.dry_run,

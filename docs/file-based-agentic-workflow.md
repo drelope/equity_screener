@@ -158,6 +158,7 @@ python -m scripts.agent_runner --skill <name> [--dry-run] [--run-id <id>]
 python -m scripts.agent_runner --list
 python -m scripts.agent_runner --tools-for <name>
 python -m scripts.agent_runner --verify <run-id>
+python -m scripts.agent_runner --prune-artifacts [--older-than-days 90] [--dry-run]
 ```
 
 It must:
@@ -268,7 +269,9 @@ Each run writes a small, machine-readable record:
 | `summary.md` | human-readable outcome and next action |
 
 Run IDs are UTC timestamps plus a short random suffix. Artifacts are never
-committed.
+committed. Retention is 90 days: `--prune-artifacts` deletes run directories
+whose run-id timestamp is older than the window (dry-run first); the audit of
+record stays in `audit.*`, so pruning loses no authoritative history.
 
 ## 6. Orchestrator loop
 
@@ -543,4 +546,7 @@ entrypoint; all write/heavy execution still requires explicit confirmation.
   External clients should use the runner or follow the same root.
 - Resolved: the executor stays strictly deterministic; model choice belongs to
   the client invoking the workflow.
-- Whether run artifacts are retained indefinitely or pruned by age.
+- Resolved: run artifacts are pruned by age, 90 days, via
+  `python -m scripts.agent_runner --prune-artifacts`. The audit of record is
+  `audit.*`; the run directory is operational convenience, and 90 days covers
+  a quarter of runs for failure diagnosis.
