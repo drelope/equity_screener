@@ -20,6 +20,7 @@ import pytest
 
 from scripts.check_schema_drift import (
     ACCEPTED_DIFFERENCES,
+    _raise_system_exit,
     init_db_inline_migrations,
     partition,
     scratch_url,
@@ -205,3 +206,15 @@ class TestBootstrapIsRebuildable:
         schema = (ROOT / "sql" / "schema.sql").read_text()
         assert "ix_contract_documents_security_id" not in schema
         assert "ix_contract_documents_security\n" in schema
+
+
+class TestSigtermCleanup:
+    def test_sigterm_raises_system_exit_so_finally_runs(self):
+        """Default SIGTERM kills the interpreter without unwinding finally, which
+        leaked half-built schema_ref_* databases (two found dated 2026-10-13).
+        The handler converts it so drop_reference still runs."""
+        import signal
+
+        with pytest.raises(SystemExit) as excinfo:
+            _raise_system_exit(signal.SIGTERM, None)
+        assert excinfo.value.code == 128 + signal.SIGTERM

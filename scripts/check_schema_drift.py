@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import argparse
 import ast
+import signal
 import sys
 import uuid
 from pathlib import Path
@@ -162,6 +163,19 @@ def drop_reference(database: str, engine=None, admin=None) -> None:
         admin.dispose()
 
 
+def _raise_system_exit(signum, _frame):
+    """Convert SIGTERM into a SystemExit so ``finally`` runs.
+
+    Python's default SIGTERM disposition kills the process outright, without
+    unwinding ``try/finally``. A build killed that way -- by ``timeout``, a
+    stopping ops worker, ``docker stop`` or a closed session -- never reaches
+    ``drop_reference`` and leaks its half-built scratch database (the two
+    ``schema_ref_*`` databases found on 2026-10-13 were exactly that). Exiting
+    through SystemExit takes the normal cleanup path.
+    """
+    raise SystemExit(128 + signum)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -176,6 +190,8 @@ def main() -> int:
 
     database = f"schema_ref_{uuid.uuid4().hex[:12]}"
     progress = None if args.quiet else print
+
+    signal.signal(signal.SIGTERM, _raise_system_exit)
 
     reference = None
     admin = None
