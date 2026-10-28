@@ -232,7 +232,13 @@ def _context(info: pd.Series) -> None:
             fmp_section(info.security_id)
 
 
-def _context_markdown(info: pd.Series) -> str:
+def _open_step(section_id: str) -> None:
+    """Expand a workflow step after the analyst jumps to it from the missing-fields list."""
+    st.session_state[f"ia_open_{section_id}"] = True
+
+
+@st.cache_data(ttl=60)
+def _context_lines(security_id: str, ticker: str, security_name: str, security_type: str) -> str:
     """A compact, read-only digest of the warehouse context for the draft prompt.
 
     Reads only what the Warehouse context panel already shows (engineered features,
@@ -240,14 +246,14 @@ def _context_markdown(info: pd.Series) -> str:
     screen, so the local model cannot see anything the analyst could not.
     """
     lines = [
-        f"# {info.ticker} — {str(info.get('security_name') or '').strip()}",
-        f"Security type: {info.get('security_type') or 'unknown'}",
+        f"# {ticker} — {str(security_name or '').strip()}",
+        f"Security type: {security_type or 'unknown'}",
     ]
     features = ui.query(
         "SELECT as_of_date, dividend_yield, dividend_growth, earnings_payout, fcf_payout, "
         "volatility_252d, momentum_252d FROM model.features "
         "WHERE security_id = CAST(:sid AS uuid) ORDER BY as_of_date DESC LIMIT 1",
-        {"sid": info.security_id},
+        {"sid": security_id},
     )
     if not features.empty:
         row = features.iloc[0]
@@ -268,7 +274,7 @@ def _context_markdown(info: pd.Series) -> str:
         "cash_conversion, net_debt_to_ebitda, current_ratio, debt_to_equity, pe_ratio, "
         "earnings_yield, fcf_yield, price_to_book FROM model.features "
         "WHERE security_id = CAST(:sid AS uuid) ORDER BY as_of_date DESC LIMIT 1",
-        {"sid": info.security_id},
+        {"sid": security_id},
     )
     if not ratios.empty:
         row = ratios.iloc[0]
@@ -294,7 +300,7 @@ def _context_markdown(info: pd.Series) -> str:
         "SELECT period_end, fiscal_period, revenue, net_income, free_cash_flow "
         "FROM fundamentals.periodic_financials WHERE security_id = CAST(:sid AS uuid) "
         "AND period_end <= CURRENT_DATE ORDER BY period_end DESC LIMIT 4",
-        {"sid": info.security_id},
+        {"sid": security_id},
     )
     if not fundamentals.empty:
         lines += ["", "## Recent reported fundamentals"]
@@ -309,7 +315,7 @@ def _context_markdown(info: pd.Series) -> str:
         "SELECT statement, period_end, fiscal_period, metrics FROM raw.fmp_statements "
         "WHERE security_id = CAST(:sid AS uuid) "
         "ORDER BY statement, period_end DESC, filing_date DESC",
-        {"sid": info.security_id},
+        {"sid": security_id},
     )
     if not fmp.empty:
         lines += ["", "## FMP reported statements (supporting, not a model input)"]
@@ -326,7 +332,7 @@ def _context_markdown(info: pd.Series) -> str:
     dcf = ui.query(
         "SELECT as_of_date, dcf, stock_price FROM raw.fmp_dcf "
         "WHERE security_id = CAST(:sid AS uuid) ORDER BY as_of_date DESC LIMIT 1",
-        {"sid": info.security_id},
+        {"sid": security_id},
     )
     if not dcf.empty:
         row = dcf.iloc[0]
@@ -337,6 +343,23 @@ def _context_markdown(info: pd.Series) -> str:
             f"- FMP DCF {row['as_of_date']}: intrinsic {_context_number(row['dcf'])}{margin}"
         )
     return "\n".join(lines)
+
+
+def _context_markdown(info: pd.Series) -> str:
+    """A compact, read-only digest of the warehouse context for the draft prompt.
+
+    Reads only what the Warehouse context panel already shows (engineered features,
+    point-in-time ratios and reported fundamentals), formatted for a prompt rather than a
+    screen, so the local model cannot see anything the analyst could not. The digest is
+    memoised per security, so generating a Draft reuses the context the page just read
+    instead of re-querying the warehouse.
+    """
+    return _context_lines(
+        str(info.security_id),
+        str(info.ticker),
+        str(info.security_name or ""),
+        str(info.security_type or ""),
+    )
 
 
 _PERCENT_FEATURES = {"dividend_yield", "dividend_growth", "earnings_payout", "fcf_payout"}
@@ -643,7 +666,8 @@ def render() -> None:
             label += f" ({filled}/{total})"
         else:
             label += " (optional)"
-        with st.expander(label, expanded=(section.id == first_incomplete)):
+        open_step = bool(st.session_state.get(f"ia_open_{section.id}"))
+        with st.expander(label, expanded=section.id == first_incomplete or open_step):
             if section.intro:
                 st.caption(section.intro)
             if section.id == "final" and not prior_ok:
@@ -654,6 +678,11 @@ def render() -> None:
                 gaps = schema.missing_prior_step_fields(payload)
                 st.caption(f"Still missing {len(gaps)} required field(s):")
                 st.code("\n".join(gaps), language="text")
+                for missing_id in sorted(schema.missing_required_fields(payload)):
+                    if missing_id == "final":
+                        continue
+                    if st.button(f"Open section: {missing_id}", key=f"ia_open_button_{missing_id}"):
+                        st.session_state[f"ia_open_{missing_id}"] = True
             for field in section.all_fields:
                 _render_field(section, field)
 
