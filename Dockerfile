@@ -11,6 +11,9 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 
+# Upgrade pillow to fix 39 pip-audit CVEs (streamlit pins <13 but 13.0.0 installs fine on Python 3.12)
+RUN pip install --no-cache-dir "pillow>=13.0.0" --ignore-installed pillow
+
 # OpenBB builds its static package the first time it is imported, into
 # site-packages, and records what it built in assets/reference.json. The
 # published wheels carry no reference file, so a fresh install rebuilds on
