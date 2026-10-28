@@ -845,6 +845,36 @@ def test_a_selected_ticker_outside_the_default_universe_is_kept(without_token):
     assert ticker in at.selectbox[0].options
 
 
+def test_a_shared_link_selects_the_ticker(without_token):
+    with engine.connect() as conn:
+        ticker = conn.execute(
+            text(
+                "SELECT ticker FROM reference.securities "
+                "WHERE active ORDER BY ticker LIMIT 1"
+            )
+        ).scalar()
+    assert ticker, "expected at least one active security"
+
+    at = page("security")
+    at.query_params["ticker"] = ticker
+    at.run()
+
+    assert not at.exception, [e.value for e in at.exception]
+    assert at.selectbox[0].value == ticker
+    assert at.session_state["selected_ticker"] == ticker
+
+
+def test_the_picker_mirrors_the_selection_into_the_url(without_token):
+    at = page("security").run()
+
+    assert not at.exception, [e.value for e in at.exception]
+    # AppTest exposes raw param values, which are lists.
+    assert at.query_params["ticker"] in (
+        at.selectbox[0].value,
+        [at.selectbox[0].value],
+    )
+
+
 def test_the_security_page_offers_the_analysis_worksheet_for_its_ticker(without_token):
     at = page("security").run()
     assert not at.exception, [e.value for e in at.exception]
