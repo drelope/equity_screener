@@ -24,7 +24,8 @@ Stages (in dependency order):
                                      (FMP + FRED economic inputs for the macro memo;
                                      skipped cleanly without a key)
     5g. supporting loaders        -> raw.dividend_calendar, raw.macro_series_vintages,
-                                     raw.xbrl_frames, reference.security_identifiers
+                                     raw.corporate_actions (splits calendar), raw.xbrl_frames,
+                                     reference.security_identifiers
                                      (cadence-gated, non-blocking; see SUPPORTING_LOADERS).
                                      The weekly SEC bulk refresh (scripts.load_sec_bulk)
                                      runs before stage 4a instead, so the per-CIK stages
@@ -117,8 +118,9 @@ def run_module(name, args, skip=False):
 #: derived stages (features, scoring, audit) still run, because none of these tables is
 #: a model input and the freshness check flags a source that stays stale.
 #:
-#: Not scheduled: ``fetch_fmp_splits`` (about 7,000 per-ticker FMP calls) feeding
-#: ``load_corporate_actions``. Run those by hand when split history needs refreshing.
+#: Split history is kept current by the splits-calendar loader (a couple of requests per
+#: night). ``fetch_fmp_splits`` then ``load_corporate_actions`` (about 4,100 per-ticker
+#: calls) remains the manual full backfill.
 SUPPORTING_LOADERS = (
     {
         "label": "scripts.load_dividend_calendar",
@@ -137,6 +139,15 @@ SUPPORTING_LOADERS = (
         "column": "retrieved_at",
         "aggregate": "MAX",
         "min_age_days": 7.0,
+    },
+    {
+        "label": "scripts.load_split_calendar",
+        "module": "scripts.load_split_calendar",
+        "args": ["--skip-if-no-key"],
+        "table": "raw.corporate_actions",
+        "column": "retrieved_at",
+        "aggregate": "MAX",
+        "min_age_days": 0.9,
     },
     {
         "label": "scripts.load_xbrl_frames",

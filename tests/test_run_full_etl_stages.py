@@ -183,12 +183,14 @@ def test_the_forward_return_window_can_be_widened(monkeypatch):
 SUPPORTING = (
     "scripts.load_dividend_calendar",
     "scripts.load_macro_vintages",
+    "scripts.load_split_calendar",
     "scripts.load_xbrl_frames",
     "scripts.sync_security_identifiers",
 )
 STALE = {
     "raw.sec_submissions": 30.0,
     "raw.dividend_calendar": 3.0,
+    "raw.corporate_actions": 3.0,
     "raw.macro_series_vintages": 30.0,
     "raw.xbrl_frames": 90.0,
 }

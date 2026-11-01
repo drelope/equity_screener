@@ -62,8 +62,9 @@ def windows(start: date, end: date, days: int = WINDOW_DAYS) -> list[tuple[date,
     return out
 
 
-def fetch_window(start: date, end: date, key: str, opener=urlopen) -> list[dict]:
-    url = f"{URL}?{urlencode({'from': start, 'to': end, 'apikey': key})}"
+def fetch_window(start: date, end: date, key: str, opener=urlopen, url: str = URL) -> list[dict]:
+    """One FMP calendar window; ``url`` selects the calendar (dividends by default)."""
+    url = f"{url}?{urlencode({'from': start, 'to': end, 'apikey': key})}"
     for attempt in range(oc.FMP_RATE_LIMIT_RETRIES + 1):
         oc._fmp_throttle()
         try:
