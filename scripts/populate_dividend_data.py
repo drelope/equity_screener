@@ -1389,10 +1389,11 @@ def populate_dividend_data(
                 INSERT INTO raw.dividend_data
                 (security_id, ex_dividend_date, declaration_date, record_date,
                  payment_date, amount, adjusted_amount, frequency, currency, provider,
-                 feed, amount_feed, concept, retrieved_at)
+                 feed, amount_feed, concept, retrieved_at, is_special)
                 VALUES (:sec_id, :ex_date, :decl_date, :rec_date, :pay_date,
                         :amount, :adjusted_amount, :frequency, :currency, :provider,
-                        :feed, :amount_feed, :concept, :retrieved_at)
+                        :feed, :amount_feed, :concept, :retrieved_at,
+                        lower(coalesce(CAST(:frequency AS text), '')) = 'special')
                 ON CONFLICT (security_id, ex_dividend_date, provider) DO UPDATE SET
                     declaration_date = EXCLUDED.declaration_date,
                     record_date = EXCLUDED.record_date,
@@ -1404,6 +1405,7 @@ def populate_dividend_data(
                     feed = EXCLUDED.feed,
                     amount_feed = EXCLUDED.amount_feed,
                     concept = EXCLUDED.concept,
+                    is_special = EXCLUDED.is_special,
                     retrieved_at = EXCLUDED.retrieved_at
             """),
                 insert_rows,
