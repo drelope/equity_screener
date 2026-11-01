@@ -634,3 +634,31 @@ def test_classify_instrument_exact_dei_title_series_binds_suffix():
     assert decided.matched_title == (
         "8.50% Series C Cumulative Redeemable Preferred Stock, par value $0.01 per share"
     )
+
+
+def test_subordinated_notes_without_a_maturity_are_bonds_not_other():
+    """Prudential's 4.125% Junior Subordinated Notes (PFH) carry no 'due' date, so they fell
+    through to 'other' and the issuer's common-stock tag typed the ticker common."""
+    from src.crispdm.sec_client import classify_security_type
+
+    for title in (
+        "4.125% Junior Subordinated Notes",
+        "4.625% Perpetual Subordinated Notes",
+        "9.000% Subordinated Notes, par value $25.00",
+        "Senior Notes",
+        "6.75% Notes",
+    ):
+        assert classify_security_type(title) == "corporate bond", title
+
+
+def test_the_notes_pattern_does_not_capture_equity_or_other_instruments():
+    from src.crispdm.sec_client import classify_security_type
+
+    assert classify_security_type("Common Stock, par value $0.01 per share") == "common_stock"
+    assert classify_security_type("6.25% Series A Cumulative Preferred Stock") == "preferred stock"
+    assert classify_security_type("Notes receivable") == "other"  # no ranking word or coupon
+    assert classify_security_type("Class A common stock; footnotes") == "common_stock"
+    assert classify_security_type("Warrants to purchase subordinated notes") == "derivative"
+    assert classify_security_type("Depositary Shares each representing a subordinated note") == (
+        "preferred stock"
+    )

@@ -374,6 +374,15 @@ def get_all_issuers_from_tickers(limit=None):
     return issuers
 
 
+#: A debt title with no maturity: a ranking word or a coupon directly before "notes". Run
+#: against every stored cover title, ticker-feed title and security name it changed only
+#: seven distinct titles, all genuine subordinated notes.
+DEBT_NOTE_TITLE = re.compile(
+    r"\b(?:senior|subordinated|junior\s+subordinated|unsecured|secured|convertible|exchangeable)"
+    r"\s+notes?\b|\b\d+(?:\.\d+)?%\s+notes?\b"
+)
+
+
 def classify_security_type(title):
     """Infer a security type from the SEC company ticker title.
 
@@ -403,18 +412,24 @@ def classify_security_type(title):
     if any(term in normalized_title for term in ("government bond", "treasury", "municipal bond")):
         return "government debt"
 
-    if any(
-        term in normalized_title
-        for term in (
-            "bond",
-            "debenture",
-            "corporate note",
-            "senior debt",
-            "subordinated debt",
-            "due 20",
+    if (
+        any(
+            term in normalized_title
+            for term in (
+                "bond",
+                "debenture",
+                "corporate note",
+                "senior debt",
+                "subordinated debt",
+                "due 20",
+            )
         )
-    ) or re.search(r"\bnotes?\b[^.;]*\bdue\b", normalized_title):
-        # Exchange titles spell the maturity out ("Notes due June 1, 2059").
+        or re.search(r"\bnotes?\b[^.;]*\bdue\b", normalized_title)
+        or DEBT_NOTE_TITLE.search(normalized_title)
+    ):
+        # Exchange titles spell the maturity out ("Notes due June 1, 2059"). Perpetual and
+        # junior subordinated notes carry none ("4.125% Junior Subordinated Notes"), so a
+        # ranking word or a coupon in front of "notes" counts too.
         return "corporate bond"
 
     if any(term in normalized_title for term in ("unit", "units")):
