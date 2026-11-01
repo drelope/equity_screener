@@ -766,11 +766,6 @@ def _event_index(dates: pd.DatetimeIndex, event_date: pd.Timestamp) -> int | Non
     return index
 
 
-#: Split history fetched by scripts/fetch_fmp_splits.py (gitignored artifact).
-SPLIT_EVENTS_PATH = (
-    Path(__file__).resolve().parents[2] / "artifacts" / "corporate_actions" / "fmp_splits.csv"
-)
-
 SECURITY_TICKERS_SQL = """
 SELECT security_id::text AS security_id, ticker
 FROM reference.securities
@@ -778,15 +773,31 @@ WHERE security_type = 'common_stock'
 """
 
 
-def load_split_events(path=SPLIT_EVENTS_PATH, query=read_df) -> pd.DataFrame:
+SPLIT_EVENTS_SQL = """
+SELECT security_id::text AS security_id, effective_date AS date, ratio::float8 AS ratio
+FROM raw.corporate_actions
+WHERE action_type = 'split' AND security_id IS NOT NULL AND ratio > 0
+ORDER BY security_id, effective_date
+"""
+
+
+def load_split_events(path=None, query=read_df) -> pd.DataFrame:
     """Split events as (security_id, date, ratio), where ratio = denominator / numerator.
 
-    FMP reports a split by ticker. Each security_id with that ticker is given the
-    event, and ``clean_prices`` applies it only where the price shows the jump, so a
-    ticker shared by several identities cannot adjust the wrong one. Returns an
-    empty frame when the artifact is absent.
+    Read from ``raw.corporate_actions`` (loaded by ``scripts.load_corporate_actions``).
+    ``clean_prices`` applies each event only where the price shows the jump, so a
+    ticker shared by several identities cannot adjust the wrong one. ``path`` is the
+    legacy CSV artifact and is read only when given explicitly; it maps tickers to
+    identities as the old loader did. Returns an empty frame when nothing is stored.
     """
     columns = ["security_id", "date", "ratio"]
+    if path is None:
+        frame = query(SPLIT_EVENTS_SQL, {})
+        if frame is None or frame.empty:
+            return pd.DataFrame(columns=columns)
+        frame = frame[columns].copy()
+        frame["date"] = pd.to_datetime(frame["date"])
+        return frame.reset_index(drop=True)
     if not Path(path).exists():
         return pd.DataFrame(columns=columns)
     raw = pd.read_csv(path, dtype={"ticker": str})

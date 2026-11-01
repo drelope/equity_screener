@@ -646,3 +646,30 @@ def test_exclude_unreliable_drops_only_the_flagged_securities():
     kept = exclude_unreliable(universe, cleaned)
 
     assert kept["security_id"].tolist() == ["Y"]
+
+
+def test_split_events_default_to_the_warehouse_table():
+    from src.crispdm.portfolio import load_split_events
+
+    seen = {}
+
+    def fake_query(sql, params):
+        seen["sql"] = sql
+        return pd.DataFrame(
+            {"security_id": ["a"], "date": [pd.Timestamp("2020-08-31").date()], "ratio": [0.25]}
+        )
+
+    events = load_split_events(query=fake_query)
+
+    assert "raw.corporate_actions" in seen["sql"]
+    assert events["ratio"].tolist() == [0.25]
+    assert events["date"].iloc[0] == pd.Timestamp("2020-08-31")
+
+
+def test_an_empty_corporate_actions_table_yields_an_empty_event_frame():
+    from src.crispdm.portfolio import load_split_events
+
+    events = load_split_events(query=lambda sql, params: pd.DataFrame())
+
+    assert events.empty
+    assert list(events.columns) == ["security_id", "date", "ratio"]
