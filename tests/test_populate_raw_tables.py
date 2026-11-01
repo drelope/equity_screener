@@ -786,3 +786,66 @@ def test_only_a_full_online_refresh_may_resolve_conflicts(monkeypatch):
     prt.populate_company_tickers(limit=5)
 
     assert seen == [True, False]
+
+
+def test_reference_terms_update_leaves_common_stock_alone_but_still_updates_preferreds():
+    """The real statement against Postgres, in a transaction that is always rolled back.
+
+    A common-stock row must not receive preferred coupon/liquidation terms (that is the
+    leak the nightly verification fails on), while a preferred row must still be updated:
+    the guard must not block legitimate writes.
+    """
+    import pytest
+    from sqlalchemy import text
+
+    try:
+        from scripts.populate_raw_tables import REFERENCE_TERMS_UPDATE
+        from src.crispdm.db import engine
+
+        conn = engine.connect()
+        conn.exec_driver_sql("SELECT 1")
+        conn.rollback()
+    except Exception:  # pragma: no cover - environments without a database
+        pytest.skip("no database available")
+    trans = conn.begin()
+    try:
+        picks = {}
+        for kind in ("common_stock", "preferred stock"):
+            row = conn.execute(
+                text(
+                    "SELECT security_id FROM reference.securities WHERE active "
+                    "AND security_type = :t AND coupon_rate IS NULL "
+                    "AND liquidation_preference IS NULL LIMIT 1"
+                ),
+                {"t": kind},
+            ).scalar()
+            if row is None:
+                pytest.skip(f"no active {kind} row without terms to test against")
+            picks[kind] = row
+        for kind, security_id in picks.items():
+            conn.execute(
+                REFERENCE_TERMS_UPDATE,
+                {
+                    "security_id": security_id,
+                    "coupon_rate": 6.25,
+                    "liquidation_preference": 25.0,
+                    "call_date": None,
+                },
+            )
+        got = {
+            kind: conn.execute(
+                text(
+                    "SELECT coupon_rate, liquidation_preference FROM reference.securities "
+                    "WHERE security_id = :s"
+                ),
+                {"s": security_id},
+            ).one()
+            for kind, security_id in picks.items()
+        }
+        assert got["common_stock"].coupon_rate is None
+        assert got["common_stock"].liquidation_preference is None
+        assert float(got["preferred stock"].coupon_rate) == 6.25
+        assert float(got["preferred stock"].liquidation_preference) == 25.0
+    finally:
+        trans.rollback()
+        conn.close()

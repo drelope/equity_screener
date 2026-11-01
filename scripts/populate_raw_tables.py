@@ -71,6 +71,28 @@ from src.crispdm.ticker_profile_store import (
     upsert_ticker_profile,
 )
 
+#: Copies name-parsed preferred terms onto reference.securities. A common-stock row keeps
+#: whatever it has: preferred terms on a common row are a leak (the nightly's
+#: repair_security_classification clears them and verify_nightly_run fails on them), and
+#: these rows are usually notes or preferreds the title could not classify, so writing the
+#: coupon here only for the repair to erase it again made the invariant true only after
+#: that later stage ran. The terms stay on raw.ticker_profile as evidence.
+REFERENCE_TERMS_UPDATE = text(
+    """
+    UPDATE reference.securities
+    SET coupon_rate = CASE WHEN security_type = 'common_stock'
+                           THEN coupon_rate
+                           ELSE COALESCE(:coupon_rate, coupon_rate) END,
+        liquidation_preference = CASE WHEN security_type = 'common_stock'
+                                      THEN liquidation_preference
+                                      ELSE COALESCE(:liquidation_preference, liquidation_preference)
+                                 END,
+        call_date = COALESCE(:call_date, call_date),
+        updated_at = now()
+    WHERE security_id = :security_id
+    """
+)
+
 
 def _offline_enabled():
     return os.environ.get("SEC_ETL_OFFLINE", "").strip().lower() in ("1", "true", "yes", "on")
@@ -830,19 +852,7 @@ def populate_ticker_profiles(limit=None, reuse_max_age_days=DEFAULT_REUSE_MAX_AG
                 upsert_ticker_profile(
                     conn, row, loader="populate_raw_tables", owned_columns=owned_columns
                 )
-                conn.execute(
-                    text("""
-                    UPDATE reference.securities
-                    SET coupon_rate = COALESCE(:coupon_rate, coupon_rate),
-                        liquidation_preference = COALESCE(
-                            :liquidation_preference, liquidation_preference
-                        ),
-                        call_date = COALESCE(:call_date, call_date),
-                        updated_at = now()
-                    WHERE security_id = :security_id
-                """),
-                    row,
-                )
+                conn.execute(REFERENCE_TERMS_UPDATE, row)
                 inserted += 1
                 conn.commit()
                 if inserted % 250 == 0:
