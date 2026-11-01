@@ -16,6 +16,35 @@ MIGRATION = (
 )
 
 
+#: The view groups every stored profile of a CIK, but the profiles are not refreshed
+#: together: a nightly (or a nightly in flight) rewrites some securities of an issuer --
+#: the dividend payers -- while a non-paying sibling keeps the payload from its last
+#: refresh. When the issuer's SEC facts change in between, the two disagree for a while
+#: without any extraction fault, which an all-rows comparison reports as a failure.
+#:
+#: What the invariant is meant to catch is the extractor giving different answers for
+#: one issuer within the same refresh, so only rows retrieved within a day of the CIK's
+#: latest refresh are compared. An older sibling is stale, not inconsistent.
+SAME_REFRESH_CONFLICTS_SQL = """
+WITH tp AS (
+    SELECT lpad(btrim(s.cik::text), 10, '0') AS cik, t.retrieved_at,
+           t.raw_payload #>> '{sec_xbrl,coupon_rate}' AS coupon,
+           t.raw_payload #>> '{sec_xbrl,liquidation_preference}' AS liquidation
+    FROM raw.ticker_profile t
+    JOIN reference.securities s ON s.security_id = t.security_id
+    WHERE NULLIF(btrim(s.cik::text), '') IS NOT NULL AND t.raw_payload ? 'sec_xbrl'
+),
+latest AS (SELECT cik, max(retrieved_at) AS refreshed_at FROM tp GROUP BY cik)
+SELECT count(*) FROM (
+    SELECT tp.cik
+    FROM tp JOIN latest USING (cik)
+    WHERE tp.retrieved_at >= latest.refreshed_at - interval '1 day'
+    GROUP BY tp.cik
+    HAVING count(DISTINCT tp.coupon) > 1 OR count(DISTINCT tp.liquidation) > 1
+) conflicted
+"""
+
+
 def _live_connection():
     try:
         from src.crispdm.db import engine
@@ -97,20 +126,22 @@ def test_view_rows_are_issuer_scoped_in_the_live_database():
         if not exists:
             pytest.skip("preferred.issuer_terms not applied (run scripts.migrate)")
 
-        total, bad_scope, conflicts, multi = conn.execute(
+        total, bad_scope, multi = conn.execute(
             text("""
             SELECT count(*),
                    count(*) FILTER (WHERE terms_scope <> 'issuer_level_unallocated'),
-                   count(*) FILTER (WHERE distinct_coupon_values > 1
-                                       OR distinct_liquidation_values > 1),
                    count(*) FILTER (WHERE security_count > 1)
             FROM preferred.issuer_terms
             """)
         ).one()
+        conflicts = conn.execute(text(SAME_REFRESH_CONFLICTS_SQL)).scalar()
 
     assert total >= 0
     assert bad_scope == 0, "every row must declare issuer_level_unallocated scope"
-    assert conflicts == 0, "per-security extraction disagreed within a CIK"
+    assert conflicts == 0, (
+        "per-security extraction disagreed within one refresh of a CIK: securities "
+        "refreshed together carry different issuer-level SEC terms"
+    )
     # Ambiguity is exposed rather than hidden; a non-zero count here is the
     # reason the terms cannot be joined onto a single series.
     assert multi >= 0
