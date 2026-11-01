@@ -514,12 +514,27 @@ def test_companyfacts_freshness_uses_the_oldest_snapshot_not_the_newest():
     )
 
 
+#: Sources added by the data-OpenBB-FMP recipe. They refresh on their own cadences
+#: (weekly, monthly, quarterly), so the nightly-source invariants below do not apply
+#: to them; ``test_every_new_source_has_a_bound_and_a_valid_aggregate`` covers them.
+RECIPE_SOURCES = frozenset(
+    {
+        "raw.sec_submissions",
+        "raw.dividend_calendar",
+        "raw.macro_series",
+        "raw.macro_series_vintages",
+        "raw.corporate_actions",
+        "raw.xbrl_frames",
+    }
+)
+
+
 def test_append_style_sources_are_still_aged_by_their_newest_row():
     """The other sources re-fetch a moving lookback window, so MAX is the only
     meaningful reading for them: an out-of-window row that was never meant to be
     re-fetched is not staleness."""
     for source, spec in FRESHNESS_SOURCES.items():
-        if source == "raw.companyfacts":
+        if source == "raw.companyfacts" or source in RECIPE_SOURCES:
             continue
         assert spec["aggregate"] == "MAX", source
         query = str(_freshness_query(source, spec))
@@ -710,7 +725,7 @@ def test_poc_bounds_are_looser_than_the_refresh_cadences():
     assert FRESHNESS_SOURCES["raw.companyfacts"]["sla_hours"] == POC_COMPANYFACTS_BOUND_HOURS
     assert POC_COMPANYFACTS_BOUND_HOURS > companyfacts_cadence_days * 24
     for source, spec in FRESHNESS_SOURCES.items():
-        if source == "raw.companyfacts":
+        if source == "raw.companyfacts" or source in RECIPE_SOURCES:
             continue
         assert spec["sla_hours"] > daily_cadence_days * 24, source
         assert spec["sla_hours"] == POC_DAILY_BOUND_HOURS, source
@@ -930,3 +945,67 @@ def test_a_failing_stage_stops_the_ones_that_depend_on_it():
     assert "scripts.build_features" not in recorded
     assert "scripts.score_rank" not in recorded
     assert "scripts.populate_audit" not in recorded
+
+
+def test_freshness_rows_carry_age_sla_and_verdict_per_source():
+    from datetime import datetime, timezone
+
+    from scripts.verify_nightly_run import freshness_rows
+
+    now = datetime(2026, 11, 1, tzinfo=timezone.utc)
+    findings = {"freshness": {"sources": {"raw.market_data": 5.0, "raw.xbrl_frames": 9999.0}}}
+
+    rows = {r["source"]: r for r in freshness_rows(findings, now, now.date())}
+
+    assert rows["raw.market_data"]["within_sla"] is True
+    assert rows["raw.xbrl_frames"]["within_sla"] is False
+    assert rows["raw.market_data"]["sla_hours"] == 240.0
+
+
+def test_a_source_with_no_rows_is_recorded_without_a_verdict():
+    from datetime import datetime, timezone
+
+    from scripts.verify_nightly_run import freshness_rows
+
+    now = datetime(2026, 11, 1, tzinfo=timezone.utc)
+    rows = freshness_rows(
+        {"freshness": {"sources": {"raw.corporate_actions": None}}}, now, now.date()
+    )
+
+    assert rows[0]["age_hours"] is None and rows[0]["within_sla"] is None
+
+
+def test_unconfigured_sources_and_missing_freshness_are_skipped():
+    from datetime import datetime, timezone
+
+    from scripts.verify_nightly_run import freshness_rows
+
+    now = datetime(2026, 11, 1, tzinfo=timezone.utc)
+
+    assert freshness_rows({}, now, now.date()) == []
+    assert freshness_rows({"freshness": {"sources": {"unknown.table": 1.0}}}, now, now.date()) == []
+
+
+def test_every_new_source_has_a_bound_and_a_valid_aggregate():
+    from scripts.verify_nightly_run import FRESHNESS_SOURCES
+
+    for source in (
+        "raw.sec_submissions",
+        "raw.dividend_calendar",
+        "raw.macro_series",
+        "raw.macro_series_vintages",
+        "raw.corporate_actions",
+        "raw.xbrl_frames",
+    ):
+        spec = FRESHNESS_SOURCES[source]
+        assert spec["aggregate"] in ("MIN", "MAX") and spec["sla_hours"] > 0
+
+
+def test_record_freshness_inserts_nothing_for_no_rows():
+    from scripts.verify_nightly_run import record_freshness
+
+    class _Conn:
+        def execute(self, *a, **k):
+            raise AssertionError("no statement expected")
+
+    assert record_freshness(_Conn(), []) == 0

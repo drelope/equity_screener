@@ -23,6 +23,12 @@ Stages (in dependency order):
     5f. populate_macro_inputs     -> raw.macro_series + raw.macro_etf_sectors
                                      (FMP + FRED economic inputs for the macro memo;
                                      skipped cleanly without a key)
+    5g. supporting loaders        -> raw.dividend_calendar, raw.macro_series_vintages,
+                                     raw.xbrl_frames, reference.security_identifiers
+                                     (cadence-gated, non-blocking; see SUPPORTING_LOADERS).
+                                     The weekly SEC bulk refresh (scripts.load_sec_bulk)
+                                     runs before stage 4a instead, so the per-CIK stages
+                                     find the verified rows fresh.
     6. populate_fundamentals     -> fundamentals.periodic_financials (offline, stored XBRL)
     7. build_features            -> model.features (offline, last --feature-days only)
     7b. build_forward_returns    -> model.forward_returns (offline, last --forward-days only)
@@ -99,6 +105,90 @@ def run_module(name, args, skip=False):
     elapsed = time.monotonic() - started
     print(f"=== {name} finished in {elapsed:.1f}s (exit {result.returncode}) ===")
     return result.returncode == 0
+
+
+#: Loaders for the supporting warehouse tables (data-OpenBB-FMP recipe). Each runs only
+#: when its own table is older than ``min_age_days``, so a nightly pays for a source on
+#: its real cadence, not every night. ``aggregate`` matches the freshness check: MIN for
+#: tables aged by their oldest row (the bulk loader verifies every row it sees, so a run
+#: moves MIN), MAX for append-style tables. ``min_age_days=None`` means always run.
+#:
+#: They are non-blocking: a failure is recorded and fails the run's exit code, but the
+#: derived stages (features, scoring, audit) still run, because none of these tables is
+#: a model input and the freshness check flags a source that stays stale.
+#:
+#: Not scheduled: ``fetch_fmp_splits`` (about 7,000 per-ticker FMP calls) feeding
+#: ``load_corporate_actions``. Run those by hand when split history needs refreshing.
+SUPPORTING_LOADERS = (
+    {
+        "label": "scripts.load_dividend_calendar",
+        "module": "scripts.load_dividend_calendar",
+        "args": ["--skip-if-no-key"],
+        "table": "raw.dividend_calendar",
+        "column": "retrieved_at",
+        "aggregate": "MAX",
+        "min_age_days": 0.9,
+    },
+    {
+        "label": "scripts.load_macro_vintages",
+        "module": "scripts.load_macro_vintages",
+        "args": ["--skip-if-no-key"],
+        "table": "raw.macro_series_vintages",
+        "column": "retrieved_at",
+        "aggregate": "MAX",
+        "min_age_days": 7.0,
+    },
+    {
+        "label": "scripts.load_xbrl_frames",
+        "module": "scripts.load_xbrl_frames",
+        "args": [],
+        "table": "raw.xbrl_frames",
+        "column": "retrieved_at",
+        "aggregate": "MAX",
+        "min_age_days": 30.0,
+    },
+    {
+        "label": "scripts.sync_security_identifiers",
+        "module": "scripts.sync_security_identifiers",
+        "args": [],
+        "table": None,
+        "min_age_days": None,
+    },
+)
+
+#: Weekly SEC bulk refresh. It runs before the per-CIK companyfacts stages: it marks the
+#: rows it verified as current, so those stages find them fresh and skip them, and the
+#: per-CIK requests shrink to CIKs the bulk files did not cover.
+BULK_EDGAR_LOADER = {
+    "label": "scripts.load_sec_bulk",
+    "module": "scripts.load_sec_bulk",
+    "args": ["--download"],
+    "table": "raw.sec_submissions",
+    "column": "retrieved_at",
+    "aggregate": "MIN",
+    "min_age_days": 7.0,
+}
+
+
+def source_age_days(table, column, aggregate, query=None):
+    """Age in days of a table by ``aggregate(column)``; None when it is empty or missing."""
+    sql = f"SELECT EXTRACT(EPOCH FROM (now() - {aggregate}({column}))) / 86400.0 FROM {table}"  # noqa: S608
+    try:
+        if query is not None:
+            value = query(sql)
+        else:
+            with engine.connect() as conn:
+                value = conn.execute(text(sql)).scalar()
+    except Exception:  # noqa: BLE001 - a missing table means "never loaded", so it is due
+        return None
+    return None if value is None else float(value)
+
+
+def loader_due(spec, age_days):
+    """Whether a supporting loader should run, given its table's age (None = never loaded)."""
+    if spec.get("min_age_days") is None:
+        return True
+    return age_days is None or age_days >= spec["min_age_days"]
 
 
 _ROW_COUNT_QUERIES = {
@@ -341,6 +431,13 @@ def main():
         "nightly still succeeds without them.",
     )
     parser.add_argument(
+        "--skip-supporting-loaders",
+        action="store_true",
+        help="Skip the cadence-gated supporting loaders (SEC bulk refresh, dividend "
+        "calendar, macro vintages, XBRL frames, identifier sync). None is a model "
+        "input; the freshness check flags a source left stale.",
+    )
+    parser.add_argument(
         "--skip-macro-inputs",
         action="store_true",
         help="Skip stage 5f (raw.macro_series / raw.macro_etf_sectors). Supporting "
@@ -495,6 +592,25 @@ def main():
             stage_seconds[key] = round(time.monotonic() - stage_started, 1)
             return ok
 
+        partial_run = args.limit is not None or bool(getattr(args, "tickers", None))
+        soft_failed = []
+
+        def supporting_stage(spec):
+            """Run a cadence-gated supporting loader without blocking later stages."""
+            label = spec["label"]
+            if args.skip_supporting_loaders or partial_run:
+                return stage(spec["module"], spec["args"], skip=True, label=label)
+            due = True
+            if spec.get("table"):
+                age = source_age_days(spec["table"], spec["column"], spec["aggregate"])
+                due = loader_due(spec, age)
+            if not due:
+                return stage(spec["module"], spec["args"], skip=True, label=label)
+            ok = stage(spec["module"], spec["args"], label=label)
+            if not ok:
+                soft_failed.append(label)
+            return ok
+
         # Preflight, before any long stage. A stage that reads a column the
         # database does not have fails at execution -- hours in, with the rows it
         # did manage to write already committed. This is what let the 02:00
@@ -578,6 +694,9 @@ def main():
         # may be skipped -- hence a --skip-* flag per stage, each documenting the
         # consequence. The overlap costs nothing: a CIK 4a just refreshed is not yet
         # due, so 4b and 4c skip it.
+        if all_ok:
+            supporting_stage(BULK_EDGAR_LOADER)
+
         if all_ok and not stage(
             "scripts.populate_companyfacts",
             preferred_companyfacts_args,
@@ -659,6 +778,10 @@ def main():
         ):
             all_ok = False
 
+        if all_ok:
+            for loader in SUPPORTING_LOADERS:
+                supporting_stage(loader)
+
         if all_ok and not stage("scripts.populate_fundamentals", [], args.skip_derived):
             all_ok = False
 
@@ -702,11 +825,13 @@ def main():
             if not stage("scripts.label_targets", label_args):
                 all_ok = False
 
-        exit_code = 0 if all_ok else 1
+        exit_code = 0 if all_ok and not soft_failed else 1
+        if soft_failed:
+            print(f"\nSupporting loaders failed (non-blocking): {', '.join(soft_failed)}")
         stages["_seconds"] = stage_seconds
         record_nightly_run(args.trigger, started_at, stages, exit_code)
 
-        if all_ok:
+        if all_ok and not soft_failed:
             print("\nFull ETL pipeline complete.")
         return exit_code
     finally:

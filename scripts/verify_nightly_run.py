@@ -156,6 +156,46 @@ FRESHNESS_SOURCES = {
         "aggregate": "MIN",
         "sla_hours": POC_COMPANYFACTS_BOUND_HOURS,
     },
+    # Sources added with the data-OpenBB-FMP recipe. Each bound is the refresh
+    # cadence plus a grace period, not a PoC allowance:
+    #   * submissions are rewritten alongside companyfacts (one row per CIK), so
+    #     the oldest row is the stale one, as above.
+    #   * the dividend calendar is a forward-looking window reloaded weekly.
+    #   * macro series are reloaded nightly; vintages and corporate actions are
+    #     loaded on demand, so a month is the bound before they read as neglected.
+    #   * XBRL frames are calendar-period snapshots, refreshed quarterly.
+    # A source with no rows is not aged (see ``_freshness_ages``), so one that has
+    # not been loaded yet is silent rather than red.
+    "raw.sec_submissions": {
+        "column": "retrieved_at",
+        "aggregate": "MIN",
+        "sla_hours": POC_COMPANYFACTS_BOUND_HOURS,
+    },
+    "raw.dividend_calendar": {
+        "column": "retrieved_at",
+        "aggregate": "MAX",
+        "sla_hours": 10 * 24.0,
+    },
+    "raw.macro_series": {
+        "column": "retrieved_at",
+        "aggregate": "MAX",
+        "sla_hours": POC_DAILY_BOUND_HOURS,
+    },
+    "raw.macro_series_vintages": {
+        "column": "retrieved_at",
+        "aggregate": "MAX",
+        "sla_hours": 35 * 24.0,
+    },
+    "raw.corporate_actions": {
+        "column": "retrieved_at",
+        "aggregate": "MAX",
+        "sla_hours": 35 * 24.0,
+    },
+    "raw.xbrl_frames": {
+        "column": "retrieved_at",
+        "aggregate": "MAX",
+        "sla_hours": 100 * 24.0,
+    },
 }
 
 
@@ -667,6 +707,52 @@ def record_check(conn, run_date, status, findings, verified_by, notes):
     )
 
 
+def freshness_rows(findings, measured_at, run_date, freshness_sources=None):
+    """One row per source for ``audit.source_freshness`` (pure; kept for tests).
+
+    ``within_sla`` is NULL for a source that was not aged: no stored rows is not a
+    breach, and recording it as one would read as a stale source.
+    """
+    freshness_sources = FRESHNESS_SOURCES if freshness_sources is None else freshness_sources
+    freshness = findings.get("freshness") or {}
+    rows = []
+    for source, age in (freshness.get("sources") or {}).items():
+        sla = (freshness_sources.get(source) or {}).get("sla_hours")
+        if sla is None:
+            sla = (freshness.get("sla_hours") or {}).get(source)
+        if sla is None:
+            continue
+        rows.append(
+            {
+                "measured_at": measured_at,
+                "source": source,
+                "age_hours": age,
+                "sla_hours": sla,
+                "within_sla": None if age is None else age <= sla,
+                "run_date": run_date,
+            }
+        )
+    return rows
+
+
+def record_freshness(conn, rows):
+    """Append the per-source rows; a repeated (source, measured_at) is ignored."""
+    if not rows:
+        return 0
+    conn.execute(
+        text(
+            """
+            INSERT INTO audit.source_freshness
+              (measured_at, source, age_hours, sla_hours, within_sla, run_date)
+            VALUES (:measured_at, :source, :age_hours, :sla_hours, :within_sla, :run_date)
+            ON CONFLICT (source, measured_at) DO NOTHING
+            """
+        ),
+        rows,
+    )
+    return len(rows)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -743,6 +829,10 @@ def main():
                         result,
                         args.verified_by,
                         args.notes,
+                    )
+                    record_freshness(
+                        conn,
+                        freshness_rows(findings, datetime.now(timezone.utc), run_date),
                     )
             except ProgrammingError as exc:
                 print(

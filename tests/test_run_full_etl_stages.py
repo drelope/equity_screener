@@ -17,7 +17,9 @@ class _Lock:
         pass
 
 
-def _run(monkeypatch, argv, fail_stage=None):
+def _run(monkeypatch, argv, fail_stage=None, ages=None):
+    """``ages`` maps table -> age in days; a table not listed is fresh (0 days)."""
+    ages = ages or {}
     calls = []
     recorded = {}
 
@@ -30,6 +32,9 @@ def _run(monkeypatch, argv, fail_stage=None):
         recorded["exit_code"] = exit_code
 
     monkeypatch.setattr(etl, "run_module", fake_run_module)
+    monkeypatch.setattr(
+        etl, "source_age_days", lambda table, column, aggregate, query=None: ages.get(table, 0.0)
+    )
     monkeypatch.setattr(etl, "_acquire_run_lock", lambda: _Lock())
     monkeypatch.setattr(etl, "_release_run_lock", lambda conn: None)
     monkeypatch.setattr(etl, "record_nightly_run", fake_record)
@@ -173,3 +178,92 @@ def test_the_forward_return_window_can_be_widened(monkeypatch):
     args = next(args for name, args, _ in calls if name == "scripts.build_forward_returns")
 
     assert args == ("--days", "1200")
+
+
+SUPPORTING = (
+    "scripts.load_dividend_calendar",
+    "scripts.load_macro_vintages",
+    "scripts.load_xbrl_frames",
+    "scripts.sync_security_identifiers",
+)
+STALE = {
+    "raw.sec_submissions": 30.0,
+    "raw.dividend_calendar": 3.0,
+    "raw.macro_series_vintages": 30.0,
+    "raw.xbrl_frames": 90.0,
+}
+
+
+def test_stale_supporting_sources_run_and_fresh_ones_are_skipped(monkeypatch):
+    calls, recorded, rc = _run(monkeypatch, [], ages=STALE)
+
+    assert rc == 0
+    for label in ("scripts.load_sec_bulk", *SUPPORTING):
+        assert recorded["stages"][label] == "ok", label
+    assert next(a for n, a, _ in calls if n == "scripts.load_sec_bulk") == ("--download",)
+
+    _, recorded, _ = _run(monkeypatch, [], ages={})
+    # Everything with a table is fresh; only the ungated identifier sync still runs.
+    assert recorded["stages"]["scripts.load_sec_bulk"] == "skipped"
+    assert recorded["stages"]["scripts.load_xbrl_frames"] == "skipped"
+    assert recorded["stages"]["scripts.sync_security_identifiers"] == "ok"
+
+
+def test_the_bulk_refresh_runs_before_the_per_cik_companyfacts_stages(monkeypatch):
+    calls, _, _ = _run(monkeypatch, [], ages=STALE)
+    names = _names(calls)
+
+    assert names.index("scripts.load_sec_bulk") < names.index("scripts.populate_companyfacts")
+
+
+def test_supporting_loaders_run_after_their_reference_data_and_before_the_derived_stages(
+    monkeypatch,
+):
+    calls, _, _ = _run(monkeypatch, [], ages=STALE)
+    names = _names(calls)
+
+    assert names.index("scripts.populate_macro_inputs") < names.index("scripts.load_macro_vintages")
+    assert names.index("scripts.load_xbrl_frames") < names.index("scripts.populate_fundamentals")
+
+
+def test_a_failed_supporting_loader_does_not_stop_the_derived_stages(monkeypatch):
+    calls, recorded, rc = _run(monkeypatch, [], fail_stage="scripts.load_xbrl_frames", ages=STALE)
+    names = _names(calls)
+
+    assert recorded["stages"]["scripts.load_xbrl_frames"] == "failed"
+    assert "scripts.score_rank" in names and "scripts.populate_audit" in names
+    assert rc == 1 and recorded["exit_code"] == 1
+
+
+def test_supporting_loaders_are_skipped_on_partial_runs(monkeypatch):
+    calls, recorded, _ = _run(monkeypatch, ["--limit", "5"], ages=STALE)
+
+    for label in ("scripts.load_sec_bulk", *SUPPORTING):
+        assert recorded["stages"][label] == "skipped", label
+    assert not [c for c in calls if c[0] in SUPPORTING and not c[2]]
+
+
+def test_skip_supporting_loaders_marks_them_skipped(monkeypatch):
+    _, recorded, rc = _run(monkeypatch, ["--skip-supporting-loaders"], ages=STALE)
+
+    assert rc == 0
+    for label in ("scripts.load_sec_bulk", *SUPPORTING):
+        assert recorded["stages"][label] == "skipped", label
+
+
+def test_loader_due_logic():
+    gated = {"min_age_days": 7.0}
+
+    assert etl.loader_due(gated, None) is True  # never loaded
+    assert etl.loader_due(gated, 7.0) is True
+    assert etl.loader_due(gated, 6.9) is False
+    assert etl.loader_due({"min_age_days": None}, 0.0) is True
+
+
+def test_source_age_treats_a_missing_table_as_never_loaded():
+    def boom(sql):
+        raise RuntimeError("relation does not exist")
+
+    assert etl.source_age_days("raw.nope", "retrieved_at", "MAX", query=boom) is None
+    assert etl.source_age_days("raw.t", "retrieved_at", "MAX", query=lambda sql: None) is None
+    assert etl.source_age_days("raw.t", "retrieved_at", "MAX", query=lambda sql: 2) == 2.0
