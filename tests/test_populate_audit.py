@@ -164,3 +164,42 @@ def test_data_quality_components_stay_within_the_unit_interval():
             {"as_of": latest},
         ).scalar()
     assert over == 0, f"{over} component(s) outside [0,1] on {latest}"
+
+
+class _ParamConnection(_FakeConnection):
+    def __init__(self):
+        super().__init__()
+        self.params = []
+
+    def execute(self, statement, params=None):
+        self.params.append(params)
+        return super().execute(statement, params)
+
+
+def test_lineage_rows_are_stamped_with_model_version_and_feature_set_hash():
+    from src.crispdm.versioning import FEATURE_SET_V1, MODEL_VERSION, compute_feature_set_hash
+
+    conn = _ParamConnection()
+
+    populate_audit.source_lineage(conn, date(2026, 10, 3))
+
+    insert_params = conn.params[next(i for i, s in enumerate(conn.statements) if "INSERT" in s)]
+    assert insert_params["model_version"] == MODEL_VERSION
+    assert insert_params["feature_set_hash"] == compute_feature_set_hash(FEATURE_SET_V1)
+    assert ":model_version" in _insert_sql(conn)
+
+
+def test_lineage_provenance_gap_check_counts_unstamped_rows():
+    class _Scalar:
+        def scalar(self):
+            return 3
+
+    class _Conn:
+        def execute(self, statement, params=None):
+            self.sql = " ".join(str(statement).split())
+            return _Scalar()
+
+    conn = _Conn()
+
+    assert populate_audit.lineage_provenance_gaps(conn) == 3
+    assert "model_version IS NULL" in conn.sql and "feature_set_hash IS NULL" in conn.sql

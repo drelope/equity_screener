@@ -5,6 +5,12 @@ import pandas as pd
 from sqlalchemy import text
 
 from .db import engine, read_df
+from .versioning import FEATURE_SET_V1, FEATURE_VERSION, compute_feature_set_hash
+
+#: Hash of the model feature definition stored alongside every feature row, so a
+#: value can be traced to the feature set that produced it. V0095 added the
+#: column; without this writer it stayed NULL for every row.
+FEATURE_SET_HASH = compute_feature_set_hash(FEATURE_SET_V1)
 
 FEATURE_COLUMNS = (
     "security_id",
@@ -67,6 +73,11 @@ FEATURE_COLUMNS = (
     "raw_current_price",
     "raw_annual_dividend",
     "raw_dividend_yield",
+    # V0095 provenance columns. Written from the canonical constants below rather
+    # than from the build query, so every row records which feature definition
+    # and pipeline version produced it.
+    "feature_set_hash",
+    "feature_version",
 )
 
 #: Retired from the feature set because the warehouse cannot support them.
@@ -122,7 +133,7 @@ INSERT INTO model.features AS current_features
      fcf_yield,price_to_book,volatility_252d,
      momentum_252d,momentum_63d,target_sustainable_dividend,price_quality,
      price_quality_rule,yield_exclusion_reason,raw_current_price,
-     raw_annual_dividend,raw_dividend_yield)
+     raw_annual_dividend,raw_dividend_yield,feature_set_hash,feature_version)
 VALUES (:security_id,:as_of_date,:current_price,:annualized_dividend,
      :dividend_yield,:dividend_growth,:earnings_payout,:fcf_payout,
      :dividend_coverage,:eps_ttm_growth,:debt,:debt_to_ebitda,:interest_coverage,
@@ -133,7 +144,7 @@ VALUES (:security_id,:as_of_date,:current_price,:annualized_dividend,
      :momentum_252d,:momentum_63d,
      :target_sustainable_dividend,:price_quality,
      :price_quality_rule,:yield_exclusion_reason,:raw_current_price,
-     :raw_annual_dividend,:raw_dividend_yield)
+     :raw_annual_dividend,:raw_dividend_yield,:feature_set_hash,:feature_version)
 ON CONFLICT(security_id,as_of_date) DO UPDATE SET
     current_price=EXCLUDED.current_price,
     annualized_dividend=EXCLUDED.annualized_dividend,
@@ -172,7 +183,9 @@ ON CONFLICT(security_id,as_of_date) DO UPDATE SET
     yield_exclusion_reason=EXCLUDED.yield_exclusion_reason,
     raw_current_price=EXCLUDED.raw_current_price,
     raw_annual_dividend=EXCLUDED.raw_annual_dividend,
-    raw_dividend_yield=EXCLUDED.raw_dividend_yield
+    raw_dividend_yield=EXCLUDED.raw_dividend_yield,
+    feature_set_hash=EXCLUDED.feature_set_hash,
+    feature_version=EXCLUDED.feature_version
 WHERE current_features IS DISTINCT FROM EXCLUDED
 """)
 
@@ -1291,10 +1304,20 @@ FEATURE_COLUMN_ALIASES = {"annual_dividend": "annualized_dividend"}
 def feature_payload(df):
     """Return the feature rows as bind-parameter dicts, with NULLs for gaps."""
     records = df.to_dict(orient="records")
-    return [
-        {FEATURE_COLUMN_ALIASES.get(col, col): db_value(record.get(col)) for col in FEATURE_COLUMNS}
-        for record in records
-    ]
+    payload = []
+    for record in records:
+        row = {
+            FEATURE_COLUMN_ALIASES.get(col, col): db_value(record.get(col))
+            for col in FEATURE_COLUMNS
+        }
+        # The build query does not select these provenance columns; stamp them
+        # here so a stored row always names the feature definition that wrote it.
+        if row.get("feature_set_hash") is None:
+            row["feature_set_hash"] = FEATURE_SET_HASH
+        if row.get("feature_version") is None:
+            row["feature_version"] = FEATURE_VERSION
+        payload.append(row)
+    return payload
 
 
 def persist_features(df, chunk_size=FEATURE_CHUNK_SIZE):

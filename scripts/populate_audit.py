@@ -35,6 +35,7 @@ if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from src.crispdm.db import engine
+from src.crispdm.versioning import FEATURE_SET_V1, MODEL_VERSION, compute_feature_set_hash
 
 #: Provider -> sourcing reliability used by the confidence/heuristic scores.
 PROVIDER_RELIABILITY = {
@@ -61,8 +62,9 @@ def source_lineage(conn, as_of):
     sql = """
         INSERT INTO audit.source_lineage
             (security_id, field_name, field_value, source, source_document,
-             period, retrieval_date, provider, confidence_score)
-        SELECT * FROM (
+             period, retrieval_date, provider, confidence_score,
+             model_version, feature_set_hash)
+        SELECT x.*, :model_version, :feature_set_hash FROM (
             SELECT tp.security_id, 'security_type' AS field_name,
                    tp.security_type AS field_value,
                    'raw.ticker_profile' AS source,
@@ -119,9 +121,27 @@ def source_lineage(conn, as_of):
         {
             "as_of": as_of,
             "reliability": PROVIDER_RELIABILITY.get("SEC_XBRL", 0.7),
+            "model_version": MODEL_VERSION,
+            "feature_set_hash": compute_feature_set_hash(FEATURE_SET_V1),
         },
     )
     return result.rowcount
+
+
+def lineage_provenance_gaps(conn):
+    """Count lineage rows that do not name their source, model version and feature set.
+
+    Every row written by ``source_lineage`` carries all three, so a nonzero count
+    means a row came from a writer that predates the stamp (or bypassed it).
+    """
+    return int(
+        conn.execute(
+            text("""
+        SELECT count(*) FROM audit.source_lineage
+        WHERE source IS NULL OR model_version IS NULL OR feature_set_hash IS NULL
+    """)
+        ).scalar()
+    )
 
 
 def data_quality(conn, as_of):
@@ -251,10 +271,12 @@ def populate_audit(as_of=None):
     with engine.begin() as conn:
         lineage = source_lineage(conn, as_of)
         quality = data_quality(conn, as_of)
+        gaps = lineage_provenance_gaps(conn)
     print("\n✓ Populated audit tables:")
     print(f"  as_of: {as_of}")
     print(f"  audit.source_lineage rows: {lineage}")
     print(f"  audit.data_quality rows:   {quality}")
+    print(f"  lineage rows missing source/model/feature stamp: {gaps}")
     return quality
 
 

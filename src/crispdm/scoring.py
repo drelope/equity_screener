@@ -1,6 +1,8 @@
 import numpy as np
 import pandas as pd
 
+from .versioning import compute_model_config_hash
+
 #: Section 7.1 factor weights, renormalised to 1.0.
 #:
 #: ``legal_rights_score`` is retired from the composite. It was a flat 0.5
@@ -298,6 +300,20 @@ def predictions(
     x["model_version"] = model_version
     x["feature_version"] = feature_version
     x["data_version"] = data_version
+    # V0095 provenance columns. The hash names the exact scoring contract (model,
+    # feature and data versions plus the decision threshold) so two prediction
+    # rows can be compared without guessing which configuration produced them.
+    # ``training_run_id`` points at the campaign; for the rule scorer it is the
+    # same run that wrote model.scores.
+    x["model_config_hash"] = compute_model_config_hash(
+        {
+            "model_version": model_version,
+            "feature_version": feature_version,
+            "data_version": data_version,
+            "threshold": threshold,
+        }
+    )
+    x["training_run_id"] = str(run_id)
     x["as_of_date"] = x["as_of_date"] if "as_of_date" in x.columns else None
     return x
 

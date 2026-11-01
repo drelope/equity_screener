@@ -341,12 +341,14 @@ def main():
                 text("""
             INSERT INTO model.predictions
             (run_id,security_id,as_of_date,probability,predicted_class,precision_threshold,
-             model_version,feature_version,data_version)
-            VALUES(:run,:sid,:dt,:prob,:cls,:thr,:mv,:fv,:dv)
+             model_version,feature_version,data_version,model_config_hash,training_run_id)
+            VALUES(:run,:sid,:dt,:prob,:cls,:thr,:mv,:fv,:dv,:mch,:trid)
             ON CONFLICT(run_id,security_id,as_of_date) DO UPDATE SET
             probability=EXCLUDED.probability,
             predicted_class=EXCLUDED.predicted_class,
-            precision_threshold=EXCLUDED.precision_threshold
+            precision_threshold=EXCLUDED.precision_threshold,
+            model_config_hash=EXCLUDED.model_config_hash,
+            training_run_id=EXCLUDED.training_run_id
             """),
                 {
                     "run": str(run_id),
@@ -358,6 +360,8 @@ def main():
                     "mv": r.model_version,
                     "fv": r.feature_version,
                     "dv": r.data_version,
+                    "mch": r.model_config_hash,
+                    "trid": r.training_run_id,
                 },
             )
         for _, r in rank.iterrows():
