@@ -46,6 +46,13 @@ UPSERT = text(
       dividend_yield = EXCLUDED.dividend_yield,
       frequency = EXCLUDED.frequency,
       is_special = EXCLUDED.is_special,
+      last_changed_at = CASE
+        WHEN (raw.dividend_calendar.amount, raw.dividend_calendar.declaration_date,
+              raw.dividend_calendar.record_date, raw.dividend_calendar.payment_date)
+             IS DISTINCT FROM
+             (EXCLUDED.amount, EXCLUDED.declaration_date, EXCLUDED.record_date,
+              EXCLUDED.payment_date)
+        THEN now() ELSE raw.dividend_calendar.last_changed_at END,
       retrieved_at = now()
     """
 )

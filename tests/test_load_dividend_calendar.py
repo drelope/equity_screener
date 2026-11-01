@@ -59,3 +59,13 @@ def test_a_repeated_event_collapses_to_one_row():
     event = {"symbol": "KO", "date": "2026-11-10", "dividend": 0.5}
 
     assert len(calendar_rows([event, event], TICKERS)) == 1
+
+
+def test_a_reloaded_row_keeps_first_seen_and_only_moves_last_changed_when_it_changed():
+    from scripts.load_dividend_calendar import UPSERT
+
+    sql = " ".join(str(UPSERT).split())
+
+    assert "first_seen_at" not in sql  # set once by the column default, never updated
+    assert "last_changed_at = CASE" in sql
+    assert "IS DISTINCT FROM" in sql and "ELSE raw.dividend_calendar.last_changed_at" in sql
