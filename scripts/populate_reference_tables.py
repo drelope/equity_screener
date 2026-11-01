@@ -65,6 +65,54 @@ from src.crispdm.sec_client import (
 from src.crispdm.stage import stage_exit_code
 
 
+def titles_claimed_by_others(symbol_titles, ticker):
+    """Lower-cased cover titles that another ticker of the issuer holds exactly.
+
+    ``symbol_titles`` maps a symbol (in both its filed and separator-free spelling) to the
+    title read from the issuer's cover page.
+    """
+    own = {ticker, re.sub(r"[\-.]", "", ticker)}
+    return {
+        str(title).strip().lower()
+        for symbol, title in (symbol_titles or {}).items()
+        if symbol not in own and title
+    }
+
+
+def resolve_security_name(
+    *,
+    exact_title,
+    instrument_matched_title,
+    cik_titles,
+    security_type,
+    claimed,
+    existing_name,
+    issuer_title,
+):
+    """The security name and where it came from.
+
+    An exact cover title for the ticker wins, then the title the instrument classifier
+    bound. Below that, a title is attributed to this ticker only if no other ticker of
+    the issuer already holds it as its exact title: ``match_security_title`` reads "one
+    preferred title on file" as "one preferred security", so an issuer with two preferreds
+    but one title on file (Dynex's Series D missing from the filed cover) handed the
+    Series C title to both. The same applies to a name retained from an earlier run: a
+    sibling's exact title is not evidence about this ticker. What cannot be verified falls
+    back to the issuer name, labelled unresolved.
+    """
+    if exact_title:
+        return exact_title, "sec_instrument_title"
+    if instrument_matched_title:
+        return instrument_matched_title, "sec_companyfacts_title"
+    candidates = [title for title in cik_titles if str(title).strip().lower() not in claimed]
+    unique = match_security_title(candidates, security_type)
+    if unique:
+        return unique, "unique_sec_title"
+    if existing_name and str(existing_name).strip().lower() not in claimed:
+        return existing_name, "retained_existing_unverified"
+    return issuer_title, "issuer_fallback_unresolved"
+
+
 def get_issuer_info_with_fallback(cik, ticker, title):
     """Prefer SEC issuer metadata and fall back to an OpenBB yahoo source to collect company profile."""
     try:
@@ -817,29 +865,17 @@ def populate_securities(limit=None, repopulate=False, reclassify=False, *, ticke
                         uuid.NAMESPACE_URL,
                         f"dividend-equity:{sec['ticker'].upper()}:{cik}:{security_type}",
                     )
-                title_match = match_security_title(
-                    cik_titles or classification.get("security_titles", []),
-                    security_type,
-                )
-                if exact_title:
-                    security_name = exact_title
-                    title_source = "sec_instrument_title"
-                elif instrument.matched_title:
-                    security_name = instrument.matched_title
-                    title_source = "sec_companyfacts_title"
-                elif title_match:
-                    security_name = title_match
-                    title_source = "unique_sec_title"
-                else:
-                    existing_name = existing_names_by_key.get(
+                security_name, title_source = resolve_security_name(
+                    exact_title=exact_title,
+                    instrument_matched_title=instrument.matched_title,
+                    cik_titles=cik_titles or classification.get("security_titles", []),
+                    security_type=security_type,
+                    claimed=titles_claimed_by_others(titles_by_cik.get(cik), ticker_key),
+                    existing_name=existing_names_by_key.get(
                         (cik, sec["ticker"], security_type, dividend)
-                    )
-                    security_name = existing_name or sec["title"]
-                    title_source = (
-                        "retained_existing_unverified"
-                        if existing_name
-                        else "issuer_fallback_unresolved"
-                    )
+                    ),
+                    issuer_title=sec["title"],
+                )
                 exchange_id = _exchange_id_for_symbol(
                     conn,
                     exchange_map,
