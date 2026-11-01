@@ -3,6 +3,7 @@ from datetime import date
 from unittest.mock import patch
 
 import pandas as pd
+import pytest
 
 from scripts import populate_dividend_data as dividend_data
 from scripts.populate_dividend_data import (
@@ -822,3 +823,76 @@ def test_a_depositary_title_gives_no_liquidation_preference():
         ]
         == 25.0
     )
+
+
+def test_special_is_taken_from_the_providers_label_not_the_derived_cadence():
+    from scripts.populate_dividend_data import is_special_dividend
+
+    assert is_special_dividend("Special") is True
+    assert is_special_dividend(" special ") is True
+    assert is_special_dividend("Irregular") is False  # a cadence, not a one-off
+    assert is_special_dividend("Quarterly") is False
+    assert is_special_dividend(None) is False
+
+
+def test_the_dividend_upsert_executes_against_postgres_and_updates_is_special():
+    """The real statement, because a mocked connection cannot see driver typing errors.
+
+    psycopg binds parameters server-side; reusing one parameter under two inferred types
+    (a varchar column and a cast) raised AmbiguousParameter at run time and halted a
+    nightly while every mocked test passed. Runs in a transaction that is always rolled
+    back.
+    """
+    from datetime import date, datetime, timezone
+
+    pytest.importorskip("sqlalchemy")
+    try:
+        from sqlalchemy import text
+
+        from scripts.populate_dividend_data import DIVIDEND_UPSERT
+        from src.crispdm.db import engine
+
+        conn = engine.connect()
+        conn.exec_driver_sql("SELECT 1")
+        conn.rollback()  # the probe autobegins; start a transaction we control below
+    except Exception:  # pragma: no cover - environments without a database
+        pytest.skip("no database available")
+    trans = conn.begin()
+    try:
+        security_id = conn.execute(
+            text("SELECT security_id FROM reference.securities LIMIT 1")
+        ).scalar()
+        if security_id is None:
+            pytest.skip("no securities in the database")
+        row = {
+            "sec_id": security_id,
+            "ex_date": date(1900, 1, 1),
+            "decl_date": None,
+            "rec_date": None,
+            "pay_date": None,
+            "amount": 1.0,
+            "adjusted_amount": None,
+            "frequency": "Quarterly",
+            "currency": "USD",
+            "provider": "TEST_ROLLBACK",
+            "feed": None,
+            "amount_feed": None,
+            "concept": "",
+            "retrieved_at": datetime.now(timezone.utc),
+            "is_special": False,
+        }
+        conn.execute(DIVIDEND_UPSERT, [row])
+        conn.execute(
+            DIVIDEND_UPSERT, [{**row, "is_special": True, "amount": 2.0}]
+        )  # the conflict path
+        got = conn.execute(
+            text(
+                "SELECT is_special, amount FROM raw.dividend_data "
+                "WHERE security_id = :s AND ex_dividend_date = :d AND provider = 'TEST_ROLLBACK'"
+            ),
+            {"s": security_id, "d": date(1900, 1, 1)},
+        ).one()
+        assert got.is_special is True and float(got.amount) == 2.0
+    finally:
+        trans.rollback()
+        conn.close()

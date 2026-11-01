@@ -92,6 +92,45 @@ except Exception:  # pragma: no cover - optional dependency
 PROFILE_PROVIDER = "OPENBB_YFINANCE"
 
 
+#: The upsert for raw.dividend_data. A module constant so a test can run the real
+#: statement against Postgres: psycopg binds parameters server-side, and a parameter used
+#: twice with different inferred types (varchar column and a cast) fails only there, never
+#: against a mocked connection.
+DIVIDEND_UPSERT = text(
+    """
+    INSERT INTO raw.dividend_data
+    (security_id, ex_dividend_date, declaration_date, record_date,
+     payment_date, amount, adjusted_amount, frequency, currency, provider,
+     feed, amount_feed, concept, retrieved_at, is_special)
+    VALUES (:sec_id, :ex_date, :decl_date, :rec_date, :pay_date,
+            :amount, :adjusted_amount, :frequency, :currency, :provider,
+            :feed, :amount_feed, :concept, :retrieved_at, :is_special)
+    ON CONFLICT (security_id, ex_dividend_date, provider) DO UPDATE SET
+        declaration_date = EXCLUDED.declaration_date,
+        record_date = EXCLUDED.record_date,
+        payment_date = EXCLUDED.payment_date,
+        amount = EXCLUDED.amount,
+        adjusted_amount = EXCLUDED.adjusted_amount,
+        frequency = EXCLUDED.frequency,
+        currency = EXCLUDED.currency,
+        feed = EXCLUDED.feed,
+        amount_feed = EXCLUDED.amount_feed,
+        concept = EXCLUDED.concept,
+        is_special = EXCLUDED.is_special,
+        retrieved_at = EXCLUDED.retrieved_at
+    """
+)
+
+
+def is_special_dividend(provider_frequency):
+    """True only when the provider itself labels the payment ``Special``.
+
+    The ``frequency`` stored on the row is the security's derived cadence, which is
+    never ``Special``; the provider's label is on the incoming record.
+    """
+    return str(provider_frequency or "").strip().lower() == "special"
+
+
 def safe_float(value):
     if value is None or (isinstance(value, float) and pd.isna(value)):
         return None
@@ -1370,6 +1409,7 @@ def populate_dividend_data(
                     ),
                     "concept": (div.get("concept") or "")[:96],
                     "retrieved_at": datetime.now(timezone.utc),
+                    "is_special": is_special_dividend(div.get("frequency")),
                 }
             )
 
@@ -1384,32 +1424,7 @@ def populate_dividend_data(
             row["frequency"] = frequencies.get(security_id, "Irregular")
 
         if insert_rows:
-            conn.execute(
-                text("""
-                INSERT INTO raw.dividend_data
-                (security_id, ex_dividend_date, declaration_date, record_date,
-                 payment_date, amount, adjusted_amount, frequency, currency, provider,
-                 feed, amount_feed, concept, retrieved_at, is_special)
-                VALUES (:sec_id, :ex_date, :decl_date, :rec_date, :pay_date,
-                        :amount, :adjusted_amount, :frequency, :currency, :provider,
-                        :feed, :amount_feed, :concept, :retrieved_at,
-                        lower(coalesce(CAST(:frequency AS text), '')) = 'special')
-                ON CONFLICT (security_id, ex_dividend_date, provider) DO UPDATE SET
-                    declaration_date = EXCLUDED.declaration_date,
-                    record_date = EXCLUDED.record_date,
-                    payment_date = EXCLUDED.payment_date,
-                    amount = EXCLUDED.amount,
-                    adjusted_amount = EXCLUDED.adjusted_amount,
-                    frequency = EXCLUDED.frequency,
-                    currency = EXCLUDED.currency,
-                    feed = EXCLUDED.feed,
-                    amount_feed = EXCLUDED.amount_feed,
-                    concept = EXCLUDED.concept,
-                    is_special = EXCLUDED.is_special,
-                    retrieved_at = EXCLUDED.retrieved_at
-            """),
-                insert_rows,
-            )
+            conn.execute(DIVIDEND_UPSERT, insert_rows)
             inserted = len(insert_rows)
 
     print("\n✓ Populated raw.dividend_data:")
