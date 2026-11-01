@@ -137,10 +137,10 @@ def load_cik_universe(conn, tickers=None, cik=None, limit=None, preferred_only=F
     return [row["cik"] for row in rows]
 
 
-def pick_best_filing(submissions_payload):
-    """Choose the most recent XBRL cover-page filing from a submissions payload."""
+def _xbrl_candidates(submissions_payload):
+    """Every accepted XBRL cover-page filing in a submissions payload (unsorted)."""
     if not isinstance(submissions_payload, dict):
-        return None
+        return []
 
     filings = (submissions_payload.get("filings") or {}).get("recent") or {}
     index = range(len(filings.get("accessionNumber") or []))
@@ -159,9 +159,40 @@ def pick_best_filing(submissions_payload):
                 "primary_document": (filings.get("primaryDocument") or [None] * len(index))[i],
             }
         )
+    return candidates
+
+
+def pick_best_filing(submissions_payload):
+    """Choose the most recent XBRL cover-page filing from a submissions payload."""
+    candidates = _xbrl_candidates(submissions_payload)
     candidates.sort(key=lambda item: item["filing_date"] or "", reverse=True)
     candidates.sort(key=lambda item: FORM_PRIORITY.get(item["form"], 99))
     return candidates[0] if candidates else None
+
+
+#: Periodic reports. Their covers list every registered class, so a series listed after the
+#: last annual report appears on the next quarterly cover.
+PERIODIC_FORMS = {"10-K", "10-K/A", "10-Q", "10-Q/A", "10-QT", "10-QT/A"}
+
+
+def pick_newer_cover_filing(submissions_payload, after_date):
+    """The most recent periodic filing dated after ``after_date``, or None.
+
+    ``pick_best_filing`` ranks annual reports first so the fullest cover wins, which means
+    a class registered after the 10-K is invisible until the next one. This finds the newer
+    quarterly cover that does list it.
+    """
+    if not after_date:
+        return None
+    newer = [
+        item
+        for item in _xbrl_candidates(submissions_payload)
+        if item["form"] in PERIODIC_FORMS
+        and item["primary_document"]
+        and (item["filing_date"] or "") > after_date
+    ]
+    newer.sort(key=lambda item: item["filing_date"], reverse=True)
+    return newer[0] if newer else None
 
 
 def canonical_title_symbol(symbol, title, known_symbols):
@@ -258,13 +289,27 @@ def apply_preferred_titles(conn, ciks):
 
 
 def ingest_from_instance(
-    conn, cik, instance_xml, source_filing, source_url, document_hash, known_symbols
+    conn,
+    cik,
+    instance_xml,
+    source_filing,
+    source_url,
+    document_hash,
+    known_symbols,
+    only_tickers=None,
 ):
-    """Parse an instance and upsert its (symbol -> title) pairs."""
+    """Parse an instance and upsert its (symbol -> title) pairs.
+
+    ``only_tickers`` restricts the write to those symbols, so a supplementary cover can
+    fill a gap without replacing a title another filing already supplied. The return
+    count then covers only the rows written.
+    """
     pairs, titles = parse_dei_instrument_titles(instance_xml, known_symbols=known_symbols)
     touched = 0
     for ticker, title in pairs:
         ticker = canonical_title_symbol(ticker, title, known_symbols)
+        if only_tickers is not None and ticker not in only_tickers:
+            continue
         accession = (source_filing or {}).get("accession") or None
         filing_date = (source_filing or {}).get("filing_date") or None
         form_type = (source_filing or {}).get("form") or None
@@ -298,7 +343,57 @@ def ingest_from_instance(
             },
         )
         touched += 1
-    return len(pairs), titles
+    return (len(pairs) if only_tickers is None else touched), titles
+
+
+def missing_preferred_tickers(conn, cik):
+    """Active preferred tickers of ``cik`` that have no stored cover title at all."""
+    return set(
+        conn.execute(
+            text("""
+                SELECT s.ticker FROM reference.securities s
+                WHERE s.cik = :cik AND s.active AND s.security_type = 'preferred stock'
+                  AND NOT EXISTS (
+                      SELECT 1 FROM raw.sec_instrument_titles t
+                      WHERE t.cik = s.cik AND t.ticker = s.ticker
+                  )
+            """),
+            {"cik": cik},
+        ).scalars()
+    )
+
+
+def supplement_from_newer_filing(conn, cik, submission, best_filing, known_symbols, fetch=None):
+    """Fill preferreds still without a title from a newer periodic cover.
+
+    Costs one extra request, and only for an issuer that still has an active preferred
+    with no title after the best filing was read. Returns the number of titles written.
+    """
+    missing = missing_preferred_tickers(conn, cik)
+    if not missing:
+        return 0
+    newer = pick_newer_cover_filing(submission, (best_filing or {}).get("filing_date"))
+    if not newer:
+        return 0
+    if REQUEST_DELAY:
+        time.sleep(REQUEST_DELAY)
+    url, instance_xml, document_hash = (fetch or filing_instance_url)(
+        cik, newer["accession"], newer["primary_document"]
+    )
+    if not instance_xml:
+        return 0
+    with conn.begin_nested():
+        rows, _titles = ingest_from_instance(
+            conn,
+            cik,
+            instance_xml,
+            {k: newer[k] for k in ("accession", "form", "filing_date")},
+            url,
+            document_hash,
+            known_symbols,
+            only_tickers=missing,
+        )
+    return rows
 
 
 def populate_sec_instrument_titles(
@@ -319,6 +414,7 @@ def populate_sec_instrument_titles(
     skipped = 0
     errors = 0
     resume_skipped = 0
+    supplemented_titles = 0
     with engine.begin() as conn:
         ciks = load_cik_universe(
             conn, tickers=tickers, cik=cik, limit=limit, preferred_only=preferred_only
@@ -376,6 +472,12 @@ def populate_sec_instrument_titles(
                         document_hash,
                         known_symbols,
                     )
+                if not local_file:
+                    supplemented = supplement_from_newer_filing(
+                        conn, issuer_cik, submission, filing, known_symbols
+                    )
+                    rows += supplemented
+                    supplemented_titles += supplemented
                 paired += rows
                 processed += 1
                 if rows == 0:
@@ -390,7 +492,8 @@ def populate_sec_instrument_titles(
     print(f"  Preferred reference titles/terms updated: {applied}")
     print(
         f"Completed: issuers={processed}, paired_titles={paired}, "
-        f"skipped={skipped}, errors={errors}, resume_skipped={resume_skipped}"
+        f"skipped={skipped}, errors={errors}, resume_skipped={resume_skipped}, "
+        f"supplemented_from_newer_filing={supplemented_titles}"
     )
     return processed, paired, skipped, errors
 
