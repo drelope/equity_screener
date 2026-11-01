@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import json
 import os
 import secrets
 import time
@@ -13,7 +15,7 @@ from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, sta
 
 from src.crispdm import macro_inputs, openbb_client, sec_client
 from src.crispdm.config import settings
-from src.crispdm.db import read_df
+from src.crispdm.db import execute, read_df
 
 # The interactive docs advertise every route and schema, so they are off unless
 # a deployment opts in (they are a convenience on a laptop, not a public API).
@@ -160,6 +162,23 @@ def _cap_facts(payload: Any, limit: int) -> dict[str, Any]:
 
 
 def _company_entry(ticker: str) -> dict[str, Any]:
+    """Resolve a ticker to its SEC entry, preferring the warehouse over live SEC.
+
+    ``reference.securities`` already carries the CIK for every active security, so
+    the common case needs no SEC request. The live ticker file is only consulted
+    for a ticker the warehouse does not know, or when the database is unavailable.
+    """
+    try:
+        stored = read_df(
+            "SELECT cik, ticker, security_name FROM reference.securities "
+            "WHERE upper(ticker) = :ticker AND active = TRUE AND cik IS NOT NULL LIMIT 1",
+            {"ticker": ticker},
+        )
+        if not stored.empty:
+            row = stored.iloc[0]
+            return {"cik_str": int(row["cik"]), "ticker": ticker, "title": row.get("security_name")}
+    except Exception:  # noqa: S110 - an unavailable DB must not block the live fallback
+        pass
     for entry in sec_client.get_company_tickers().values():
         if str(entry.get("ticker", "")).upper() == ticker:
             return entry
@@ -221,10 +240,60 @@ def company(ticker: str) -> dict[str, Any]:
     return {**entry, **issuer, "ticker": ticker}
 
 
+def _stored_submissions(cik: int) -> dict[str, Any] | None:
+    """The stored SEC submissions payload for a CIK, or None when not in the warehouse."""
+    try:
+        frame = read_df(
+            "SELECT raw_payload FROM raw.sec_submissions WHERE cik = :cik",
+            {"cik": f"{cik:010d}"},
+        )
+    except Exception:  # noqa: S110 - an unavailable DB must not block the live fallback
+        return None
+    if frame.empty or not isinstance(frame.iloc[0]["raw_payload"], dict):
+        return None
+    return frame.iloc[0]["raw_payload"]
+
+
+def _store_submissions(cik: int, payload: dict[str, Any]) -> None:
+    """Write a live SEC submissions payload through to ``raw.sec_submissions``.
+
+    Best effort: the caller already has the answer, so a failed write must not fail
+    the request. The hash scheme matches ``scripts.populate_companyfacts`` so a
+    later bulk or per-CIK load sees an unchanged payload as unchanged.
+    """
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    try:
+        execute(
+            """
+            INSERT INTO raw.sec_submissions
+                (cik, company_name, raw_payload, content_hash, provider)
+            VALUES (:cik, :name, CAST(:payload AS jsonb), :hash, 'SEC_SUBMISSIONS')
+            ON CONFLICT (cik) DO UPDATE SET
+                company_name = EXCLUDED.company_name,
+                raw_payload = EXCLUDED.raw_payload,
+                content_hash = EXCLUDED.content_hash,
+                retrieved_at = now()
+            WHERE raw.sec_submissions.content_hash IS DISTINCT FROM EXCLUDED.content_hash
+            """,
+            {
+                "cik": f"{cik:010d}",
+                "name": payload.get("name"),
+                "payload": json.dumps(payload),
+                "hash": hashlib.sha256(encoded).hexdigest(),
+            },
+        )
+    except Exception:  # noqa: S110 - write-through must never fail the request
+        pass
+
+
 @app.get("/filings/{ticker}", dependencies=[Depends(require_api_key)])
 def filings(ticker: str, limit: int = Query(default=100, ge=1, le=1000)) -> dict[str, Any]:
     ticker = _ticker(ticker)
-    payload = sec_client.get_submissions(_cik(ticker))
+    cik = _cik(ticker)
+    payload = _stored_submissions(cik)
+    if payload is None:
+        payload = sec_client.get_submissions(cik)
+        _store_submissions(cik, payload)
     recent = payload.get("filings", {}).get("recent", {})
     items = []
     for index in range(min(limit, len(recent.get("form", [])))):

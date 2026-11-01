@@ -2,9 +2,12 @@ import hashlib
 import logging
 import os
 import re
+import threading
+import time
+from collections import OrderedDict
 from dataclasses import dataclass, field
 from datetime import date, timedelta
-from typing import Optional
+from typing import Any, Optional
 
 import requests
 from bs4 import BeautifulSoup
@@ -55,6 +58,75 @@ class SECDataUnavailableError(requests.exceptions.HTTPError):
 SEC_MIN_INTERVAL = float(os.environ.get("SEC_MIN_INTERVAL", "0.15"))
 SEC_THROTTLE = Throttle(SEC_MIN_INTERVAL)
 
+#: The ticker universe changes at most daily, but ``get_company_tickers`` is on the
+#: hot path of every API request that resolves a ticker. Without a cache each
+#: request made a fresh SEC call, so a page that lists companies spent the SEC
+#: fair-access budget and added network latency for data that had not changed.
+#: Five minutes is short enough that a newly listed ticker appears on the next
+#: refresh and long enough to collapse a burst of requests into one fetch.
+COMPANY_TICKERS_TTL_SECONDS = float(os.environ.get("SEC_COMPANY_TICKERS_TTL", "300"))
+_company_tickers_cache: Optional[dict] = None
+_company_tickers_fetched_at: float = 0.0
+_company_tickers_lock = threading.Lock()
+
+
+def clear_company_tickers_cache() -> None:
+    """Drop the cached ticker universe (used by tests and long-lived callers)."""
+    global _company_tickers_cache, _company_tickers_fetched_at
+    with _company_tickers_lock:
+        _company_tickers_cache = None
+        _company_tickers_fetched_at = 0.0
+
+
+#: Validators (ETag / Last-Modified) plus the payload they validate, keyed by URL.
+#: A revalidation that answers 304 costs SEC almost nothing and spares re-parsing
+#: the body. Bounded so a long-lived API process cannot grow without limit; only
+#: small payloads go through it (the multi-MB companyfacts files do not).
+CONDITIONAL_CACHE_MAX_ENTRIES = int(os.environ.get("SEC_CONDITIONAL_CACHE_MAX", "256"))
+_conditional_cache: "OrderedDict[str, tuple[Optional[str], Optional[str], Any]]" = OrderedDict()
+_conditional_lock = threading.Lock()
+
+
+def clear_conditional_cache() -> None:
+    """Drop every stored validator and payload (used by tests)."""
+    with _conditional_lock:
+        _conditional_cache.clear()
+
+
+def conditional_get_json(url, **kwargs):
+    """GET ``url`` as JSON, revalidating a previously seen response with its ETag.
+
+    Sends ``If-None-Match`` / ``If-Modified-Since`` when a validator is stored and
+    returns the cached payload on ``304 Not Modified``. A response without
+    validators is returned but not cached, so a server that ignores conditional
+    requests behaves exactly like a plain GET.
+    """
+    with _conditional_lock:
+        cached = _conditional_cache.get(url)
+        if cached is not None:
+            _conditional_cache.move_to_end(url)
+    headers = dict(kwargs.pop("headers", None) or HEADERS)
+    if cached is not None:
+        etag, last_modified, _ = cached
+        if etag:
+            headers["If-None-Match"] = etag
+        if last_modified:
+            headers["If-Modified-Since"] = last_modified
+    r = SEC_SESSION.get(url, headers=headers, **kwargs)
+    if r.status_code == 304 and cached is not None:
+        return cached[2]
+    r.raise_for_status()
+    payload = r.json()
+    etag = r.headers.get("ETag")
+    last_modified = r.headers.get("Last-Modified")
+    if etag or last_modified:
+        with _conditional_lock:
+            _conditional_cache[url] = (etag, last_modified, payload)
+            _conditional_cache.move_to_end(url)
+            while len(_conditional_cache) > CONDITIONAL_CACHE_MAX_ENTRIES:
+                _conditional_cache.popitem(last=False)
+    return payload
+
 
 class _SecSession(requests.Session):
     """SEC session that enforces the fair-access User-Agent before any request."""
@@ -87,6 +159,10 @@ def get_company_tickers():
     """
     Fetch all company tickers from the SEC's official company_tickers.json source.
 
+    The payload is cached in-process for ``COMPANY_TICKERS_TTL_SECONDS`` so the
+    API's ticker lookups do not spend a SEC request each. A caller that needs the
+    newest universe can call :func:`clear_company_tickers_cache` first.
+
     Returns:
         dict: A mapping of index to company info with keys:
             - cik_str: Central Index Key (integer)
@@ -99,13 +175,24 @@ def get_company_tickers():
         >>> print(aapl_entry['ticker'])  # 'AAPL'
         >>> print(aapl_entry['cik_str'])  # 320193
     """
-    r = SEC_SESSION.get(
+    global _company_tickers_cache, _company_tickers_fetched_at
+    with _company_tickers_lock:
+        if (
+            _company_tickers_cache is not None
+            and time.monotonic() - _company_tickers_fetched_at < COMPANY_TICKERS_TTL_SECONDS
+        ):
+            return _company_tickers_cache
+    # Fetch outside the lock: holding it across the network call would make a
+    # slow SEC response block every other request. A concurrent miss may fetch
+    # twice, which is harmless; the last writer wins.
+    payload = conditional_get_json(
         "https://www.sec.gov/files/company_tickers.json",
-        headers=HEADERS,
         timeout=(10, 30),
     )
-    r.raise_for_status()
-    return r.json()
+    with _company_tickers_lock:
+        _company_tickers_cache = payload
+        _company_tickers_fetched_at = time.monotonic()
+    return payload
 
 
 def ticker_to_cik(ticker):
@@ -159,13 +246,10 @@ def cik_to_ticker(cik):
 
 
 def get_submissions(cik):
-    r = SEC_SESSION.get(
+    return conditional_get_json(
         f"https://data.sec.gov/submissions/CIK{int(cik):010d}.json",
-        headers=HEADERS,
         timeout=(10, 30),
     )
-    r.raise_for_status()
-    return r.json()
 
 
 def get_exchange_list():

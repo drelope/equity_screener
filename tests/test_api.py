@@ -383,3 +383,92 @@ def test_openbb_macro_inputs_falls_back_to_a_live_fetch_when_nothing_is_stored(m
     assert entries["SOFR"]["source"] == "FRED"
     assert entries["HY_OAS"]["status"] == "UNVERIFIED"
     assert "markdown" not in body
+
+
+def test_company_entry_prefers_the_warehouse_over_live_sec(monkeypatch):
+    monkeypatch.setattr(
+        api_main,
+        "read_df",
+        lambda sql, params=None: pd.DataFrame(
+            [{"cik": "0000320193", "ticker": "AAPL", "security_name": "Apple"}]
+        ),
+    )
+
+    def _boom():
+        raise AssertionError("live SEC must not be called")
+
+    monkeypatch.setattr(api_main.sec_client, "get_company_tickers", _boom)
+
+    assert api_main._company_entry("AAPL")["cik_str"] == 320193
+
+
+def test_company_entry_falls_back_to_live_sec_when_unknown(monkeypatch):
+    monkeypatch.setattr(api_main, "read_df", lambda sql, params=None: pd.DataFrame())
+    monkeypatch.setattr(
+        api_main.sec_client,
+        "get_company_tickers",
+        lambda: {"0": {"ticker": "ZZZ", "cik_str": 9}},
+    )
+
+    assert api_main._company_entry("ZZZ")["cik_str"] == 9
+
+
+def test_filings_read_stored_submissions_without_calling_sec(monkeypatch):
+    monkeypatch.setenv("API_KEY", "test-key")
+    payload = {"cik": "1", "filings": {"recent": {"form": ["10-K"], "accessionNumber": ["a"]}}}
+    monkeypatch.setattr(api_main, "_company_entry", lambda t: {"cik_str": 1})
+    monkeypatch.setattr(api_main, "_stored_submissions", lambda cik: payload)
+
+    def _boom(cik):
+        raise AssertionError("live SEC must not be called")
+
+    monkeypatch.setattr(api_main.sec_client, "get_submissions", _boom)
+
+    response = TestClient(app).get("/filings/TEST", headers={"X-API-Key": "test-key"})
+
+    assert response.status_code == 200
+    assert response.json()["items"] == [{"form": "10-K", "accessionNumber": "a"}]
+
+
+def test_filings_fall_back_to_live_sec_when_not_stored(monkeypatch):
+    monkeypatch.setenv("API_KEY", "test-key")
+    monkeypatch.setattr(api_main, "_company_entry", lambda t: {"cik_str": 1})
+    monkeypatch.setattr(api_main, "_stored_submissions", lambda cik: None)
+    stored = []
+    monkeypatch.setattr(api_main, "_store_submissions", lambda cik, payload: stored.append(cik))
+    monkeypatch.setattr(
+        api_main.sec_client,
+        "get_submissions",
+        lambda cik: {"cik": "1", "filings": {"recent": {"form": ["8-K"]}}},
+    )
+
+    response = TestClient(app).get("/filings/TEST", headers={"X-API-Key": "test-key"})
+
+    assert response.json()["items"] == [{"form": "8-K"}]
+    assert stored == [1]
+
+
+def test_a_failed_write_through_does_not_fail_the_request(monkeypatch):
+    def broken(sql, params=None):
+        raise RuntimeError("db down")
+
+    monkeypatch.setattr(api_main, "execute", broken)
+
+    api_main._store_submissions(1, {"name": "X"})
+
+
+def test_write_through_uses_the_per_cik_hash_scheme(monkeypatch):
+    import hashlib
+    import json
+
+    seen = {}
+    monkeypatch.setattr(api_main, "execute", lambda sql, params=None: seen.update(params))
+    payload = {"name": "X", "b": 1, "a": 2}
+
+    api_main._store_submissions(320193, payload)
+
+    expected = hashlib.sha256(
+        json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    assert seen["cik"] == "0000320193"
+    assert seen["hash"] == expected
