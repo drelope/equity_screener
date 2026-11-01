@@ -142,14 +142,23 @@ RETURNING security_id
 
 
 def repair_exact_titles(conn):
-    """Correct only instruments with a decisive, exact CIK/ticker cover title."""
+    """Correct only instruments with a decisive, exact CIK/ticker cover title.
+
+    Candidates are active rows typed ``preferred stock`` or ``common_stock``. A common row
+    is the same kind of mistake: a note or unit listed under an issuer whose only other
+    signal is a common-stock dividend tag (Navient's 6% Senior Notes, JSM, were typed
+    common). The row is updated in place, so its ``security_id`` and every price, dividend
+    and model row keyed on it stay attached; retyping it through the stage-1 insert would
+    mint a new identity and strand them. A row is never moved to the type it already has.
+    """
     rows = (
         conn.execute(
             text("""
-        SELECT s.security_id, s.ticker, t.title, t.accession_no, t.source_url
+        SELECT s.security_id, s.ticker, s.security_type AS current_type,
+               t.title, t.accession_no, t.source_url
         FROM reference.securities s
         JOIN raw.sec_instrument_titles t ON t.cik = s.cik AND t.ticker = s.ticker
-        WHERE s.active AND s.security_type = 'preferred stock'
+        WHERE s.active AND s.security_type IN ('preferred stock', 'common_stock')
     """)
         )
         .mappings()
@@ -158,6 +167,8 @@ def repair_exact_titles(conn):
     repaired = []
     for row in rows:
         decision = classify_instrument(row["ticker"], exact_dei_title=row["title"])
+        if decision.security_type == row["current_type"]:
+            continue
         if decision.source != "dei_title" or decision.security_type not in (
             "common_stock",
             "corporate bond",

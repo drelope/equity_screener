@@ -278,3 +278,62 @@ def test_exact_title_retires_preferred_duplicate_of_existing_common():
             assert not repair.repair_exact_titles(conn)
         finally:
             trans.rollback()
+
+
+def test_a_common_row_whose_exact_title_is_a_note_is_retyped_in_place():
+    """JSM: Navient's 6% Senior Notes were typed common_stock because the issuer files a
+    common-stock dividend tag. The exact cover title is decisive, and the row must keep its
+    security_id so its price and dividend history stays attached."""
+    engine = _live_engine()
+    if engine is None:
+        pytest.skip("no database available")
+    with engine.connect() as conn:
+        trans = conn.begin()
+        try:
+            note = _insert_security(conn, "ZQN", "9000000031", "common_stock", dividend=True)
+            _insert_title(conn, "9000000031", "ZQN", "6% Senior Notes due December 15, 2043")
+            equity = _insert_security(conn, "ZQE", "9000000031", "common_stock", dividend=True)
+            _insert_title(conn, "9000000031", "ZQE", "Common stock, par value $.01 per share")
+            untitled = _insert_security(conn, "ZQX", "9000000031", "common_stock")
+
+            changed = {
+                ticker: kind
+                for ticker, kind in repair.repair_exact_titles(conn)
+                if ticker.startswith("ZQ")  # the live database may hold other pending repairs
+            }
+
+            assert changed == {"ZQN": "corporate bond"}
+            rows = {
+                r["security_id"]: r
+                for r in conn.execute(
+                    text(
+                        "SELECT security_id, security_type, classify_source, security_name, active "
+                        "FROM reference.securities WHERE security_id IN (:a, :b, :c)"
+                    ),
+                    {"a": note, "b": equity, "c": untitled},
+                ).mappings()
+            }
+            assert rows[note]["security_type"] == "corporate bond"  # same security_id, new type
+            assert rows[note]["classify_source"] == "dei_title"
+            assert rows[note]["security_name"] == "6% Senior Notes due December 15, 2043"
+            assert rows[note]["active"] is True
+            assert rows[equity]["security_type"] == "common_stock"  # a common title is left alone
+            assert rows[untitled]["security_type"] == "common_stock"  # no title, no evidence
+            assert not [t for t, _ in repair.repair_exact_titles(conn) if t.startswith("ZQ")]
+        finally:
+            trans.rollback()
+
+
+def test_a_common_row_is_never_moved_to_common_or_preferred_by_this_repair():
+    engine = _live_engine()
+    if engine is None:
+        pytest.skip("no database available")
+    with engine.connect() as conn:
+        trans = conn.begin()
+        try:
+            _insert_security(conn, "ZQP", "9000000032", "common_stock")
+            _insert_title(conn, "9000000032", "ZQP", "6.25% Series A Cumulative Preferred Stock")
+
+            assert "ZQP" not in dict(repair.repair_exact_titles(conn))
+        finally:
+            trans.rollback()
