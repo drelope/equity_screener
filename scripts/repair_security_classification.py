@@ -145,9 +145,9 @@ def repair_exact_titles(conn):
     """Correct only instruments with a decisive, exact CIK/ticker cover title.
 
     Candidates are active rows typed ``preferred stock`` or ``common_stock``. A common row
-    is the same kind of mistake: a note or unit listed under an issuer whose only other
-    signal is a common-stock dividend tag (Navient's 6% Senior Notes, JSM, were typed
-    common). The row is updated in place, so its ``security_id`` and every price, dividend
+    is the same kind of mistake: a note, unit or preferred listed under an issuer whose only
+    other signal is a common-stock dividend tag or an issuer-level title (Navient's 6% Senior
+    Notes, JSM, and Strategy's STRK preferred were typed common). The row is updated in place, so its ``security_id`` and every price, dividend
     and model row keyed on it stay attached; retyping it through the stage-1 insert would
     mint a new identity and strand them. A row is never moved to the type it already has.
     """
@@ -175,6 +175,7 @@ def repair_exact_titles(conn):
             "government debt",
             "derivative",
             "other_debt_and_equity",
+            "preferred stock",
         ):
             continue
         evidence = json.dumps(
@@ -192,7 +193,8 @@ def repair_exact_titles(conn):
             SET security_type = :new_type, security_name = :title,
                 classify_source = 'dei_title', classify_confidence = 'high',
                 classification_evidence = CAST(:evidence AS jsonb),
-                liquidation_preference = NULL,
+                liquidation_preference = CASE WHEN :new_type = 'preferred stock'
+                    THEN liquidation_preference ELSE NULL END,
                 coupon_rate = CASE WHEN :new_type IN ('common_stock', 'derivative',
                     'other_debt_and_equity') THEN NULL ELSE coupon_rate END,
                 updated_at = now()
@@ -208,8 +210,26 @@ def repair_exact_titles(conn):
             {**row, "new_type": decision.security_type, "evidence": evidence},
         ).all()
         if not result:
+            if (
+                row["current_type"] == "common_stock"
+                and not conn.execute(
+                    text("""
+                    SELECT EXISTS (
+                        SELECT 1 FROM reference.securities s
+                        JOIN reference.securities d ON d.cik = s.cik AND d.ticker = s.ticker
+                        WHERE s.security_id = :security_id AND d.security_id <> s.security_id
+                          AND d.security_type = :new_type AND d.dividend = s.dividend
+                          AND d.active
+                    )
+                """),
+                    {**row, "new_type": decision.security_type},
+                ).scalar()
+            ):
+                # The twin of the real type is inactive. Retiring this row would leave the
+                # ticker with no active row; the next stage-1 run reactivates the twin.
+                continue
             # A row of the real type already holds the unique (cik, ticker, type,
-            # dividend) key, so retire the misclassified preferred duplicate.
+            # dividend) key, so retire the misclassified duplicate.
             result = conn.execute(
                 text("""
                 UPDATE reference.securities

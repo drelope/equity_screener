@@ -324,16 +324,84 @@ def test_a_common_row_whose_exact_title_is_a_note_is_retyped_in_place():
             trans.rollback()
 
 
-def test_a_common_row_is_never_moved_to_common_or_preferred_by_this_repair():
+def test_a_common_row_whose_exact_title_is_preferred_is_retyped_in_place_keeping_its_terms():
+    """STRK-style rows: the exact cover title says preferred, the stored type says common."""
     engine = _live_engine()
     if engine is None:
         pytest.skip("no database available")
     with engine.connect() as conn:
         trans = conn.begin()
         try:
-            _insert_security(conn, "ZQP", "9000000032", "common_stock")
+            pref = _insert_security(
+                conn, "ZQP", "9000000032", "common_stock", coupon=None, liquidation=25
+            )
             _insert_title(conn, "9000000032", "ZQP", "6.25% Series A Cumulative Preferred Stock")
 
-            assert "ZQP" not in dict(repair.repair_exact_titles(conn))
+            changed = {t: k for t, k in repair.repair_exact_titles(conn) if t.startswith("ZQ")}
+
+            assert changed == {"ZQP": "preferred stock"}
+            row = conn.execute(
+                text(
+                    "SELECT security_id, security_type, liquidation_preference "
+                    "FROM reference.securities WHERE security_id = :s"
+                ),
+                {"s": pref},
+            ).one()
+            assert row.security_type == "preferred stock"  # same security_id
+            assert float(row.liquidation_preference) == 25.0  # a preferred keeps its preference
+        finally:
+            trans.rollback()
+
+
+def test_a_common_row_is_left_active_when_the_twin_of_its_real_type_is_inactive():
+    """STRC: an inactive preferred identity already existed. Retiring the active common row
+    would leave the ticker with no active row, so the repair must skip it."""
+    engine = _live_engine()
+    if engine is None:
+        pytest.skip("no database available")
+    with engine.connect() as conn:
+        trans = conn.begin()
+        try:
+            common = _insert_security(conn, "ZQS", "9000000033", "common_stock")
+            twin = _insert_security(conn, "ZQS", "9000000033", "preferred stock")
+            conn.execute(
+                text("UPDATE reference.securities SET active = FALSE WHERE security_id = :s"),
+                {"s": twin},
+            )
+            _insert_title(conn, "9000000033", "ZQS", "8.00% Series A Perpetual Preferred Stock")
+
+            changed = dict(repair.repair_exact_titles(conn))
+
+            assert "ZQS" not in changed
+            active = conn.execute(
+                text("SELECT active FROM reference.securities WHERE security_id = :s"),
+                {"s": common},
+            ).scalar()
+            assert active is True
+        finally:
+            trans.rollback()
+
+
+def test_a_common_row_is_retired_when_an_active_twin_of_its_real_type_exists():
+    engine = _live_engine()
+    if engine is None:
+        pytest.skip("no database available")
+    with engine.connect() as conn:
+        trans = conn.begin()
+        try:
+            common = _insert_security(conn, "ZQR", "9000000034", "common_stock")
+            _insert_security(conn, "ZQR", "9000000034", "preferred stock")  # active twin
+            _insert_title(conn, "9000000034", "ZQR", "8.00% Series A Perpetual Preferred Stock")
+
+            changed = dict(repair.repair_exact_titles(conn))
+
+            assert changed["ZQR"] == "retired duplicate of preferred stock"
+            assert (
+                conn.execute(
+                    text("SELECT active FROM reference.securities WHERE security_id = :s"),
+                    {"s": common},
+                ).scalar()
+                is False
+            )
         finally:
             trans.rollback()
