@@ -329,3 +329,41 @@ def test_the_merge_archives_the_twin_before_it_changes_anything(pair, tmp_path):
 
     body = json.loads(archive.read_text())
     assert body["twins"] == [str(twin)] and "raw.market_data" in body["rows"]
+
+
+def test_an_accepted_conflict_keeps_the_active_price_and_records_the_evidence(pair, tmp_path):
+    """TORO: the twin's closes are 1.44x the active series, which independent raw closes confirm."""
+    conn, active, twin = pair
+    _price(conn, active, date(2024, 1, 3), 10.0)
+    _price(conn, twin, date(2024, 1, 3), 14.4)
+    archive = tmp_path / "m.json"
+    evidence = {"raw.market_data": "FMP non-split-adjusted closes match the active series"}
+
+    result = mdi.merge_twins(conn, TICKER, archive, accepted=evidence)
+
+    close = conn.execute(
+        text("SELECT close FROM raw.market_data WHERE security_id = :s"), {"s": active}
+    ).scalar()
+    assert float(close) == 10.0
+    assert result["accepted_overlap_conflicts"] == evidence
+    assert json.loads(archive.read_text())["accepted_overlap_conflicts"] == evidence
+
+
+def test_an_accepted_conflict_skips_only_the_named_tables_guard(pair):
+    conn, active, twin = pair
+    _price(conn, active, date(2024, 1, 3), 10.0)
+    _price(conn, twin, date(2024, 1, 3), 14.4)
+    _dividend(conn, active, date(2025, 4, 29), 36.0)
+    _dividend(conn, twin, date(2025, 4, 29), 40.0)  # a different dividend: still refused
+
+    with pytest.raises(RuntimeError, match="twin value the active row lacks or contradicts"):
+        mdi.merge_twins(conn, TICKER, None, accepted={"raw.market_data": "evidence"})
+
+
+def test_an_accepted_conflict_without_evidence_is_refused(pair):
+    conn, active, twin = pair
+    _price(conn, active, date(2024, 1, 3), 10.0)
+    _price(conn, twin, date(2024, 1, 3), 14.4)
+
+    with pytest.raises(RuntimeError, match="needs its evidence"):
+        mdi.merge_twins(conn, TICKER, None, accepted={"raw.market_data": "  "})

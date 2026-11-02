@@ -386,14 +386,14 @@ def overlap_guard(conn, table: str, twin, active) -> str | None:
     )
 
 
-def move_twin_rows(conn, twin, active, skip_before=None) -> dict[str, int]:
+def move_twin_rows(conn, twin, active, skip_before=None, accepted=None) -> dict[str, int]:
     """Re-point the twin's rows whose key the active identity lacks. Returns rows moved."""
     moved = {}
     for table in MOVE_TABLES:
         cols = primary_key_columns(conn, table)
         if not cols or not has_column(conn, table, "security_id"):
             continue
-        refusal = overlap_guard(conn, table, twin, active)
+        refusal = None if table in (accepted or {}) else overlap_guard(conn, table, twin, active)
         if refusal:
             raise RuntimeError(f"{table}: {refusal}")
         key = " AND ".join(f"a.{c} = {table.split('.')[1]}.{c}" for c in cols)
@@ -414,11 +414,21 @@ def move_twin_rows(conn, twin, active, skip_before=None) -> dict[str, int]:
     return moved
 
 
-def merge_twins(conn, ticker: str, archive_path: Path | None, skip_before=None) -> dict:
+def merge_twins(
+    conn, ticker: str, archive_path: Path | None, skip_before=None, accepted=None
+) -> dict:
     """Archive, move the twins' unique history to the active identity, delete the twins.
 
     Caller owns the transaction. Refuses (raising) if an overlapping row is not the same data.
+
+    ``accepted`` maps a table to the evidence that the active identity is right where the two
+    disagree (e.g. an independent price source). It skips only that table's overlap guard; the
+    active row still wins on overlap, so the twin's disagreeing rows are dropped, and the
+    evidence is written to the archive. Empty evidence is refused.
     """
+    accepted = {t: (e or "").strip() for t, e in (accepted or {}).items()}
+    if any(not e for e in accepted.values()):
+        raise RuntimeError("an accepted overlap conflict needs its evidence")
     rep = report(conn, ticker)
     if "error" in rep:
         raise RuntimeError(f"{ticker}: {rep['error']}")
@@ -426,7 +436,13 @@ def merge_twins(conn, ticker: str, archive_path: Path | None, skip_before=None) 
     sids = [t["security_id"] for t in rep["twins"]]
     plan = plan_for(conn)
     if archive_path is not None:
-        body = {"ticker": ticker, "twins": sids, "active": rep["active"], "rows": {}}
+        body = {
+            "ticker": ticker,
+            "twins": sids,
+            "active": rep["active"],
+            "accepted_overlap_conflicts": accepted,
+            "rows": {},
+        }
         for item in plan:
             data = list(
                 conn.execute(
@@ -444,7 +460,7 @@ def merge_twins(conn, ticker: str, archive_path: Path | None, skip_before=None) 
     before = history_counts(conn, active)
     moved = {}
     for twin in sids:
-        for table, n in move_twin_rows(conn, twin, active, skip_before).items():
+        for table, n in move_twin_rows(conn, twin, active, skip_before, accepted).items():
             moved[table] = moved.get(table, 0) + n
     # Whatever remains on the twins is overlap (already guarded) or skipped-by-request history.
     deleted = {}
@@ -462,7 +478,13 @@ def merge_twins(conn, ticker: str, archive_path: Path | None, skip_before=None) 
         raise RuntimeError(
             f"{ticker}: the active identity's row counts changed by {grew}, expected {expected}"
         )
-    return {"ticker": ticker, "twins_deleted": sids, "rows_moved": moved, "rows_deleted": deleted}
+    return {
+        "ticker": ticker,
+        "twins_deleted": sids,
+        "rows_moved": moved,
+        "rows_deleted": deleted,
+        "accepted_overlap_conflicts": accepted,
+    }
 
 
 def main(argv=None):
@@ -482,6 +504,15 @@ def main(argv=None):
         help="With --merge: twin prices/features/forward returns dated before this are not moved\n"
         "(they stay in the archive only), e.g. a different company's earlier history.",
     )
+    parser.add_argument(
+        "--accept-overlap-conflict",
+        action="append",
+        default=[],
+        metavar="TABLE=EVIDENCE",
+        help="With --merge: keep the active identity where this table's overlapping rows disagree,\n"
+        "e.g. raw.market_data='FMP non-split-adjusted closes match the active series'.\n"
+        "Needs evidence; only that table's guard is skipped; recorded in the archive.",
+    )
     parser.add_argument("--execute", action="store_true")
     parser.add_argument("--confirm")
     args = parser.parse_args(argv)
@@ -489,8 +520,12 @@ def main(argv=None):
     if args.execute and args.confirm != ticker:
         print(f"--execute requires --confirm {ticker}", file=sys.stderr)
         return 2
-    if args.skip_move_before and not args.merge:
-        print("--skip-move-before needs --merge", file=sys.stderr)
+    accepted = {}
+    for item in args.accept_overlap_conflict:
+        table, _, evidence = item.partition("=")
+        accepted[table.strip()] = evidence
+    if (args.skip_move_before or accepted) and not args.merge:
+        print("--skip-move-before and --accept-overlap-conflict need --merge", file=sys.stderr)
         return 2
     lock = None
     if args.execute or args.merge:
@@ -509,7 +544,7 @@ def main(argv=None):
             transaction = conn.begin()
             try:
                 if args.merge:
-                    result = merge_twins(conn, ticker, archive, args.skip_move_before)
+                    result = merge_twins(conn, ticker, archive, args.skip_move_before, accepted)
                 else:
                     result = delete_twins(conn, ticker, archive)
             except Exception as exc:
