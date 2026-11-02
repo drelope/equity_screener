@@ -224,7 +224,7 @@ def repair_exact_titles(conn):
         ).all()
         if not result:
             if (
-                row["current_type"] == "common_stock"
+                row["current_type"] != "preferred stock"
                 and not conn.execute(
                     text("""
                     SELECT EXISTS (

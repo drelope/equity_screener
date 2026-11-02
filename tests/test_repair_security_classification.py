@@ -424,7 +424,11 @@ def test_an_other_row_with_a_decisive_exact_title_is_retyped_in_place():
 
             changed = {t: k for t, k in repair.repair_exact_titles(conn) if t.startswith("ZQ")}
 
-            assert changed == {"ZQO": "corporate bond", "ZQF": "common_stock", "ZQG": "equity"}
+            assert changed == {
+                "ZQO": "corporate bond",
+                "ZQF": "common_stock",
+                "ZQG": "common_stock",
+            }
             types = dict(
                 conn.execute(
                     text(
@@ -434,7 +438,7 @@ def test_an_other_row_with_a_decisive_exact_title_is_retyped_in_place():
                     {"a": note, "b": fund, "c": spaced},
                 ).all()
             )
-            assert types == {note: "corporate bond", fund: "common_stock", spaced: "equity"}
+            assert types == {note: "corporate bond", fund: "common_stock", spaced: "common_stock"}
         finally:
             trans.rollback()
 
@@ -500,5 +504,45 @@ def test_a_loose_bucket_row_is_never_moved_to_preferred_by_this_repair():
             _insert_title(conn, "9000000052", "ZQW", "8.00% Series A Cumulative Preferred Stock")
 
             assert "ZQW" not in dict(repair.repair_exact_titles(conn))
+        finally:
+            trans.rollback()
+
+
+def test_a_loose_bucket_row_is_left_active_when_the_twin_of_its_real_type_is_inactive():
+    """Eighty empty 'derivative'/'equity' placeholders would otherwise have been retired in favour
+    of inactive twins, leaving their tickers with no active row. The guard covers every
+    non-preferred candidate type, not only common_stock."""
+    engine = _live_engine()
+    if engine is None:
+        pytest.skip("no database available")
+    with engine.connect() as conn:
+        trans = conn.begin()
+        try:
+            for ticker, kind, target, title in (
+                (
+                    "ZQA",
+                    "derivative",
+                    "other_debt_and_equity",
+                    "Units, each consisting of one share and one warrant",
+                ),
+                ("ZQB", "equity", "common_stock", "Common Stock, par value $0.01 per share"),
+            ):
+                cik = "90000000" + ("61" if ticker == "ZQA" else "62")
+                active = _insert_security(conn, ticker, cik, kind)
+                twin = _insert_security(conn, ticker, cik, target)
+                conn.execute(
+                    text("UPDATE reference.securities SET active = FALSE WHERE security_id = :s"),
+                    {"s": twin},
+                )
+                _insert_title(conn, cik, ticker, title)
+                changed = dict(repair.repair_exact_titles(conn))
+                assert ticker not in changed or not changed[ticker].startswith("retired")
+                assert (
+                    conn.execute(
+                        text("SELECT active FROM reference.securities WHERE security_id = :s"),
+                        {"s": active},
+                    ).scalar()
+                    is True
+                )
         finally:
             trans.rollback()
