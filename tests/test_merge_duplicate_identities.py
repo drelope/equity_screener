@@ -198,3 +198,134 @@ def test_model_outputs_are_history_not_derived(pair):
     assert "model.scores" not in mdi.DERIVED_TABLES
     assert "model.predictions" not in mdi.DERIVED_TABLES
     assert "model.rankings" not in mdi.DERIVED_TABLES
+
+
+def _dividend(conn, sid, day, amount, adjusted=None, feed="fmp"):
+    conn.execute(
+        text(
+            "INSERT INTO raw.dividend_data (security_id, ex_dividend_date, amount, adjusted_amount, "
+            "provider, feed) VALUES (:s, :d, :a, :j, 'TEST', :f)"
+        ),
+        {"s": sid, "d": day, "a": amount, "j": adjusted, "f": feed},
+    )
+
+
+def _count(conn, table, sid):
+    return conn.execute(
+        text(f"SELECT count(*) FROM {table} WHERE security_id = :s"),
+        {"s": sid},  # noqa: S608
+    ).scalar()
+
+
+def test_merge_moves_the_twins_unique_rows_and_keeps_the_active_row_on_overlap(pair):
+    conn, active, twin = pair
+    _price(conn, active, date(2024, 1, 3), 11.0)
+    _price(conn, twin, date(2024, 1, 3), 11.1)  # overlap: the active row stays
+    _price(conn, twin, date(2023, 12, 29), 9.0)  # only the twin has it
+
+    result = mdi.merge_twins(conn, TICKER, None)
+
+    assert result["rows_moved"] == {"raw.market_data": 1}
+    assert _count(conn, "raw.market_data", active) == 2
+    closes = dict(
+        conn.execute(
+            text("SELECT observation_date, close FROM raw.market_data WHERE security_id = :s"),
+            {"s": active},
+        ).all()
+    )
+    assert float(closes[date(2024, 1, 3)]) == 11.0  # the active value, not the twin's 11.1
+    assert float(closes[date(2023, 12, 29)]) == 9.0
+    assert (
+        _count(conn, "reference.securities", twin) == 0
+        or conn.execute(
+            text("SELECT count(*) FROM reference.securities WHERE security_id = :s"), {"s": twin}
+        ).scalar()
+        == 0
+    )
+
+
+def test_merge_refuses_when_an_overlapping_close_is_a_different_price(pair):
+    conn, active, twin = pair
+    _price(conn, active, date(2024, 1, 3), 10.0)
+    _price(conn, twin, date(2024, 1, 3), 14.0)  # 40% apart: not the same series
+
+    with pytest.raises(RuntimeError, match="overlapping closes differ"):
+        mdi.merge_twins(conn, TICKER, None)
+
+
+def test_a_stray_high_or_volume_difference_on_the_same_close_is_not_a_conflict(pair):
+    conn, active, twin = pair
+    for sid, high, volume in ((active, 15.8, 775574), (twin, 11.8, 775570)):
+        conn.execute(
+            text(
+                "INSERT INTO raw.market_data (security_id, observation_date, open, high, low, close, "
+                "volume, provider) VALUES (:s, DATE '2024-06-03', 7.2, :h, 7.1, 10.0, :v, 'TEST')"
+            ),
+            {"s": sid, "h": high, "v": volume},
+        )
+
+    assert mdi.merge_twins(conn, TICKER, None)["rows_moved"] == {}
+
+
+def test_a_twin_null_where_the_active_row_has_a_value_is_not_a_conflict(pair):
+    """The BMNR/BGMS dividends: the older row lacks the adjusted amount and the feed label differs."""
+    conn, active, twin = pair
+    _dividend(conn, active, date(2025, 4, 29), 36.0, adjusted=8640.0, feed="fmp")
+    _dividend(conn, twin, date(2025, 4, 29), 36.0, adjusted=None, feed="yfinance")
+
+    result = mdi.merge_twins(conn, TICKER, None)
+
+    assert result["rows_moved"] == {}
+    assert _count(conn, "raw.dividend_data", active) == 1
+
+
+def test_a_twin_dividend_with_a_different_amount_is_refused(pair):
+    conn, active, twin = pair
+    _dividend(conn, active, date(2025, 4, 29), 36.0)
+    _dividend(conn, twin, date(2025, 4, 29), 40.0)
+
+    with pytest.raises(RuntimeError, match="twin value the active row lacks or contradicts"):
+        mdi.merge_twins(conn, TICKER, None)
+
+
+def test_skip_move_before_leaves_an_earlier_companys_prices_behind(pair):
+    """BGMS: the twin's 2019-2025 prices predate the active identity and are another entity's."""
+    conn, active, twin = pair
+    _price(conn, active, date(2025, 9, 12), 5.0)
+    _price(conn, twin, date(2025, 9, 12), 5.0)
+    _price(conn, twin, date(2020, 1, 2), 90.0)  # earlier history, not to be moved
+    _price(conn, twin, date(2025, 9, 15), 5.5)  # later than the cut-off: moved
+
+    result = mdi.merge_twins(conn, TICKER, None, skip_before=date(2025, 9, 12))
+
+    assert result["rows_moved"] == {"raw.market_data": 1}
+    dates = {
+        r[0]
+        for r in conn.execute(
+            text("SELECT observation_date FROM raw.market_data WHERE security_id = :s"),
+            {"s": active},
+        )
+    }
+    assert dates == {date(2025, 9, 12), date(2025, 9, 15)}
+
+
+def test_derived_rows_the_twin_has_move_and_the_active_ones_win_on_overlap(pair):
+    conn, active, twin = pair
+    _feature(conn, active, date(2024, 1, 3), 1)
+    _feature(conn, twin, date(2024, 1, 3), 1)
+    _feature(conn, twin, date(2023, 6, 1), 1)
+
+    result = mdi.merge_twins(conn, TICKER, None)
+
+    assert result["rows_moved"] == {"model.features": 1}
+
+
+def test_the_merge_archives_the_twin_before_it_changes_anything(pair, tmp_path):
+    conn, active, twin = pair
+    _price(conn, twin, date(2023, 12, 29), 9.0)
+    archive = tmp_path / "merge.json"
+
+    mdi.merge_twins(conn, TICKER, archive)
+
+    body = json.loads(archive.read_text())
+    assert body["twins"] == [str(twin)] and "raw.market_data" in body["rows"]
