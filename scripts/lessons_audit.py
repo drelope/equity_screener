@@ -5,10 +5,12 @@ lesson claims to be ``guarded`` without naming a guard that exists, when two les
 id, when a required field is missing, or when the index and the files disagree.
 
     python -m scripts.lessons_audit
+    python -m scripts.lessons_audit --recall stage 1 retype     # recall before a change
 """
 
 from __future__ import annotations
 
+import argparse
 import re
 import sys
 from dataclasses import dataclass
@@ -92,7 +94,54 @@ def audit(lessons_dir: Path = LESSONS_DIR, root: Path = ROOT) -> list[Finding]:
     return findings
 
 
+def recall(words, lessons_dir: Path = LESSONS_DIR) -> list[dict]:
+    """Lessons whose area, symptom, root cause or title mention every word, most severe first.
+
+    This is the executable half of the recall step: before a data-changing change, ask which
+    past incidents touch it and run each one's recurrence check. ``open`` lessons sort first,
+    because nothing prevents them recurring.
+    """
+    needles = [w.lower() for w in words if w.strip()]
+    order = {"open": 0, "monitored": 1, "guarded": 2}
+    found = []
+    for path in sorted(lessons_dir.glob("L*.md")):
+        text = path.read_text(encoding="utf-8")
+        fields = parse(text)
+        haystack = " ".join(
+            [
+                path.stem,
+                fields.get("Area", ""),
+                fields.get("Symptom", ""),
+                fields.get("Root cause", ""),
+            ]
+        ).lower()
+        if all(n in haystack for n in needles):
+            found.append(
+                {
+                    "id": path.name.split("-")[0],
+                    "file": path.name,
+                    "status": fields.get("Status", ""),
+                    "area": fields.get("Area", ""),
+                    "recurrence_check": fields.get("Recurrence check", ""),
+                }
+            )
+    return sorted(found, key=lambda f: (order.get(f["status"], 3), f["id"]))
+
+
 def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--recall", nargs="+", metavar="WORD", help="List matching lessons and checks."
+    )
+    args = parser.parse_args()
+    if args.recall:
+        hits = recall(args.recall)
+        for hit in hits:
+            print(
+                f"{hit['id']} [{hit['status']}] {hit['area']}\n    check: {hit['recurrence_check']}"
+            )
+        print(f"{len(hits)} lesson(s) match")
+        return 0
     findings = audit()
     for finding in findings:
         print(f"FAIL {finding}")

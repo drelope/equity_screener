@@ -48,6 +48,43 @@ field, an unknown status, a duplicate id, an index that disagrees with the files
 marker, and a `guarded` lesson whose guard path does not exist. It cannot judge whether a guard
 is good; that is review's job, which is why each guarded lesson names a recurrence check.
 
+## Executable recall
+
+Recall used to be prose. It is now a command, so it can be run as the first step of a change:
+
+    python -m scripts.lessons_audit --recall stage 1 retype
+
+It lists every lesson whose title, area, symptom or root cause mentions all the words, with
+`open` lessons first (nothing prevents those recurring) and each lesson's recurrence check.
+Run the checks it prints and say so in the change.
+
+## Retracting a lesson or a rule
+
+A lesson, or a rule built on one, can be wrong. Do not delete it: write a new lesson that says
+what was believed, what the evidence showed and the corrected method. L010 is the example: a
+"thin series" rule was committed on the premise that CMCT traded 11 shares a day, a comparison
+against FMP's non-split-adjusted endpoint showed it traded about $6M a day because stored volume
+is back-adjusted, the rule was removed in its own commit, and the corrected method was recorded.
+The ledger shows the mistake and its fix, and the next rule written near that area will find it.
+
+## How this architecture was built and improved
+
+Each step was driven by a failure, and each left a check behind.
+
+| Step | Trigger | What was added |
+|---|---|---|
+| 1 | Nine incidents in one session lived only in commit messages | The ledger (`docs/etl-lessons/`), the audit (`scripts/lessons_audit.py`), the skill and its design record, routed and inventoried in `SYSTEM.md` |
+| 2 | A lesson marked guarded with no guard would be indistinguishable from a real one | The rule that `guarded` needs a guard path that exists, enforced by the audit and its tests |
+| 3 | A classifier fix (L008) was parked, then shipped once its blocker was resolved | Status moves from `open` to `guarded` in the same commit as the guard |
+| 4 | A merge refusal turned out to be a false alarm (TORO, DSX) | An evidence-required override instead of loosening the check; the evidence is stored with the archive and recorded in L005 |
+| 5 | Retyping securities minted new identities for types the repair did not list | L003 widened to "consider every stored type", with a test per type |
+| 6 | A new rule rested on a wrong premise (L010) | The retraction rule above, and the recurrence check "compare with the source before writing a rule" |
+| 7 | A recovered backtest number was gross and not investable (L011) | A cost model and floor study, and the check "report after-cost Sharpe with sensitivity" |
+| 8 | Recall was prose that nobody had to run | `--recall`, with open lessons first |
+
+What the steps share: measure against the real data before shipping, ship the smallest change,
+prove the guard fails when the code is broken, and write the lesson in the same change.
+
 ## Boundaries
 
 - This records and recalls engineering lessons. It does not change scoring, schema or data,

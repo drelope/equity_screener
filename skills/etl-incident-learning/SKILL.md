@@ -1,7 +1,7 @@
 ---
 name: etl-incident-learning
 description: "Use when an ETL change failed, was rolled back or surprised you and the cause should be recorded as a guarded lesson, or before a data-changing ETL change to recall the lessons for its area. Do not use to repair data, run the pipeline or decide business policy."
-version: 1
+version: 2
 risk: write
 owner: operations
 entrypoint: none
@@ -50,15 +50,24 @@ Do not use when:
 
 ## Procedure
 
-1. **Recall first.** Read the index, open the lessons whose area matches the planned change,
-   and run each one's recurrence check. Report which you ran and the result.
+1. **Recall first.** Run the recall command with words naming the planned change and run each
+   recurrence check it prints; open lessons come first. Report which you ran and the result.
+
+   ```bash
+   python -m scripts.lessons_audit --recall stage 1 retype
+   ```
 2. **Capture.** State the symptom with the evidence.
 3. **Root cause.** Name the mechanism, not the trigger. If you cannot, mark the lesson `open`.
+   Before building a rule on a premise, compare it with the source (L010): a premise taken
+   from stored data can be an artifact of how the data was adjusted.
 4. **Guard.** Add a refusal, a test that fails on the broken form (break the code to prove it),
    or a dry-run rule. Link the guard in backticks. If none is possible, status is `open`.
-5. **Record.** Add `docs/etl-lessons/L###-short-name.md` using the fields of an existing
+5. **Retract, do not delete.** If an earlier lesson or rule proved wrong, write a new lesson
+   with what was believed, what the evidence showed and the corrected method, and remove the
+   wrong rule in its own commit.
+6. **Record.** Add `docs/etl-lessons/L###-short-name.md` using the fields of an existing
    lesson and one row to `INDEX.md`.
-6. Run the verification below.
+7. Run the verification below.
 
 ## Outputs
 
@@ -84,6 +93,7 @@ python -m pytest -q tests/test_lessons_audit.py
 - No evidence: stop and ask for the command and counts; do not write a lesson from memory.
 - No guard possible: record it as `open` and say so; never mark it `guarded` to close it.
 - Two lessons share a cause: amend the existing one.
+- A result is gross of costs: say so, and report the after-cost figure with its sensitivity (L011).
 
 ## Handoffs
 

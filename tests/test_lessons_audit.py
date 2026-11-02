@@ -86,3 +86,27 @@ def test_duplicate_ids_and_unresolved_markers_fail(tmp_path):
 
 def test_the_real_ledger_is_consistent():
     assert la.audit() == []
+
+
+def test_recall_matches_every_word_and_puts_unguarded_lessons_first(tmp_path):
+    d = _setup(tmp_path)
+    second = (
+        GOOD.replace("L001", "L002")
+        .replace("guarded", "open")
+        .replace("`scripts/guard.py`, `tests/test_guard.py`", "not yet")
+        .replace("stage 1", "stage 1 retype")
+    )
+    (d / "L002-second.md").write_text(second, encoding="utf-8")
+
+    hits = la.recall(["STAGE"], d)
+
+    assert [h["id"] for h in hits] == ["L002", "L001"]  # open before guarded
+    assert hits[0]["recurrence_check"].startswith("`python")
+    assert [h["id"] for h in la.recall(["stage", "retype"], d)] == ["L002"]
+    assert la.recall(["nothing-like-this"], d) == []
+
+
+def test_recall_on_the_real_ledger_finds_the_stage_one_lessons():
+    ids = {h["id"] for h in la.recall(["stage 1"])}
+
+    assert {"L001"} <= ids

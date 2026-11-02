@@ -59,8 +59,11 @@ Open questions: none
 
 ## Code
 
-- **Files changed:** those listed in the plan.
-- **Tests added:** eight in `tests/test_lessons_audit.py`.
+- **Files changed:** those listed in the plan. Revision 2 (version 2 of the skill) also changed
+  `scripts/lessons_audit.py` (adds `--recall`), `tests/test_lessons_audit.py`, the skill's
+  procedure (executable recall, a retraction step, an after-cost failure case), the
+  architecture document (improvement log) and lessons L010 and L011.
+- **Tests added:** ten in `tests/test_lessons_audit.py` (two cover recall).
 - **Deviations from the plan:** none.
 
 ## Verify
@@ -69,7 +72,8 @@ Open questions: none
 - **Audit result:** PASS.
 - **Targeted test result:** pass.
 - **Ruff result:** exit 0.
-- **Residual risks:** two lessons are `open` (line endings, rights classification) and say so.
+- **Residual risks:** one lesson is `open` (line endings) and says so. Recall matches words, not
+  meaning, so a change described in unusual words can miss a lesson; the audit cannot judge guard quality.
 
 ## Gate log
 
