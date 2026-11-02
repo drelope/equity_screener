@@ -76,3 +76,48 @@ def test_claimed_titles_exclude_the_tickers_own_spellings_and_are_case_insensiti
     assert titles_claimed_by_others(titles, "DX-PD") == {SERIES_C.lower()}
     assert titles_claimed_by_others(titles, "DX-PX") == {SERIES_C.lower(), SERIES_D.lower()}
     assert titles_claimed_by_others(None, "DX-PD") == set()
+
+
+TRP_TITLE = (
+    "Common Shares (including Rights under Shareholder Rights Plan) of TC Energy Corporation"
+)
+
+
+def _titles(**kw):
+    from scripts.populate_reference_tables import titles_for_classification
+
+    args = {
+        "exact_title": None,
+        "stored_titles": [TRP_TITLE],
+        "companyfacts_titles": [],
+        "ticker": "TCANF",
+    }
+    args.update(kw)
+    return titles_for_classification(**args)
+
+
+def test_an_exact_title_is_the_only_evidence_for_its_ticker():
+    assert _titles(exact_title="Common Shares", ticker="TRP") == ["Common Shares"]
+
+
+def test_an_untitled_ticker_does_not_inherit_a_siblings_stored_title():
+    """TCANF is a foreign OTC line; the only stored title is TRP's, which contains the word
+    'Rights'. Binding it typed TCANF a derivative."""
+    assert _titles() == []
+    assert _titles(companyfacts_titles=["Common stock"]) == ["Common stock"]
+
+
+def test_the_untitled_ticker_is_classified_the_same_with_or_without_stored_titles():
+    from src.crispdm.sec_client import classify_instrument
+
+    with_titles = classify_instrument("TCANF", exact_dei_title=None, dei_titles=_titles())
+    without = classify_instrument("TCANF", exact_dei_title=None, dei_titles=[])
+
+    assert with_titles.security_type == without.security_type != "derivative"
+
+
+def test_a_series_suffixed_ticker_keeps_the_stored_list_so_its_letter_can_bind():
+    stored = ["6.25% Series D Cumulative Preferred Stock"]
+
+    assert _titles(ticker="ABC-PD", stored_titles=stored) == stored
+    assert _titles(ticker="ABC-PD", stored_titles=[], companyfacts_titles=["x"]) == ["x"]

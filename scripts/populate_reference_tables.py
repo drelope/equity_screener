@@ -61,8 +61,32 @@ from src.crispdm.sec_client import (
     get_issuer_data,
     get_legacy_issuer_data,
     match_security_title,
+    symbol_suffix_evidence,
 )
 from src.crispdm.stage import stage_exit_code
+
+
+def titles_for_classification(*, exact_title, stored_titles, companyfacts_titles, ticker):
+    """The title list ``classify_instrument`` may bind to ``ticker``.
+
+    An exact cover title for the ticker is the only evidence. Without one, the issuer's stored
+    titles are not evidence about this ticker: each is some other ticker's exact title (the
+    list is built from those rows). Binding them anyway typed TC Energy's foreign OTC line
+    TCANF a derivative, because the only title on file was TRP's "Common Shares (including
+    Rights under Shareholder Rights Plan)". It also made the result depend on whether any one
+    title of the issuer had been stored, so loading a single cover retyped its untitled
+    siblings and swapped their identities.
+
+    A symbol-suffixed ticker (``ABC-PD``) keeps the stored list: its series letter binds the
+    title it belongs to, which is how a series whose cover spelling differs still resolves.
+    Otherwise the companyfacts titles, the evidence used before any cover was stored, apply.
+    """
+    if exact_title:
+        return [exact_title]
+    suffix = symbol_suffix_evidence(ticker)
+    if suffix is not None and suffix.security_type != "common_stock":
+        return stored_titles or companyfacts_titles
+    return companyfacts_titles
 
 
 def titles_claimed_by_others(symbol_titles, ticker):
@@ -839,10 +863,11 @@ def populate_securities(limit=None, repopulate=False, reclassify=False, *, ticke
                     sec["ticker"],
                     classification,
                     exact_dei_title=exact_title,
-                    dei_titles=(
-                        [exact_title]
-                        if exact_title
-                        else cik_titles or classification.get("security_titles", [])
+                    dei_titles=titles_for_classification(
+                        exact_title=exact_title,
+                        stored_titles=cik_titles,
+                        companyfacts_titles=classification.get("security_titles", []),
+                        ticker=sec["ticker"],
                     ),
                     submissions=submissions_by_cik.get(cik),
                     issuer_name=sec["title"],
