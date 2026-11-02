@@ -405,3 +405,50 @@ def test_a_common_row_is_retired_when_an_active_twin_of_its_real_type_exists():
             )
         finally:
             trans.rollback()
+
+
+def test_an_other_row_with_a_decisive_exact_title_is_retyped_in_place():
+    """Brookfield's perpetual subordinated notes were stored as the catch-all 'other'."""
+    engine = _live_engine()
+    if engine is None:
+        pytest.skip("no database available")
+    with engine.connect() as conn:
+        trans = conn.begin()
+        try:
+            note = _insert_security(conn, "ZQO", "9000000041", "other")
+            _insert_title(conn, "9000000041", "ZQO", "4.625% Perpetual Subordinated Notes")
+            fund = _insert_security(conn, "ZQF", "9000000041", "other")
+            _insert_title(conn, "9000000041", "ZQF", "Common Shares of Beneficial Interest")
+            spaced = _insert_security(conn, "ZQG", "9000000041", "other")
+            _insert_title(conn, "9000000041", "ZQG", "Common     Shares of Beneficial Interest")
+
+            changed = {t: k for t, k in repair.repair_exact_titles(conn) if t.startswith("ZQ")}
+
+            assert changed == {"ZQO": "corporate bond", "ZQF": "common_stock", "ZQG": "equity"}
+            types = dict(
+                conn.execute(
+                    text(
+                        "SELECT security_id, security_type FROM reference.securities "
+                        "WHERE security_id IN (:a, :b, :c)"
+                    ),
+                    {"a": note, "b": fund, "c": spaced},
+                ).all()
+            )
+            assert types == {note: "corporate bond", fund: "common_stock", spaced: "equity"}
+        finally:
+            trans.rollback()
+
+
+def test_equity_never_replaces_a_real_common_row_even_for_a_spaced_title():
+    engine = _live_engine()
+    if engine is None:
+        pytest.skip("no database available")
+    with engine.connect() as conn:
+        trans = conn.begin()
+        try:
+            _insert_security(conn, "ZQH", "9000000042", "common_stock")
+            _insert_title(conn, "9000000042", "ZQH", "Common     Stock, par value $0.01")
+
+            assert "ZQH" not in dict(repair.repair_exact_titles(conn))
+        finally:
+            trans.rollback()

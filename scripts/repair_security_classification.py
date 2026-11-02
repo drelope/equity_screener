@@ -144,7 +144,7 @@ RETURNING security_id
 def repair_exact_titles(conn):
     """Correct only instruments with a decisive, exact CIK/ticker cover title.
 
-    Candidates are active rows typed ``preferred stock`` or ``common_stock``. A common row
+    Candidates are active rows typed ``preferred stock``, ``common_stock`` or the catch-all ``other``. A common row
     is the same kind of mistake: a note, unit or preferred listed under an issuer whose only
     other signal is a common-stock dividend tag or an issuer-level title (Navient's 6% Senior
     Notes, JSM, and Strategy's STRK preferred were typed common). The row is updated in place, so its ``security_id`` and every price, dividend
@@ -158,7 +158,7 @@ def repair_exact_titles(conn):
                t.title, t.accession_no, t.source_url
         FROM reference.securities s
         JOIN raw.sec_instrument_titles t ON t.cik = s.cik AND t.ticker = s.ticker
-        WHERE s.active AND s.security_type IN ('preferred stock', 'common_stock')
+        WHERE s.active AND s.security_type IN ('preferred stock', 'common_stock', 'other')
     """)
         )
         .mappings()
@@ -169,6 +169,10 @@ def repair_exact_titles(conn):
         decision = classify_instrument(row["ticker"], exact_dei_title=row["title"])
         if decision.security_type == row["current_type"]:
             continue
+        if decision.security_type == "equity" and row["current_type"] != "other":
+            # 'equity' is what a spaced-out "Common     Stock" title falls to; it may replace
+            # the catch-all 'other', never a real common or preferred type.
+            continue
         if decision.source != "dei_title" or decision.security_type not in (
             "common_stock",
             "corporate bond",
@@ -176,6 +180,7 @@ def repair_exact_titles(conn):
             "derivative",
             "other_debt_and_equity",
             "preferred stock",
+            "equity",
         ):
             continue
         evidence = json.dumps(
