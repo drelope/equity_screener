@@ -26,6 +26,10 @@ other through a composite foreign key that is not deferrable, so the constraint 
 deferrable inside the transaction and restored before commit. Postgres DDL is transactional:
 any failed check rolls the whole thing back.
 
+After ``--execute``, run ``python -m scripts.populate_reference_tables --securities --tickers T``
+and confirm the security is still active under its ``security_id``: stage 1 types a security
+from evidence for the new CIK, and without it mints a new identity (see ``carry_over_title``).
+
 ``--dry-run`` (the default) performs the entire change, runs every check, then rolls back, so
 it proves the change works against the real database without committing anything.
 
@@ -188,6 +192,54 @@ def before_images(conn, ticker, old_cik, security_id):
     }
 
 
+def carry_over_title(conn, ticker, old_cik, new_cik):
+    """Give the successor CIK the ticker's exact cover title, copied from the old CIK.
+
+    Stage 1 types a security from its exact cover title for ``(cik, ticker)``. After a
+    re-key the successor CIK has none (it files no cover XBRL yet and has no company
+    facts), so stage 1 falls to its weakest signal, types the ticker ``other`` and mints a
+    new identity, deactivating the re-keyed one and stranding its history. Found by running
+    stage 1 after the NAVI re-key. A title already on file for the new CIK is kept. The copy
+    is marked as carried over so it is not mistaken for a filing the successor made.
+    Returns the number of rows written.
+    """
+    from scripts.populate_sec_instrument_titles import title_row_hash
+
+    row = (
+        conn.execute(
+            text(
+                "SELECT title, accession_no, filing_date, source_url, document_hash "
+                "FROM raw.sec_instrument_titles WHERE cik = :old AND ticker = :t"
+            ),
+            {"old": old_cik, "t": ticker},
+        )
+        .mappings()
+        .first()
+    )
+    if row is None:
+        return 0
+    return conn.execute(
+        text(
+            "INSERT INTO raw.sec_instrument_titles (cik, ticker, title, accession_no, "
+            "filing_date, form_type, source_url, document_hash, content_hash, retrieved_at) "
+            "VALUES (:new, :t, :title, :acc, :fdate, 'successor-carryover', :url, :dh, :ch, now()) "
+            "ON CONFLICT (cik, ticker) DO NOTHING"
+        ),
+        {
+            "new": new_cik,
+            "t": ticker,
+            "title": row["title"],
+            "acc": row["accession_no"],
+            "fdate": row["filing_date"],
+            "url": row["source_url"],
+            "dh": row["document_hash"],
+            "ch": title_row_hash(
+                new_cik, ticker, row["title"], row["accession_no"], row["document_hash"]
+            ),
+        },
+    ).rowcount
+
+
 def close_stage_conflict(conn, ticker, new_cik, note):
     """Resolve the conflict row populate_raw_tables registered for this ticker, if open.
 
@@ -348,6 +400,7 @@ def apply_rekey(conn, ticker, new_cik, effective, basis, reviewed_by, entries, a
             "note": f"re-keyed by {reviewed_by}; effective {effective}; basis: {basis}",
         },
     )
+    carried = carry_over_title(conn, ticker, old_cik, new_cik)
     closed = close_stage_conflict(
         conn,
         ticker,
@@ -356,6 +409,7 @@ def apply_rekey(conn, ticker, new_cik, effective, basis, reviewed_by, entries, a
     )
     return {
         "stage_conflict_rows_closed": closed,
+        "cover_title_carried_over": carried,
         "ticker": ticker,
         "security_id": str(security_id),
         "old_cik": old_cik,

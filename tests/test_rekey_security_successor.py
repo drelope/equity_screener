@@ -253,3 +253,55 @@ def test_closing_an_already_resolved_conflict_closes_nothing(synthetic):
     conn, _, _ = synthetic
 
     assert rk.close_stage_conflict(conn, TICKER, NEW, "n") == 0
+
+
+def _title(conn, cik, ticker, title, form="10-K"):
+    conn.execute(
+        text(
+            "INSERT INTO raw.sec_instrument_titles (cik, ticker, title, form_type, content_hash) "
+            "VALUES (:c, :t, :title, :f, 'x')"
+        ),
+        {"c": cik, "t": ticker, "title": title, "f": form},
+    )
+
+
+def test_the_successor_gets_the_exact_cover_title_so_stage_one_keeps_the_identity(synthetic):
+    """After the NAVI re-key, stage 1 had no evidence for the new CIK, typed the ticker 'other'
+    and minted a new identity. The old CIK's exact title is carried across."""
+    conn, _, _ = synthetic
+    _title(conn, OLD, TICKER, "Common stock, par value $.01 per share")
+
+    summary = _rekey(conn)
+
+    row = conn.execute(
+        text(
+            "SELECT title, form_type FROM raw.sec_instrument_titles WHERE cik = :c AND ticker = :t"
+        ),
+        {"c": NEW, "t": TICKER},
+    ).one()
+    assert summary["cover_title_carried_over"] == 1
+    assert row.title == "Common stock, par value $.01 per share"
+    assert row.form_type == "successor-carryover"  # marked, not passed off as a new filing
+
+
+def test_a_title_the_successor_already_has_is_kept(synthetic):
+    conn, _, _ = synthetic
+    _title(conn, OLD, TICKER, "Old title")
+    _title(conn, NEW, TICKER, "The successor's own title", form="8-K12B")
+
+    summary = _rekey(conn)
+
+    assert summary["cover_title_carried_over"] == 0
+    assert (
+        conn.execute(
+            text("SELECT title FROM raw.sec_instrument_titles WHERE cik = :c AND ticker = :t"),
+            {"c": NEW, "t": TICKER},
+        ).scalar()
+        == "The successor's own title"
+    )
+
+
+def test_no_title_is_invented_when_the_old_cik_had_none(synthetic):
+    conn, _, _ = synthetic
+
+    assert _rekey(conn)["cover_title_carried_over"] == 0
