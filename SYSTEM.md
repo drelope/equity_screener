@@ -70,12 +70,13 @@ The skill directory name must equal the frontmatter `name`.
 | `data-understanding` | read | 1 |
 | `data-validation` | read | 2 |
 | `deployment-release` | heavy | 2 |
+| `etl-incident-learning` | write | 2 |
 | `investment-analysis` | write | 2 |
 | `modeling-evaluation` | write | 2 |
 | `observability-nightly-verification` | read | 1 |
 | `security-compliance` | read | 1 |
 
-All 21 skills exist. Only the skills with a fixed entrypoint can be executed by
+All 22 skills exist. Only the skills with a fixed entrypoint can be executed by
 the runner; for the rest, apply the skill procedure directly and report the
 evidence in the response. Skill authoring follows
 [`docs/skill-lifecycle.md`](docs/skill-lifecycle.md).

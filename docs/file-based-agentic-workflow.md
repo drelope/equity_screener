@@ -1,6 +1,6 @@
 # File-Based Agentic Workflow
 
-Status: phase 4 complete. `SYSTEM.md`, `skills/_template/`, all 21 skills,
+Status: phase 4 complete. `SYSTEM.md`, `skills/_template/`, all 22 skills,
 the deterministic executor (`scripts/agent_runner.py`), the skill lifecycle
 (`docs/skill-lifecycle.md`), the audit (`scripts/skill_audit.py`), gitignored
 run artifacts and the drift test exist. The pipeline they wrap is real and
@@ -351,13 +351,14 @@ does not promote a model to production.
 | Validate an investment, interpret KPIs/risk, or prepare the analyst dashboard/reports | `financial-analysis` | `app/views/dashboard.py`, `docs/AnalystDashboard.md`, `docs/InvestmentAnalysisWorkflow.md` | `tests/test_portfolio.py`, `tests/test_dashboard_view.py`, `tests/test_financial_analysis_skill.py` |
 | Revisit the ML model | `modeling-evaluation` | `python -m scripts.evaluate_walk_forward`, `python -m scripts.dry_run_walk_forward` | `MIN_RECALL`, `audit.model_runs` |
 | Work an investment-analysis worksheet | `investment-analysis` | `app/views/investment_analysis.py`, `docs/InvestmentAnalysisWorkflow.md` | `tests/test_workflow_doc.py`, `tests/test_analysis_schema.py` |
+| Record an ETL incident as a guarded lesson, or recall lessons before a data change | `etl-incident-learning` | `docs/etl-learning-architecture.md`, `docs/etl-lessons/INDEX.md` | `python -m scripts.lessons_audit` exit 0 |
 | Morning health check | `observability-nightly-verification` | `python -m scripts.verify_nightly_run` | exit 0; exit 1 is a recorded finding, not a crash |
 | Handle secrets, API auth or SEC access | `security-compliance` | `src/crispdm/sec_client.py`, `api/main.py`, `.env.example` | `tests/test_api.py`, CI secret scan |
 | Release or deploy | `deployment-release` | `Dockerfile`, `docker-compose.yml`, `.github/workflows/ci.yml`, `docs/deployment-runbook.md` | ruff, pytest, pip-audit, secret scan |
 
 ## 9. Skill inventory
 
-All 21 skills exist; `_template` is excluded. The five lifecycle skills form
+All 22 skills exist; `_template` is excluded. The five lifecycle skills form
 the authoring flow in [`docs/skill-lifecycle.md`](skill-lifecycle.md). The
 "Existing anchors" column is the code and documentation each skill must link to
 rather than restate.
@@ -382,6 +383,7 @@ rather than restate.
 | `financial-scoring` | Build and explain the rule-based composite | `src/crispdm/scoring.py`, `scripts/score_rank.py`, `docs/requirements.md` |
 | `modeling-evaluation` | Keep walk-forward diagnostics reproducible; do not promote a failed model | `src/crispdm/model.py`, `scripts/evaluate_walk_forward.py`, `docs/model-labeling-plan.md` |
 | `investment-analysis` | Drive the 18-step worksheet and recommendation gate | `app/analysis_schema.py`, `app/views/investment_analysis.py`, `docs/InvestmentAnalysisWorkflow.md` |
+| `etl-incident-learning` | Record an ETL incident as a guarded lesson and recall lessons before a change | `docs/etl-learning-architecture.md`, `docs/etl-lessons/INDEX.md`, `scripts/lessons_audit.py` |
 | `observability-nightly-verification` | Verify the nightly run and data-module SLAs | `scripts/verify_nightly_run.py`, `docs/nightly-verification.md` |
 | `security-compliance` | Enforce SEC user agent, API key, rate limits and secret hygiene | `src/crispdm/sec_client.py`, `api/main.py`, `.env.example` |
 | `deployment-release` | Release, roll back and schedule safely | `Dockerfile`, `docker-compose.yml`, `.github/workflows/ci.yml`, `docs/deployment-runbook.md` |
