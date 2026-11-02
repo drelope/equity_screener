@@ -144,7 +144,8 @@ RETURNING security_id
 def repair_exact_titles(conn):
     """Correct only instruments with a decisive, exact CIK/ticker cover title.
 
-    Candidates are active rows typed ``preferred stock``, ``common_stock`` or the catch-all ``other``. A common row
+    Candidates are active rows typed ``preferred stock``, ``common_stock``, the catch-all ``other``
+    or one of the loose buckets ``derivative``, ``equity`` and ``other_debt_and_equity``. A common row
     is the same kind of mistake: a note, unit or preferred listed under an issuer whose only
     other signal is a common-stock dividend tag or an issuer-level title (Navient's 6% Senior
     Notes, JSM, and Strategy's STRK preferred were typed common). The row is updated in place, so its ``security_id`` and every price, dividend
@@ -158,7 +159,8 @@ def repair_exact_titles(conn):
                t.title, t.accession_no, t.source_url
         FROM reference.securities s
         JOIN raw.sec_instrument_titles t ON t.cik = s.cik AND t.ticker = s.ticker
-        WHERE s.active AND s.security_type IN ('preferred stock', 'common_stock', 'other')
+        WHERE s.active AND s.security_type IN ('preferred stock', 'common_stock', 'other',
+                                               'derivative', 'equity', 'other_debt_and_equity')
     """)
         )
         .mappings()
@@ -172,6 +174,12 @@ def repair_exact_titles(conn):
         if decision.security_type == "equity" and row["current_type"] != "other":
             # 'equity' is what a spaced-out "Common     Stock" title falls to; it may replace
             # the catch-all 'other', never a real common or preferred type.
+            continue
+        if row["current_type"] in ("derivative", "equity", "other_debt_and_equity") and (
+            decision.security_type == "preferred stock"
+        ):
+            # Only a title that says 'preferred' may move a row to preferred, and never from
+            # one of these loose buckets without an explicit review.
             continue
         if decision.source != "dei_title" or decision.security_type not in (
             "common_stock",

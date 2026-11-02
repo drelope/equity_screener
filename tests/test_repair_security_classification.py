@@ -452,3 +452,53 @@ def test_equity_never_replaces_a_real_common_row_even_for_a_spaced_title():
             assert "ZQH" not in dict(repair.repair_exact_titles(conn))
         finally:
             trans.rollback()
+
+
+def test_loose_bucket_rows_are_retyped_in_place_when_no_twin_blocks_them():
+    """SPAC units stored as 'derivative' and spaced-out common stock stored as 'equity'."""
+    engine = _live_engine()
+    if engine is None:
+        pytest.skip("no database available")
+    with engine.connect() as conn:
+        trans = conn.begin()
+        try:
+            unit = _insert_security(conn, "ZQU", "9000000051", "derivative")
+            _insert_title(
+                conn, "9000000051", "ZQU", "Units, each consisting of one share and one warrant"
+            )
+            common = _insert_security(conn, "ZQV", "9000000051", "equity")
+            _insert_title(conn, "9000000051", "ZQV", "Common Stock, par value $0.01 per share")
+
+            changed = {t: k for t, k in repair.repair_exact_titles(conn) if t.startswith("ZQ")}
+
+            # Under the committed classifier a unit is still a warrant and is left alone; the
+            # point here is that these candidate types are considered and a decisive,
+            # different title moves them in place.
+            assert changed.get("ZQV") == "common_stock"
+            types = dict(
+                conn.execute(
+                    text(
+                        "SELECT security_id, security_type FROM reference.securities "
+                        "WHERE security_id IN (:a, :b)"
+                    ),
+                    {"a": unit, "b": common},
+                ).all()
+            )
+            assert types[common] == "common_stock"
+        finally:
+            trans.rollback()
+
+
+def test_a_loose_bucket_row_is_never_moved_to_preferred_by_this_repair():
+    engine = _live_engine()
+    if engine is None:
+        pytest.skip("no database available")
+    with engine.connect() as conn:
+        trans = conn.begin()
+        try:
+            _insert_security(conn, "ZQW", "9000000052", "equity")
+            _insert_title(conn, "9000000052", "ZQW", "8.00% Series A Cumulative Preferred Stock")
+
+            assert "ZQW" not in dict(repair.repair_exact_titles(conn))
+        finally:
+            trans.rollback()
