@@ -383,6 +383,31 @@ DEBT_NOTE_TITLE = re.compile(
 )
 
 
+#: A share class that carries rights as an attachment ("Common Shares ... including the
+#: Preferred Stock Purchase Rights", a poison pill), and an ADS whose receipt wording says
+#: "representing the right to receive one ordinary share". Neither is a rights instrument.
+_SHARE_CLASS_START = re.compile(
+    r"^(?:common|ordinary|capital|class\s+[a-z0-9]+\s+(?:common|ordinary))\b"
+    r"|^(?:american\s+)?depositary\s+(?:shares?|receipts?)\b"
+)
+_ATTACHED_RIGHTS = re.compile(
+    r"\(\s*(?:including|together with|with)\b[^)]*\)"
+    r"|[,;]?\s*\b(?:including|together with|with|and)\b(?=[^.;]*\brights?\b)[^;]*"
+)
+_ADS_RIGHT = re.compile(r"\b(?:the\s+)?right\s+to\s+(?:receive|acquire|subscribe)\b")
+
+
+def _without_attached_rights(normalized_title):
+    """The title with attached-rights wording removed, for a title that starts as a share class.
+
+    A title that starts with "Rights" (a genuine rights instrument) is returned unchanged.
+    """
+    if not _SHARE_CLASS_START.search(normalized_title):
+        return normalized_title
+    stripped = _ADS_RIGHT.sub("", normalized_title)
+    return _ATTACHED_RIGHTS.sub(" ", stripped)
+
+
 def classify_security_type(title):
     """Infer a security type from the SEC company ticker title.
 
@@ -405,6 +430,10 @@ def classify_security_type(title):
         r"\bconsist(?:s|ing)\s+of\b|\bcompris(?:es|ed|ing)\b", normalized_title
     ):
         return "other_debt_and_equity"
+
+    # Attached rights ("Common Shares ... including the Preferred Stock Purchase Rights") and an
+    # ADS's "representing the right to receive" are not the instrument being classified.
+    normalized_title = _without_attached_rights(normalized_title)
 
     if any(term in normalized_title for term in ("warrant", "right")):
         return "derivative"

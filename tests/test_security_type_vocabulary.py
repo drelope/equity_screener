@@ -714,3 +714,51 @@ def test_preferred_depositary_shares_are_still_preferred():
         "Depositary shrs, each representing a fractional interest",
     ):
         assert classify_security_type(title) == "preferred stock", title
+
+
+def test_a_share_class_that_carries_rights_is_common_stock_not_a_derivative():
+    """TRP's own cover title contains 'Rights' (a shareholder-rights plan) and was typed a
+    derivative; so were poison-pill common shares."""
+    from src.crispdm.sec_client import classify_security_type
+
+    for title in (
+        "Common Shares (including Rights under Shareholder Rights Plan) of TC Energy Corporation",
+        "Common Stock, $0.01 par value including the Preferred Stock Purchase Rights",
+        "Common Shares, $0.001 par value, including associated Share Purchase Rights",
+        "Common shares (including common share purchase rights)",
+        "Common shares, no par value (together with associatedcommon share purchase rights)",
+    ):
+        assert classify_security_type(title) == "common_stock", title
+
+
+def test_an_ads_representing_the_right_to_receive_a_share_is_common_not_a_right():
+    from src.crispdm.sec_client import classify_security_type
+
+    for title in (
+        "American Depositary Shares, each representing the right to receive one ordinary share",
+        "American Depositary Shares (ADS(s)), each ADSrepresenting the right to receive twenty (20) "
+        "Ordinary Shares",
+    ):
+        assert classify_security_type(title) == "common_stock", title
+
+
+def test_genuine_rights_and_warrants_stay_derivatives():
+    from src.crispdm.sec_client import classify_security_type
+
+    for title in (
+        "Rights to receive one-tenth (1/10th) of one Ordinary Share",
+        "Right, each entitling the holder to receive one-fifth of one Class A Ordinary Share",
+        "Rights to acquire one-tenth of one share of Class A common stock",
+        "Preferred Stock Purchase Rights",
+        "Redeemable warrants, each exercisable for one share of Class A common stock",
+        "Warrants to purchase common stock",
+    ):
+        assert classify_security_type(title) == "derivative", title
+
+
+def test_a_unit_that_includes_a_right_is_still_a_unit():
+    from src.crispdm.sec_client import classify_security_type
+
+    title = "Units, each consisting of one ordinary share and one right to receive 1/10 of a share"
+
+    assert classify_security_type(title) == "other_debt_and_equity"
