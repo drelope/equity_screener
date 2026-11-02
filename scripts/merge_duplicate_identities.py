@@ -273,6 +273,8 @@ DATE_COLUMN = {
 }
 #: Tables whose twin-only rows move to the active identity. Rebuilt metadata is not moved: it
 #: describes the twin's type and is regenerated for the active row.
+#: Tables where --fill-nulls copies a twin's value into the active row's NULL columns.
+FILL_TABLES = ("fundamentals.periodic_financials", "raw.dividend_data")
 MOVE_TABLES = (
     "raw.market_data",
     "fundamentals.periodic_financials",
@@ -329,7 +331,7 @@ def primary_key_columns(conn, table: str) -> list[str]:
     return [c for c in rows if c != "security_id"]
 
 
-def overlap_guard(conn, table: str, twin, active) -> str | None:
+def overlap_guard(conn, table: str, twin, active, fill_nulls=False) -> str | None:
     """None if the rows both identities hold for the same key are the same data, else why not.
 
     Policy, from the 19 securities this was written for: where both exist the active identity
@@ -371,7 +373,14 @@ def overlap_guard(conn, table: str, twin, active) -> str | None:
         ).scalars()
         if c not in cols and c not in ignored_columns(conn, table) and c not in PROVENANCE_COLUMNS
     ]
-    bad = " OR ".join(f"(tw.{c} IS NOT NULL AND tw.{c} IS DISTINCT FROM a.{c})" for c in columns)
+    if fill_nulls:
+        bad = " OR ".join(
+            f"(tw.{c} IS NOT NULL AND a.{c} IS NOT NULL AND tw.{c} <> a.{c})" for c in columns
+        )
+    else:
+        bad = " OR ".join(
+            f"(tw.{c} IS NOT NULL AND tw.{c} IS DISTINCT FROM a.{c})" for c in columns
+        )
     if not bad:
         return None
     n = conn.execute(
@@ -381,21 +390,65 @@ def overlap_guard(conn, table: str, twin, active) -> str | None:
         ),
         {"a": active, "t": twin},
     ).scalar()
-    return (
-        f"{n} overlapping rows hold a twin value the active row lacks or contradicts" if n else None
-    )
+    if not n:
+        return None
+    if fill_nulls:
+        return f"{n} overlapping rows hold different non-NULL values"
+    return f"{n} overlapping rows hold a twin value the active row lacks or contradicts"
 
 
-def move_twin_rows(conn, twin, active, skip_before=None, accepted=None) -> dict[str, int]:
+def fill_active_nulls(conn, table: str, twin, active) -> int:
+    """Copy the twin's value into every NULL column of the active row's matching rows.
+
+    Never overwrites a non-NULL value. Returns the number of rows changed.
+    """
+    cols = primary_key_columns(conn, table)
+    schema, name = table.split(".")
+    columns = [
+        c
+        for c in conn.execute(
+            text(
+                "SELECT column_name FROM information_schema.columns "
+                "WHERE table_schema = :s AND table_name = :t"
+            ),
+            {"s": schema, "t": name},
+        ).scalars()
+        if c not in cols and c not in ignored_columns(conn, table) and c not in PROVENANCE_COLUMNS
+    ]
+    if not cols or not columns:
+        return 0
+    sets = ", ".join(f"{c} = COALESCE(a.{c}, tw.{c})" for c in columns)
+    changed = " OR ".join(f"(a.{c} IS NULL AND tw.{c} IS NOT NULL)" for c in columns)
+    join = " AND ".join(f"a.{c} = tw.{c}" for c in cols)
+    return conn.execute(
+        text(
+            f"UPDATE {table} a SET {sets} FROM {table} tw "  # noqa: S608
+            f"WHERE a.security_id = :a AND tw.security_id = :t AND {join} AND ({changed})"
+        ),
+        {"a": active, "t": twin},
+    ).rowcount
+
+
+def move_twin_rows(
+    conn, twin, active, skip_before=None, accepted=None, fill_nulls=False
+) -> dict[str, int]:
     """Re-point the twin's rows whose key the active identity lacks. Returns rows moved."""
     moved = {}
     for table in MOVE_TABLES:
         cols = primary_key_columns(conn, table)
         if not cols or not has_column(conn, table, "security_id"):
             continue
-        refusal = None if table in (accepted or {}) else overlap_guard(conn, table, twin, active)
+        refusal = (
+            None
+            if table in (accepted or {})
+            else overlap_guard(conn, table, twin, active, fill_nulls)
+        )
         if refusal:
             raise RuntimeError(f"{table}: {refusal}")
+        if fill_nulls and table in FILL_TABLES:
+            filled = fill_active_nulls(conn, table, twin, active)
+            if filled:
+                moved[table + " (NULLs filled)"] = filled
         key = " AND ".join(f"a.{c} = {table.split('.')[1]}.{c}" for c in cols)
         extra = ""
         params = {"a": active, "t": twin}
@@ -415,7 +468,7 @@ def move_twin_rows(conn, twin, active, skip_before=None, accepted=None) -> dict[
 
 
 def merge_twins(
-    conn, ticker: str, archive_path: Path | None, skip_before=None, accepted=None
+    conn, ticker: str, archive_path: Path | None, skip_before=None, accepted=None, fill_nulls=False
 ) -> dict:
     """Archive, move the twins' unique history to the active identity, delete the twins.
 
@@ -460,7 +513,9 @@ def merge_twins(
     before = history_counts(conn, active)
     moved = {}
     for twin in sids:
-        for table, n in move_twin_rows(conn, twin, active, skip_before, accepted).items():
+        for table, n in move_twin_rows(
+            conn, twin, active, skip_before, accepted, fill_nulls
+        ).items():
             moved[table] = moved.get(table, 0) + n
     # Whatever remains on the twins is overlap (already guarded) or skipped-by-request history.
     deleted = {}
@@ -513,6 +568,12 @@ def main(argv=None):
         "e.g. raw.market_data='FMP non-split-adjusted closes match the active series'.\n"
         "Needs evidence; only that table's guard is skipped; recorded in the archive.",
     )
+    parser.add_argument(
+        "--fill-nulls",
+        action="store_true",
+        help="With --merge: where the active row has NULL and the twin a value, copy it (fundamentals,\n"
+        "dividends). Never overwrites; refuses if both hold different non-NULL values.",
+    )
     parser.add_argument("--execute", action="store_true")
     parser.add_argument("--confirm")
     args = parser.parse_args(argv)
@@ -524,7 +585,7 @@ def main(argv=None):
     for item in args.accept_overlap_conflict:
         table, _, evidence = item.partition("=")
         accepted[table.strip()] = evidence
-    if (args.skip_move_before or accepted) and not args.merge:
+    if (args.skip_move_before or accepted or args.fill_nulls) and not args.merge:
         print("--skip-move-before and --accept-overlap-conflict need --merge", file=sys.stderr)
         return 2
     lock = None
@@ -544,7 +605,9 @@ def main(argv=None):
             transaction = conn.begin()
             try:
                 if args.merge:
-                    result = merge_twins(conn, ticker, archive, args.skip_move_before, accepted)
+                    result = merge_twins(
+                        conn, ticker, archive, args.skip_move_before, accepted, args.fill_nulls
+                    )
                 else:
                     result = delete_twins(conn, ticker, archive)
             except Exception as exc:

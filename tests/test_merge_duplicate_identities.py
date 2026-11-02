@@ -367,3 +367,55 @@ def test_an_accepted_conflict_without_evidence_is_refused(pair):
 
     with pytest.raises(RuntimeError, match="needs its evidence"):
         mdi.merge_twins(conn, TICKER, None, accepted={"raw.market_data": "  "})
+
+
+def _fund(conn, sid, net_income, assets=None):
+    conn.execute(
+        text(
+            "INSERT INTO fundamentals.periodic_financials (security_id, period_end, fiscal_year, "
+            "fiscal_period, filed, net_income, assets) "
+            "VALUES (:s, DATE '2024-12-31', 2024, 'FY', DATE '2025-02-01', :n, :a)"
+        ),
+        {"s": sid, "n": net_income, "a": assets},
+    )
+
+
+def _fund_row(conn, sid):
+    return conn.execute(
+        text(
+            "SELECT net_income, assets FROM fundamentals.periodic_financials WHERE security_id = :s"
+        ),
+        {"s": sid},
+    ).one()
+
+
+def test_fill_nulls_copies_the_twins_value_into_an_active_null_and_never_overwrites(pair):
+    conn, active, twin = pair
+    _fund(conn, active, None, 500)  # active lacks net_income, has assets
+    _fund(conn, twin, 100, 500)  # twin has net_income; assets agree
+
+    result = mdi.merge_twins(conn, TICKER, None, fill_nulls=True)
+
+    row = _fund_row(conn, active)
+    assert float(row.net_income) == 100  # filled
+    assert float(row.assets) == 500  # non-NULL kept
+    assert result["rows_moved"]["fundamentals.periodic_financials (NULLs filled)"] == 1
+
+
+def test_without_fill_nulls_the_same_merge_is_refused(pair):
+    conn, active, twin = pair
+    _fund(conn, active, None)
+    _fund(conn, twin, 100)
+
+    with pytest.raises(RuntimeError, match="twin value the active row lacks or contradicts"):
+        mdi.merge_twins(conn, TICKER, None)
+
+
+def test_fill_nulls_still_refuses_when_both_hold_different_values(pair):
+    """NEU's debt differed by 58x: two real values that disagree are not a NULL to fill."""
+    conn, active, twin = pair
+    _fund(conn, active, 100)
+    _fund(conn, twin, 5800)
+
+    with pytest.raises(RuntimeError, match="different non-NULL values"):
+        mdi.merge_twins(conn, TICKER, None, fill_nulls=True)
