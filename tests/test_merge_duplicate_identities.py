@@ -162,3 +162,39 @@ def test_a_ticker_with_two_active_identities_is_refused(pair):
     )
 
     assert "expected one active identity" in mdi.report(conn, TICKER)["error"]
+
+
+def _feature(conn, sid, day, close):
+    conn.execute(
+        text("INSERT INTO model.features (security_id, as_of_date) VALUES (:s, :d)"),
+        {"s": sid, "d": day},
+    )
+
+
+def test_a_derived_table_difference_does_not_block_when_the_history_is_redundant(pair):
+    """Features are computed from prices: a twin's older feature rows are rebuildable from the
+    active identity's own (identical) prices, so they do not make the twin irreplaceable."""
+    conn, active, twin = pair
+    for sid in (active, twin):
+        _price(conn, sid, date(2024, 1, 2), 10.0)
+    _feature(conn, twin, date(2023, 12, 29), 1)  # a feature row only the twin has
+
+    report = mdi.report(conn, TICKER)
+
+    assert report["all_redundant"] is True
+    assert report["twins"][0]["rebuilt_metadata_differs"] == {"model.features": 1}
+
+
+def test_a_derived_difference_is_moot_when_a_history_table_blocks(pair):
+    conn, active, twin = pair
+    _price(conn, twin, date(2024, 1, 2), 10.0)  # history only the twin has
+    _feature(conn, twin, date(2024, 1, 2), 1)
+
+    assert mdi.report(conn, TICKER)["all_redundant"] is False
+
+
+def test_model_outputs_are_history_not_derived(pair):
+    """A past score cannot be regenerated, so a twin owning one is never redundant."""
+    assert "model.scores" not in mdi.DERIVED_TABLES
+    assert "model.predictions" not in mdi.DERIVED_TABLES
+    assert "model.rankings" not in mdi.DERIVED_TABLES

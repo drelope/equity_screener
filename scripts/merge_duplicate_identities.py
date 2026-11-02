@@ -62,6 +62,21 @@ REBUILT_TABLES = frozenset(
     }
 )
 
+#: Tables computed from the history tables (prices, dividends, fundamentals) or caches of
+#: documents. A twin's rows here that the active identity lacks are rebuildable from the
+#: active identity's own history, so they do not block a delete, but only because every
+#: history table is required to be redundant first: if a history table blocks, these are moot.
+#: Model OUTPUTS (scores, predictions, rankings) are not in this set: a past score was computed
+#: with the data of its day and cannot be regenerated, so it must be on the active identity.
+DERIVED_TABLES = frozenset(
+    {
+        "model.features",
+        "model.forward_returns",
+        "preferred.dividend_snapshot",
+        "raw.contract_documents",
+    }
+)
+
 
 def ignored_columns(conn, table: str) -> list[str]:
     """Columns that legitimately differ between two copies of the same data.
@@ -138,7 +153,7 @@ def assess_twin(conn, twin, active, plan_tables) -> dict:
         if has_column(conn, table, "security_id"):
             missing = unmatched_twin_rows(conn, table, twin, active)
             findings[table] = {"twin_rows": count, "not_on_active": missing}
-            if missing and table in REBUILT_TABLES:
+            if missing and (table in REBUILT_TABLES or table in DERIVED_TABLES):
                 rebuilt_differs[table] = missing
             elif missing:
                 blockers.append(
