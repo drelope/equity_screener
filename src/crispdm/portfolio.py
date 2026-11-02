@@ -646,12 +646,6 @@ SPLIT_EVENT_WINDOW_DAYS = 5
 #: for that period rather than kept with a cleaned series (judgment call: 20%).
 UNRELIABLE_REJECT_SHARE = 0.20
 ABSURD_PRICE_LOW = 1e-4
-#: A series that trades a median of fewer than this many shares a day and still moves
-#: ``SPIKE_THRESHOLD`` or more in one session is not a price history: its prints are quotes
-#: against nobody (CMCT: median 11 shares, $350 to $3,725 to $214 to $6.10). The jumps persist,
-#: so the spike-and-revert test keeps them. Unknown volume is not thin. Thin and stable, or
-#: liquid and volatile, series are unaffected.
-THIN_MEDIAN_VOLUME = 100.0
 
 
 def clean_prices(
@@ -744,8 +738,6 @@ def clean_prices(
                 last_accepted = close[index]
         if len(close) and group_rejected / len(close) > UNRELIABLE_REJECT_SHARE:
             unreliable.add(str(sid))
-        if _is_thin_and_jumpy(close, volume):
-            unreliable.add(str(sid))
         cleaned = group.copy()
         cleaned["close"] = close
         cleaned_parts.append(cleaned)
@@ -753,19 +745,6 @@ def clean_prices(
     result.attrs["splits_adjusted"] = splits_adjusted
     result.attrs["unreliable_ids"] = sorted(unreliable)
     return result, rejected_total
-
-
-def _is_thin_and_jumpy(close: np.ndarray, volume: np.ndarray) -> bool:
-    """True when the median volume is below ``THIN_MEDIAN_VOLUME`` and a close moves by
-    ``SPIKE_THRESHOLD`` or more from the previous one."""
-    known = volume[~np.isnan(volume)]
-    if len(known) == 0 or float(np.median(known)) >= THIN_MEDIAN_VOLUME:
-        return False
-    previous, current = close[:-1], close[1:]
-    valid = (previous > 0) & ~np.isnan(previous) & ~np.isnan(current)
-    if not valid.any():
-        return False
-    return bool((np.abs(current[valid] / previous[valid] - 1.0) >= SPIKE_THRESHOLD).any())
 
 
 def exclude_unreliable(universe: pd.DataFrame, cleaned: pd.DataFrame) -> pd.DataFrame:

@@ -15,3 +15,4 @@ in the repository; `python -m scripts.lessons_audit` enforces that. See
 | [L007](L007-line-endings-flip.md) | open | repository hygiene |
 | [L008](L008-title-classifier-faults.md) | open | title classifier |
 | [L009](L009-universe-changes-need-a-backtest.md) | monitored | classification and selection |
+| [L010](L010-adjusted-volume-is-not-share-volume.md) | monitored | price and liquidity rules |
