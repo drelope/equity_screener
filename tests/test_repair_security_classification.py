@@ -493,7 +493,7 @@ def test_loose_bucket_rows_are_retyped_in_place_when_no_twin_blocks_them():
             trans.rollback()
 
 
-def test_a_loose_bucket_row_is_never_moved_to_preferred_by_this_repair():
+def test_a_loose_bucket_row_is_not_moved_to_preferred_unless_the_title_says_preferred():
     engine = _live_engine()
     if engine is None:
         pytest.skip("no database available")
@@ -501,7 +501,12 @@ def test_a_loose_bucket_row_is_never_moved_to_preferred_by_this_repair():
         trans = conn.begin()
         try:
             _insert_security(conn, "ZQW", "9000000052", "equity")
-            _insert_title(conn, "9000000052", "ZQW", "8.00% Series A Cumulative Preferred Stock")
+            _insert_title(
+                conn,
+                "9000000052",
+                "ZQW",
+                "Depositary Shares, each representing a 1/1,000th interest in a Series A share",
+            )
 
             assert "ZQW" not in dict(repair.repair_exact_titles(conn))
         finally:
@@ -544,5 +549,40 @@ def test_a_loose_bucket_row_is_left_active_when_the_twin_of_its_real_type_is_ina
                     ).scalar()
                     is True
                 )
+        finally:
+            trans.rollback()
+
+
+def test_debt_future_and_option_rows_are_retyped_in_place_not_left_for_stage_one():
+    """Stage 1 mints a new identity for a type the repair does not consider; 28 stored as
+    debt/future/option/corporate bond held 1,806 scores."""
+    engine = _live_engine()
+    if engine is None:
+        pytest.skip("no database available")
+    with engine.connect() as conn:
+        trans = conn.begin()
+        try:
+            for i, kind in enumerate(("debt", "future", "option", "corporate bond")):
+                _insert_security(conn, f"ZQD{i}", f"90000000{70 + i}", kind)
+                _insert_title(
+                    conn, f"90000000{70 + i}", f"ZQD{i}", "Common Stock, par value $0.01 per share"
+                )
+            changed = {t: k for t, k in repair.repair_exact_titles(conn) if t.startswith("ZQD")}
+            assert set(changed.values()) == {"common_stock"} and len(changed) == 4
+        finally:
+            trans.rollback()
+
+
+def test_an_equity_row_whose_title_says_preferred_is_retyped_to_preferred():
+    engine = _live_engine()
+    if engine is None:
+        pytest.skip("no database available")
+    with engine.connect() as conn:
+        trans = conn.begin()
+        try:
+            _insert_security(conn, "ZQY", "9000000080", "equity")
+            _insert_title(conn, "9000000080", "ZQY", "7.00% Series A Cumulative Preferred Stock")
+            changed = dict(repair.repair_exact_titles(conn))
+            assert changed.get("ZQY") == "preferred stock"
         finally:
             trans.rollback()

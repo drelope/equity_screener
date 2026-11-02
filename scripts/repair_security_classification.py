@@ -160,7 +160,9 @@ def repair_exact_titles(conn):
         FROM reference.securities s
         JOIN raw.sec_instrument_titles t ON t.cik = s.cik AND t.ticker = s.ticker
         WHERE s.active AND s.security_type IN ('preferred stock', 'common_stock', 'other',
-                                               'derivative', 'equity', 'other_debt_and_equity')
+                                               'derivative', 'equity', 'other_debt_and_equity',
+                                               'debt', 'future', 'option', 'corporate bond',
+                                               'government debt')
     """)
         )
         .mappings()
@@ -175,8 +177,10 @@ def repair_exact_titles(conn):
             # 'equity' is what a spaced-out "Common     Stock" title falls to; it may replace
             # the catch-all 'other', never a real common or preferred type.
             continue
-        if row["current_type"] in ("derivative", "equity", "other_debt_and_equity") and (
-            decision.security_type == "preferred stock"
+        if (
+            row["current_type"] in ("derivative", "equity", "other_debt_and_equity")
+            and decision.security_type == "preferred stock"
+            and "preferred" not in (row["title"] or "").lower()
         ):
             # Only a title that says 'preferred' may move a row to preferred, and never from
             # one of these loose buckets without an explicit review.
