@@ -15,7 +15,6 @@ filters the scored universe at every formation date from trailing data only (no 
 from __future__ import annotations
 
 import argparse
-import functools
 import json
 from pathlib import Path
 
@@ -28,6 +27,19 @@ from src.crispdm.db import read_df
 
 OUT = Path(__file__).resolve().parents[1] / "artifacts" / "liquidity_floor_study"
 WINDOW = 60
+#: Illustrative one-way trading cost in basis points by trailing median dollar volume, as
+#: (minimum dollar volume, bps). These are assumptions, not measurements: half the spread plus
+#: impact for a small order, rising steeply as liquidity falls. Scaled by COST_MULTIPLIERS.
+COST_TIERS_BPS = (
+    (10_000_000.0, 5.0),
+    (1_000_000.0, 15.0),
+    (250_000.0, 40.0),
+    (50_000.0, 100.0),
+    (0.0, 250.0),
+)
+#: Annual borrow fee on short notional (an easy-to-borrow rate; hard-to-borrow names cost far more).
+SHORT_BORROW_BPS_PER_YEAR = 100.0
+COST_MULTIPLIERS = (0.0, 0.5, 1.0, 2.0)
 VARIANTS = {
     "baseline": {},
     "price_ge_2": {"min_price": 2.0},
@@ -75,6 +87,51 @@ def passes(universe: pd.DataFrame, price, dollar, min_price=None, min_dollar_vol
     return universe[keep].reset_index(drop=True)
 
 
+def cost_bps(dollar_volume: float) -> float:
+    """One-way cost in bps for a name with this trailing median dollar volume."""
+    value = 0.0 if dollar_volume is None or np.isnan(dollar_volume) else float(dollar_volume)
+    for floor, bps in COST_TIERS_BPS:
+        if value >= floor:
+            return bps
+    return COST_TIERS_BPS[-1][1]
+
+
+def period_costs(books: dict, dollar_by_date: dict, formations, multiplier: float) -> pd.Series:
+    """Cost of each period as a fraction of NAV: traded notional per name times its bps,
+    plus the borrow fee on short notional for one month."""
+    previous = pd.Series(dtype=float)
+    out = {}
+    for day in formations:
+        weights = books.get(day)
+        if weights is None:
+            out[day] = 0.0
+            previous = pd.Series(dtype=float)
+            continue
+        traded = weights.sub(previous, fill_value=0.0).abs()
+        dollar = dollar_by_date.get(day, pd.Series(dtype=float))
+        bps = pd.Series({sid: cost_bps(dollar.get(sid)) for sid in traded.index})
+        trading = float((traded * bps).sum()) / 1e4
+        borrow = float(weights[weights < 0].abs().sum()) * SHORT_BORROW_BPS_PER_YEAR / 1e4 / 12
+        out[day] = multiplier * (trading + borrow)
+        previous = weights
+    return pd.Series(out)
+
+
+def net_metrics(gross: pd.Series, costs: pd.Series, rf_monthly: float) -> dict:
+    """Annualised return, volatility and Sharpe from monthly returns after costs."""
+    net = gross - costs.reindex(gross.index).fillna(0.0)
+    years = len(net) / 12.0
+    growth = float((1.0 + net).prod())
+    excess = net - rf_monthly
+    vol = float(net.std() * np.sqrt(12))
+    return {
+        "annual_return": growth ** (1.0 / years) - 1.0 if growth > 0 else -1.0,
+        "annual_volatility": vol,
+        "sharpe": float(excess.mean() / net.std() * np.sqrt(12)) if net.std() > 0 else float("nan"),
+        "cost_drag_per_year": float(costs.reindex(gross.index).fillna(0.0).sum() / years),
+    }
+
+
 def run(variant: str) -> dict:
     cfg = VARIANTS[variant]
     ids = read_df(
@@ -91,9 +148,15 @@ def run(variant: str) -> dict:
     )
     events = {sid: g for sid, g in ev.groupby("sid")}
     original = pf.load_universe
+    books: dict = {}
+    dollar_by_date: dict = {}
+    state = {"day": None}
 
     def universe_for(day):
         universe = original(day)
+        state["day"] = pd.Timestamp(day)
+        _, dollar = trailing_metrics(close, volume, events, pd.Timestamp(day))
+        dollar_by_date[pd.Timestamp(day)] = dollar
         if "min_price" in cfg or "min_dollar_volume" in cfg:
             price, dollar = trailing_metrics(close, volume, events, pd.Timestamp(day))
             universe = passes(
@@ -102,8 +165,17 @@ def run(variant: str) -> dict:
         return universe
 
     select = pf.select_portfolio
-    if "short_gross" in cfg:
-        pf.select_portfolio = functools.partial(select, short_gross=cfg["short_gross"])
+
+    def recording_select(*args, **kwargs):
+        if "short_gross" in cfg:
+            kwargs.setdefault("short_gross", cfg["short_gross"])
+        book = select(*args, **kwargs)
+        books[state["day"]] = book.set_index(book["security_id"].astype(str))["weight"].astype(
+            float
+        )
+        return book
+
+    pf.select_portfolio = recording_select
     try:
         schedule = bt.rebalance_schedule(pf.load_score_dates())
         result = bt.run_walk_forward(
@@ -116,7 +188,20 @@ def run(variant: str) -> dict:
     finally:
         pf.select_portfolio = select
     periods = result.periods.set_index("formation").period_return
+    periods.index = pd.to_datetime(periods.index)
+    rf = read_df(
+        "SELECT avg(value)::float8 AS v FROM raw.macro_series WHERE series_id = :s",
+        {"s": pf.RISK_FREE_SERIES},
+    ).v[0]
+    rf_monthly = float(rf) / 100.0 / 12.0
+    after_costs = {
+        f"x{m:g}": net_metrics(
+            periods, period_costs(books, dollar_by_date, list(periods.index), m), rf_monthly
+        )
+        for m in COST_MULTIPLIERS
+    }
     metrics = dict(result.metrics)
+    metrics["after_costs"] = after_costs
     metrics.update(
         variant=variant,
         monthly_std=float(periods.std()),

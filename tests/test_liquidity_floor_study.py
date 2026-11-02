@@ -44,3 +44,54 @@ def test_traded_price_divides_out_later_splits_and_dollar_volume_needs_no_adjust
 def test_every_variant_is_named_and_the_baseline_is_unfiltered():
     assert VARIANTS["baseline"] == {}
     assert set(VARIANTS["long_only"]) == {"short_gross"}
+
+
+def test_cost_rises_as_liquidity_falls_and_unknown_liquidity_is_the_most_expensive():
+    from scripts.liquidity_floor_study import cost_bps
+
+    assert cost_bps(50_000_000) < cost_bps(5_000_000) < cost_bps(500_000) < cost_bps(100_000)
+    assert cost_bps(10) == cost_bps(float("nan")) == cost_bps(None) == 250.0
+
+
+def test_period_cost_charges_only_the_traded_notional_plus_the_short_borrow():
+    from scripts.liquidity_floor_study import period_costs
+
+    d1, d2 = pd.Timestamp("2024-01-31"), pd.Timestamp("2024-02-29")
+    books = {
+        d1: pd.Series({"a": 0.5, "s": -0.25}),
+        d2: pd.Series({"a": 0.5, "s": -0.25}),  # unchanged: nothing traded the second month
+    }
+    dollar = {d1: pd.Series({"a": 20e6, "s": 20e6}), d2: pd.Series({"a": 20e6, "s": 20e6})}
+
+    cost = period_costs(books, dollar, [d1, d2], 1.0)
+
+    first = (0.5 * 5 + 0.25 * 5) / 1e4 + 0.25 * 100 / 1e4 / 12
+    assert abs(cost[d1] - first) < 1e-12
+    assert abs(cost[d2] - 0.25 * 100 / 1e4 / 12) < 1e-12  # borrow only
+
+
+def test_a_cash_period_resets_the_book_so_the_next_one_pays_full_entry_cost():
+    from scripts.liquidity_floor_study import period_costs
+
+    d1, d2, d3 = (pd.Timestamp(x) for x in ("2024-01-31", "2024-02-29", "2024-03-29"))
+    books = {d1: pd.Series({"a": 1.0}), d3: pd.Series({"a": 1.0})}
+    dollar = {d: pd.Series({"a": 20e6}) for d in (d1, d3)}
+
+    cost = period_costs(books, dollar, [d1, d2, d3], 1.0)
+
+    assert cost[d2] == 0.0 and abs(cost[d3] - cost[d1]) < 1e-12
+
+
+def test_net_metrics_subtract_costs_and_the_multiplier_scales_them():
+    from scripts.liquidity_floor_study import net_metrics, period_costs
+
+    idx = pd.date_range("2024-01-31", periods=12, freq="ME")
+    gross = pd.Series(0.02, index=idx)
+    books = {d: pd.Series({"a": 1.0}) for d in idx}
+    dollar = {d: pd.Series({"a": 20e6}) for d in idx}
+
+    free = net_metrics(gross, period_costs(books, dollar, list(idx), 0.0), 0.0)
+    paid = net_metrics(gross, period_costs(books, dollar, list(idx), 2.0), 0.0)
+
+    assert paid["annual_return"] < free["annual_return"]
+    assert paid["cost_drag_per_year"] > 0 == free["cost_drag_per_year"]
