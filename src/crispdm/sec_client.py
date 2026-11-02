@@ -389,7 +389,9 @@ def classify_security_type(title):
     SEC's ticker feed has no dedicated instrument-type field, so the title is
     the first SEC classification signal. Issuer SIC remains separate metadata.
     """
-    normalized_title = (title or "").strip().lower()
+    # XBRL cover titles carry stray spacing ("Common     Stock"), which would defeat every
+    # phrase match below and drop a common stock to a generic equity.
+    normalized_title = " ".join((title or "").split()).lower()
 
     if any(term in normalized_title for term in ("option", "options")):
         return "option"
@@ -397,16 +399,32 @@ def classify_security_type(title):
     if any(term in normalized_title for term in ("future", "futures")):
         return "future"
 
+    # A SPAC unit bundles a share with warrants or rights ("Units, each consisting of one
+    # Class A share and one redeemable warrant"); it is a unit, not a warrant.
+    if re.search(r"\bunits?\b", normalized_title) and re.search(
+        r"\bconsist(?:s|ing)\s+of\b|\bcompris(?:es|ed|ing)\b", normalized_title
+    ):
+        return "other_debt_and_equity"
+
     if any(term in normalized_title for term in ("warrant", "right")):
         return "derivative"
 
-    if any(
-        term in normalized_title for term in ("preferred", "depositary share", "depositary receipt")
-    ) or re.search(
+    if "preferred" in normalized_title or re.search(
         r"\bpref\.?\s+(?:stock|stk)\b|\bdeposit[ao]ry\s+shrs?\b|\bpreference\s+(?:units?|shares?)\b"
         r"|\bpreference\s+securities\b|\bpfd\b",
         normalized_title,
     ):
+        return "preferred stock"
+
+    if any(term in normalized_title for term in ("depositary share", "depositary receipt")):
+        # American Depositary Shares are receipts for a foreign issuer's common (ordinary)
+        # shares. Only a depositary share with no such wording is a preferred receipt.
+        if re.search(
+            r"\bamerican\s+depositary\b|\bordinary\s+shares?\b|\bcommon\s+(?:stock|shares?)\b"
+            r"|\badrs?\b|\bads\b",
+            normalized_title,
+        ):
+            return "common_stock"
         return "preferred stock"
 
     if any(term in normalized_title for term in ("government bond", "treasury", "municipal bond")):

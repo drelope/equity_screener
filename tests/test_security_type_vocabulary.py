@@ -662,3 +662,55 @@ def test_the_notes_pattern_does_not_capture_equity_or_other_instruments():
     assert classify_security_type("Depositary Shares each representing a subordinated note") == (
         "preferred stock"
     )
+
+
+def test_stray_spacing_in_a_cover_title_does_not_defeat_the_phrase_match():
+    """XBRL cover titles arrive as "Common     Stock"; the substring match for 'common stock'
+    failed and a common stock dropped to a generic equity."""
+    from src.crispdm.sec_client import classify_security_type
+
+    assert classify_security_type("Common     Stock, par value $0.01 per share") == "common_stock"
+    assert classify_security_type("Common\u00a0Shares of Beneficial Interest") == "common_stock"
+    assert classify_security_type("Class A\n  common stock") == "common_stock"
+
+
+def test_a_spac_unit_is_a_unit_not_a_warrant():
+    from src.crispdm.sec_client import classify_security_type
+
+    for title in (
+        "Units, each consisting of one Class A ordinary share and one redeemable warrant",
+        "Units,     each consisting of one Class A ordinary share and one right",
+        "Units, each comprised of one share of common stock and one-half of one warrant",
+    ):
+        assert classify_security_type(title) == "other_debt_and_equity", title
+    # a bare warrant or right is still a derivative
+    assert classify_security_type("Redeemable warrants, each exercisable for one share") == (
+        "derivative"
+    )
+    assert classify_security_type("Rights to receive one-tenth of one share") == "derivative"
+
+
+def test_american_depositary_shares_are_common_receipts_not_preferred():
+    from src.crispdm.sec_client import classify_security_type
+
+    for title in (
+        "American Depositary Shares",
+        "American Depositary Shares, each representing two ordinary shares",
+        "Depositary shares, each representing one share of common stock",
+        "Petrobras American Depositary Shares, or ADSs",
+        "Class A Ordinary Shares represented by American Depositary Shares",
+    ):
+        assert classify_security_type(title) == "common_stock", title
+
+
+def test_preferred_depositary_shares_are_still_preferred():
+    from src.crispdm.sec_client import classify_security_type
+
+    for title in (
+        "Depositary Shares, each representing a 1/1,000th interest in a share of Series A "
+        "Non-Cumulative Preferred Stock",
+        "American Depositary Shares each representing one Series B Preferred Share",
+        "Depositary Shares each representing 1/40th of a share of Fixed-Rate Preferred Stock",
+        "Depositary shrs, each representing a fractional interest",
+    ):
+        assert classify_security_type(title) == "preferred stock", title
