@@ -81,6 +81,8 @@ Each step was driven by a failure, and each left a check behind.
 | 6 | A new rule rested on a wrong premise (L010) | The retraction rule above, and the recurrence check "compare with the source before writing a rule" |
 | 7 | A recovered backtest number was gross and not investable (L011) | A cost model and floor study, and the check "report after-cost Sharpe with sensitivity" |
 | 8 | Recall was prose that nobody had to run | `--recall`, with open lessons first |
+| 9 | A lesson's recurrence check ran only when someone remembered | An identity guard in the one-time post-nightly check: no scored security may go inactive and the table may not grow by more than 60 rows, against a snapshot taken before the run. Linked from L001, L003 and L004 |
+| 10 | L007 blamed `ruff format` for flipped line endings; a direct test showed Python text mode was the cause | The lesson was corrected in place (a diagnosis, not a retraction of a rule), and `scripts/check_line_endings.py` now fails on any changed file whose endings differ from the committed ones |
 
 What the steps share: measure against the real data before shipping, ship the smallest change,
 prove the guard fails when the code is broken, and write the lesson in the same change.
