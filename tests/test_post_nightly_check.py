@@ -152,3 +152,42 @@ def test_pipeline_running_sees_the_real_lock_in_postgres():
         assert pnc.pipeline_running() is False
     finally:
         holder.close()
+
+
+def _base(ids=("a", "b"), total=100):
+    return {"total": total, "active": total - 5, "scored_active": list(ids)}
+
+
+def test_a_scored_security_that_went_inactive_fails_the_identity_guard():
+    results = {
+        r["name"]: r for r in pnc.evaluate_identities(_base(), {"total": 100, "active": 95}, {"a"})
+    }
+
+    assert results["scored_identities_active"]["status"] == pnc.FAIL
+    assert (
+        "1 of 2" in results["scored_identities_active"]["detail"]
+        and "b" in results["scored_identities_active"]["detail"]
+    )
+
+
+def test_a_nightly_that_adds_a_few_listings_passes_and_one_that_mints_many_fails():
+    ok = {
+        r["name"]: r
+        for r in pnc.evaluate_identities(_base(), {"total": 112, "active": 107}, {"a", "b"})
+    }
+    assert (
+        ok["no_minted_identities"]["status"] == pnc.PASS
+        and ok["scored_identities_active"]["status"] == pnc.PASS
+    )
+
+    bad = {
+        r["name"]: r
+        for r in pnc.evaluate_identities(_base(), {"total": 400, "active": 395}, {"a", "b"})
+    }
+    assert bad["no_minted_identities"]["status"] == pnc.FAIL
+
+
+def test_the_guard_is_informational_without_a_baseline_file(tmp_path):
+    results = pnc._identity_checks(tmp_path / "missing.json")
+
+    assert results[0]["status"] == pnc.INFO

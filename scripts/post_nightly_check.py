@@ -270,7 +270,69 @@ def _data_checks() -> list[dict]:
     return out
 
 
-def run(run_date: date, max_wait_minutes: float) -> list[dict]:
+BASELINE_SQL = """
+SELECT count(*) AS total, count(*) FILTER (WHERE active) AS active,
+       array_agg(security_id::text) FILTER (
+         WHERE active AND EXISTS (SELECT 1 FROM model.scores m WHERE m.security_id = s.security_id)
+       ) AS scored_active
+FROM reference.securities s
+"""
+#: A nightly legitimately adds a handful of new listings; more than this many new rows in one
+#: run points at stage 1 minting identities.
+MAX_NEW_ROWS = 60
+
+
+def snapshot_identities() -> dict:
+    """Counts and the ids of active, scored securities, for the identity guard."""
+    row = read_df(BASELINE_SQL).iloc[0]
+    return {
+        "total": int(row["total"]),
+        "active": int(row["active"]),
+        "scored_active": sorted(row["scored_active"] or []),
+    }
+
+
+def evaluate_identities(baseline: dict, now: dict, still_active: set[str]) -> list[dict]:
+    """The identity guard (pure; kept for tests).
+
+    * no security that was active and scored may have gone inactive: that strands its history
+      on a row stage 1 stopped using (lessons L001, L003, L004);
+    * the table may grow by at most ``MAX_NEW_ROWS`` rows.
+    """
+    lost = sorted(set(baseline["scored_active"]) - still_active)
+    grew = now["total"] - baseline["total"]
+    return [
+        check(
+            "scored_identities_active",
+            FAIL if lost else PASS,
+            f"{len(lost)} of {len(baseline['scored_active'])} scored securities went inactive"
+            + (f": {', '.join(lost[:8])}" if lost else ""),
+        ),
+        check(
+            "no_minted_identities",
+            FAIL if grew > MAX_NEW_ROWS else PASS,
+            f"reference.securities rows {baseline['total']} -> {now['total']} "
+            f"({grew:+d}, limit +{MAX_NEW_ROWS}); active {baseline['active']} -> {now['active']}",
+        ),
+    ]
+
+
+def _identity_checks(baseline_path: Path | None) -> list[dict]:
+    if baseline_path is None or not baseline_path.exists():
+        return [check("identity_guard", INFO, "no baseline file; guard not evaluated")]
+    baseline = json.loads(baseline_path.read_text(encoding="utf-8"))
+    now = snapshot_identities()
+    active = set(
+        read_df(
+            "SELECT security_id::text AS s FROM reference.securities "
+            "WHERE active AND security_id::text = ANY(:ids)",
+            {"ids": baseline["scored_active"]},
+        )["s"]
+    )
+    return evaluate_identities(baseline, now, active)
+
+
+def run(run_date: date, max_wait_minutes: float, baseline_path: Path | None = None) -> list[dict]:
     results = [check("pipeline_state", INFO, wait_for_pipeline(max_wait_minutes))]
     if pipeline_running():
         results.append(
@@ -283,6 +345,7 @@ def run(run_date: date, max_wait_minutes: float) -> list[dict]:
     results.append(evaluate_freshness(latest.to_dict("records")))
     results += _data_checks()
     results.append(_issuer_terms_test())
+    results += _identity_checks(baseline_path)
     return results
 
 
@@ -290,11 +353,18 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--run-date", type=date.fromisoformat, required=True)
     parser.add_argument("--max-wait-minutes", type=float, default=360.0)
+    parser.add_argument("--baseline", type=Path, help="Identity snapshot taken before the nightly.")
+    parser.add_argument("--snapshot", type=Path, help="Write the identity snapshot here and exit.")
     parser.add_argument(
         "--remove-cron", action="store_true", help="Delete this job's cron entry when done."
     )
     args = parser.parse_args()
-    results = run(args.run_date, args.max_wait_minutes)
+    if args.snapshot:
+        args.snapshot.parent.mkdir(parents=True, exist_ok=True)
+        args.snapshot.write_text(json.dumps(snapshot_identities()), encoding="utf-8")
+        print(f"wrote {args.snapshot}")
+        return 0
+    results = run(args.run_date, args.max_wait_minutes, args.baseline)
     report = render_report(args.run_date, results, datetime.now(timezone.utc))
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     (OUTPUT_DIR / f"report_{args.run_date}.md").write_text(report, encoding="utf-8")
