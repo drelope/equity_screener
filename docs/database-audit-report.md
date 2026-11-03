@@ -870,3 +870,17 @@ The 651 open entries are mostly one artifact, not 188 independent defects. Filer
 - **Stored rows:** left in place and still quarantined (the registry test requires it), but no longer reach a feature.
 - **Impact:** 220 FY vintages, 130 with debt, 12 securities, 1,796 feature rows dated 2023-01-03 to 2026-10-06; none on the latest scored date. Features from 2023-01-01 were rebuilt and no feature row carries a bad debt value now (was 1,796).
 - **Not addressed:** the 246 rows that are not debt-only, and `debt < 0`, `shares_outstanding <= 0`, `liabilities < 0`. See L014.
+
+## Non-trading dividend payers and the US-instrument rule (2026-11-03)
+
+Owner rule: keep a security when `dividend = TRUE` and it is a United States instrument. Applied, read-only, to the 30 active payers with no market data, using `clean.company_profile.country`:
+
+| Verdict | Securities | Tickers |
+|---|---|---|
+| United States (keep) | 8 | BDFNV, ELMES, IIPBP, IIPR-PB, METAM, MSGK-WI, RWTP, SKYD-WT |
+| Non-US | 1 | ENBSF (Canada) |
+| Country unknown | 19 | BSTT, DSX-WT, EMRJF, ENFFF, FIISP, FINCF, FLG-PU, FTPSF, HCIIP, HYNLY, NE-WT, NE-WTA, PMTV, QSP, RWTO, TCENF, TICAW, TRPRF, ZARE |
+
+No `dividend` flag was changed. `populate_reference_tables` rewrites the flag on every run, so a manual edit would not hold, and 19 of the 30 have no profile country to decide on (mostly OTC `...F` ordinaries, warrants and bond series). Enforcing the rule needs a country source for those 19 and a rule in the reference stage.
+
+Scope note: applied to the whole active universe, the same rule would exclude 675 payers (585 non-US by country, 90 unknown), 541 of them scored today. That is a universe change and needs a backtest first (L009), so it was not applied.
