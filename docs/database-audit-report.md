@@ -828,3 +828,35 @@ A blanket `$1,000` OpenBB cap would discard valid pre-split history. A cap on `a
 - Ingestion rejects new rows above the ceiling; the feature build excludes them; the nightly check fails on any new unquarantined amount.
 - The 253 affected historical SUNE feature rows are rebuilt; latest scores are unchanged because their annualized values were already NULL.
 - L012 records the lesson and the provider-specific-cap rule.
+
+---
+
+# Follow-up Triage (2026-11-03)
+
+Read-only. No scoring, data or policy was changed.
+
+## Active payers without a feature row on the latest date (182)
+
+| Bucket | Securities | Reading |
+|---|---|---|
+| No market data ever | 30 | Mostly non-trading instruments or provider gaps: warrants (`DSX-WT`, `NE-WT`, `SKYD-WT`), when-issued (`MSGK-WI`), OTC ADRs (`ENBSF`, `TRPRF`), and a few preferred/bond series (`NEE-PU`, `RWTP`). A provider-coverage question, not a pipeline defect. |
+| Market data, never featured | 1 | One common stock; needs a single-ticker look. |
+| Last feature older than the latest date | 151 | 88 are 1-15 days stale, 55 are 16-28 days, 8 are older. Thinly traded series with no print in the latest window; carry-forward was already tried and did not close this gap (see the unscoreable-payers finding above). |
+
+Decision left to the owner: whether the 30 non-trading instruments should keep `dividend = TRUE`. That is a universe-scope policy, so it is not changed here.
+
+## Open fundamentals quarantines (1,965)
+
+| Rule | Rows | Securities | Period end range | Since 2024 |
+|---|---|---|---|---|
+| `shares_outstanding <= 0` | 1,042 | 423 | 2010-10-31 to 2026-06-30 | 206 |
+| `filed < period_end` | 651 | 188 | 2010-12-31 to 2026-09-30 | 338 |
+| `debt < 0` | 211 | 59 | 2009-06-27 to 2025-12-31 | 1 |
+| `liabilities < 0` | 61 | 9 | 2009-12-31 to 2021-04-30 | 0 |
+
+- None has healed: no `shares_outstanding` entry now holds a positive value, so none can be resolved yet.
+- `filed < period_end` is concentrated: PMT and its six preferred/unit/warrant tickers (same CIK) hold 357 of the 651 rows, 51 each. One filer-level cause, not 188 independent ones.
+- `liabilities < 0` is entirely historical (nothing after 2021) and covers 9 securities.
+- The look-ahead these rows created is already closed in the feature build (`GREATEST(filed, period_end)`, WS11); the quarantine records the values, it does not gate scoring.
+
+Suggested order if this is taken further: the PMT family first (one fix clears 55% of the `filed` rows), then `debt < 0` (59 securities, almost all pre-2025), then `shares_outstanding <= 0`, which needs a decision on whether zero means "not reported" or a real value.
