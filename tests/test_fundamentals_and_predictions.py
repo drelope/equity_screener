@@ -1661,3 +1661,55 @@ def test_a_count_overestimate_terminates_instead_of_looping(monkeypatch):
     assert loads == [None, 2]  # second page came back empty and stopped the loop
     assert result.candidates == 5  # reported count is what count(*) claimed
     assert result.periods == 2  # only real rows were processed
+
+
+def test_a_fact_whose_period_ends_after_it_was_filed_is_not_an_observation():
+    """PMT tags a debt-maturity schedule (LongTermDebt due 2022) with the future date.
+
+    Read as the balance at that period_end it was 139M against a 4.7B balance. A period
+    cannot be reported before it ends, so the fact is skipped and the real balance survives.
+    """
+
+    def fact(value, end, filed):
+        return {
+            "val": value,
+            "end": end,
+            "fy": 2021,
+            "fp": "Q1",
+            "filed": filed,
+            "form": "10-Q",
+        }
+
+    facts = {
+        "LongTermDebt": {
+            "units": {
+                "USD": [
+                    fact(139_269_000, "2022-03-31", "2021-05-07"),  # maturity schedule
+                    fact(4_737_383_000, "2022-03-31", "2022-05-06"),  # the real balance
+                ]
+            }
+        }
+    }
+
+    rows = extract_periodic_financials({"full_facts": {"facts": {"us-gaap": facts}}})
+
+    assert [r["debt"] for r in rows] == [4_737_383_000]
+    assert all(r["filed"] >= r["period_end"] for r in rows)
+
+
+def test_the_fy_feature_read_voids_debt_filed_before_its_period_ends(monkeypatch):
+    from src.crispdm import features
+
+    captured = {}
+
+    def fake_read_df(sql, params=None):
+        captured["sql"] = sql
+        return pd.DataFrame(
+            columns=list(features.FEATURE_COLUMNS) + ["eps_ttm", "eps_ttm_prior", "fcf_ttm"]
+        )
+
+    monkeypatch.setattr(features, "read_df", fake_read_df)
+    features.build_features()
+
+    assert "CASE WHEN pf.filed >= pf.period_end THEN pf.debt END AS debt" in captured["sql"]
+    assert "pf.interest_expense, pf.revenue,\n" in captured["sql"], "only debt is voided"

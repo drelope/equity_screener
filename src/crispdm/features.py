@@ -1062,7 +1062,12 @@ def build_features(date_from=None, date_to=None):
                ORDER BY GREATEST(pf.filed, pf.period_end), pf.filed) AS filed_next,
              pf.eps, pf.free_cash_flow,
              pf.operating_income, pf.depreciation_amortization,
-             pf.interest_expense, pf.revenue, pf.debt,
+             pf.interest_expense, pf.revenue,
+             -- A debt value filed before its period ends is a maturity-schedule
+             -- fact tagged with a future date, not the balance at period_end
+             -- (PMT: 139M against 4.7B). Only debt is voided: the evidence for
+             -- the other metrics on such a row is not the same, so they stay.
+             CASE WHEN pf.filed >= pf.period_end THEN pf.debt END AS debt,
              pf.cash, pf.current_liabilities,
              pf.debt_maturing_12m, pf.debt_maturing_year_2,
              pf.committed_undrawn_facility,

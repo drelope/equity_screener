@@ -42,6 +42,10 @@ def _period_start(record):
     return None
 
 
+#: The components summed into ``debt``; see the maturity-schedule note in the extractor.
+DEBT_BALANCE_METRICS = ("debt_noncurrent", "debt_current", "finance_lease_debt")
+
+
 def _period_end(record):
     value = record.get("end")
     if isinstance(value, str) and value.strip():
@@ -190,6 +194,16 @@ def extract_periodic_financials(companyfacts, max_periods=DEFAULT_MAX_PERIODS, a
                 # A period cannot be reported before it has ended, so a
                 # period_end after the run date is a bad date, not a fact.
                 if as_of is not None and period_end > as_of:
+                    continue
+                # A debt balance cannot be reported before its period ends. Filers
+                # tag debt-maturity schedules (LongTermDebt due in 2022, filed in
+                # 2021) with the future date as the fact's end, and reading that as
+                # the balance at period_end understates debt roughly thirtyfold
+                # (PMT: 139M against a 4.7B balance). Scoped to the debt components
+                # because that is where the evidence is: 622 of the 868 stored rows
+                # filed before their period ends hold only a debt value. The other
+                # metrics keep the as_of=None pass-through the recency tests rely on.
+                if metric in DEBT_BALANCE_METRICS and period_end > filed:
                     continue
                 key = (period_end, record.get("fy"), record.get("fp") or "")
                 by_concept = metric_periods[metric].setdefault(key, {})

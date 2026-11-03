@@ -860,3 +860,13 @@ Decision left to the owner: whether the 30 non-trading instruments should keep `
 - The look-ahead these rows created is already closed in the feature build (`GREATEST(filed, period_end)`, WS11); the quarantine records the values, it does not gate scoring.
 
 Suggested order if this is taken further: the PMT family first (one fix clears 55% of the `filed` rows), then `debt < 0` (59 securities, almost all pre-2025), then `shares_outstanding <= 0`, which needs a decision on whether zero means "not reported" or a real value.
+
+## PMT-family `filed < period_end` rows: cause found and fixed (2026-11-03)
+
+The 651 open entries are mostly one artifact, not 188 independent defects. Filers tag debt-maturity schedules (`LongTermDebt`, `NotesPayable`, `ConvertibleNotesPayable`) with the future due date as the fact's end, and the extractor read that as the balance at `period_end`. Of 868 stored rows filed before their period ends, 622 hold only a `debt` value and 448 are more than a year early. PMT's 139,269,000 against a real 4,737,383,000 balance is the clearest case.
+
+- **Extractor:** skips a debt-component fact whose period ends after its filing date.
+- **Feature build:** the FY read voids a stored debt filed before its period ends; other metrics on those rows keep the `GREATEST(filed, period_end)` clamp.
+- **Stored rows:** left in place and still quarantined (the registry test requires it), but no longer reach a feature.
+- **Impact:** 220 FY vintages, 130 with debt, 12 securities, 1,796 feature rows dated 2023-01-03 to 2026-10-06; none on the latest scored date. Features from 2023-01-01 were rebuilt and no feature row carries a bad debt value now (was 1,796).
+- **Not addressed:** the 246 rows that are not debt-only, and `debt < 0`, `shares_outstanding <= 0`, `liabilities < 0`. See L014.
