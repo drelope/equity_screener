@@ -19,6 +19,7 @@ import plotly.graph_objects as go
 import streamlit as st
 
 from app import nav, ui
+from app.views import security
 from src.crispdm import portfolio as pf
 
 PAGE_TITLE = "Analyst dashboard"
@@ -191,6 +192,20 @@ def _selected_panel(context: dict) -> None:
             )
         status = covered.iloc[0]["status"] if not covered.empty else "no worksheet"
         st.caption(f"Research status: {status}")
+        found = security.profile(ticker)
+        if found.empty:
+            st.warning(f"{ticker} is not an active security, so there is no analysis to show.")
+        else:
+            info = found.iloc[0]
+            if not covered.empty and pd.notna(covered.iloc[0].get("recommendation")):
+                st.write(f"Worksheet recommendation: **{covered.iloc[0]['recommendation']}**")
+            tab_s, tab_f, tab_m = st.tabs(["Scores", "Features", "Financials"])
+            with tab_s:
+                security.score_section(info.security_id)
+            with tab_f:
+                security.feature_section(info.security_id)
+            with tab_m:
+                security.financials_section(info.security_id)
         c1, c2, _ = st.columns([1, 1, 4])
         if c1.button("Security detail", key="dashboard_sel_sec"):
             nav.open_page(nav.SECURITY, ticker, origin=nav.DASHBOARD)
