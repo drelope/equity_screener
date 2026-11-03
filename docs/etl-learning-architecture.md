@@ -85,6 +85,7 @@ Each step was driven by a failure, and each left a check behind.
 | 10 | L007 blamed `ruff format` for flipped line endings; a direct test showed Python text mode was the cause | The lesson was corrected in place (a diagnosis, not a retraction of a rule), and `scripts/check_line_endings.py` now fails on any changed file whose endings differ from the committed ones |
 | 11 | An OpenBB per-share dividend tail reached `$226tn` while the SEC path refused `>$1,000`; a blanket OpenBB cap would have discarded valid pre-split scale (L012) | A provider-specific `$1M` ceiling in `src/crispdm/dividend_limits.py`, enforced at ingestion, feature annualization and the post-nightly check; the 65 existing rows are quarantined with evidence rather than deleted |
 | 12 | L008's index row still said `open` after its file said `guarded`, and the audit passed because it only compared file names | `scripts/lessons_audit.py` now compares the INDEX status with the lesson file status; the L008 row was corrected and the mismatch has a regression test |
+| 13 | A registry-versus-reality test reported 22 fundamentals values "erased" that were intact under successor ids (L013) | V0105 re-keys the entries as V0093 did; the lesson records that re-keying securities must be followed by the registry test |
 
 What the steps share: measure against the real data before shipping, ship the smallest change,
 prove the guard fails when the code is broken, and write the lesson in the same change.

@@ -18,3 +18,4 @@ in the repository; `python -m scripts.lessons_audit` enforces that. See
 | [L010](L010-adjusted-volume-is-not-share-volume.md) | monitored | price and liquidity rules |
 | [L011](L011-gross-backtest-is-not-investable.md) | monitored | backtest interpretation |
 | [L012](L012-openbb-per-share-dividend-outliers.md) | guarded | dividend ingestion and feature annualization |
+| [L013](L013-quarantine-keys-go-stale-on-rekey.md) | guarded | quarantine registry and re-keying |
