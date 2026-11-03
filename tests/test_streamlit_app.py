@@ -1296,3 +1296,13 @@ def test_the_screener_offers_the_next_steps_for_a_selected_ticker(without_token)
     at.run()
     assert not at.exception, [e.value for e in at.exception]
     assert not [b for b in at.button if b.label == "Security detail"]  # needs a table row
+
+
+def test_the_dashboard_shows_the_ticker_carried_from_the_screener(without_token):
+    at = AppTest.from_function(page_script, args=("dashboard",), default_timeout=TIMEOUT)
+    at.session_state["selected_ticker"] = "AAPL"
+
+    at.run()
+
+    assert not at.exception, [e.value for e in at.exception]
+    assert any("AAPL" in s.value for s in at.subheader)

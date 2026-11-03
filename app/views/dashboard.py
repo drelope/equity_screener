@@ -163,6 +163,35 @@ def _allocation_chart(book: pd.DataFrame) -> None:
     st.plotly_chart(figure, width="stretch")
 
 
+def _selected_panel(context: dict) -> None:
+    """Show the ticker carried from Screener / Security / Analysis and where it sits here."""
+    ticker = st.session_state.get(nav.SELECTED_KEY)
+    if not ticker:
+        st.caption("No security selected. Pick one on the Screener to see it here.")
+        return
+    table = context["table"]
+    held = table[table["ticker"] == ticker]
+    analyses = context["analyses"]
+    covered = analyses[analyses["ticker"] == ticker]
+    with st.container(border=True):
+        st.subheader(f"Selected security: {ticker}")
+        if held.empty:
+            st.write("Not held in the current model portfolio.")
+        else:
+            row = held.iloc[0]
+            st.write(
+                f"{row['side']} position in {row['sector']}, weight {_pct(row['weight'])}, "
+                f"return {_pct(row['total_return'])}."
+            )
+        status = covered.iloc[0]["status"] if not covered.empty else "no worksheet"
+        st.caption(f"Research status: {status}")
+        c1, c2, _ = st.columns([1, 1, 4])
+        if c1.button("Security detail", key="dashboard_sel_sec"):
+            nav.open_page(nav.SECURITY, ticker, origin=nav.DASHBOARD)
+        if c2.button("Worksheet", key="dashboard_sel_ws"):
+            nav.open_page(nav.ANALYSIS, ticker, origin=nav.DASHBOARD)
+
+
 def _portfolio_tab(context: dict) -> None:
     path = context["path"]
     book = context["book"]
@@ -932,6 +961,7 @@ def render() -> None:
         st.warning("No published scores yet. Run feature engineering and scoring first.")
         return
     nav.render_flow_bar(nav.DASHBOARD)
+    _selected_panel(context)
     tabs = st.tabs(TAB_NAMES)
     with tabs[0]:
         _portfolio_tab(context)
