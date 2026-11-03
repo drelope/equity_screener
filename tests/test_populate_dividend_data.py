@@ -528,6 +528,48 @@ def test_normalize_openbb_dividend_rows_tags_empty_concept():
     assert rows[0]["feed"] == "yfinance", "untagged frames are the yfinance feed"
 
 
+def test_normalize_openbb_dividend_rows_rejects_an_absurd_openbb_tail():
+    """Pre-split scale is real; the >$1M provider tail is not."""
+    frame = pd.DataFrame(
+        [
+            {"ex_dividend_date": "2006-03-28", "amount": 226_799_993_000_000},
+            {"ex_dividend_date": "2021-10-18", "amount": 2_100_000},
+            {"ex_dividend_date": "2013-12-12", "amount": 96_000},
+            {"ex_dividend_date": "2019-12-12", "amount": 16_911},
+        ]
+    )
+
+    rows = normalize_openbb_dividend_rows("X", frame)
+
+    assert [r["amount"] for r in rows] == [96_000, 16_911], (
+        "the ceiling must remove the absurd tail without discarding pre-split scale"
+    )
+
+
+def test_normalize_openbb_dividend_rows_judges_the_split_restated_amount():
+    """A huge as-declared figure is fine when adjusted_amount is usable."""
+    frame = pd.DataFrame(
+        [
+            {
+                "ex_dividend_date": "2024-01-02",
+                "amount": 2_100_000,
+                "adjusted_amount": 96.0,
+            },
+            {
+                "ex_dividend_date": "2024-02-02",
+                "amount": 10.0,
+                "adjusted_amount": 2_000_000.0,
+            },
+        ]
+    )
+
+    rows = normalize_openbb_dividend_rows("X", frame)
+
+    assert len(rows) == 1
+    assert rows[0]["adjusted_amount"] == 96.0
+    assert rows[0]["amount"] == 2_100_000
+
+
 def test_normalize_openbb_dividend_rows_keeps_fmp_feed_and_both_amounts():
     """FMP's amount is as declared; adjusted_amount restates it after splits."""
     frame = pd.DataFrame(

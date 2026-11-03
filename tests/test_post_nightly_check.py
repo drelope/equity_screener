@@ -76,6 +76,16 @@ def test_the_split_calendar_loader_is_one_of_the_checked_stages():
     assert "scripts.load_sec_bulk" in pnc.SUPPORTING_LABELS
 
 
+def test_openbb_outliers_fail_only_when_unquarantined():
+    assert pnc.evaluate_openbb_outliers(0, 0)["status"] == pnc.PASS
+    assert pnc.evaluate_openbb_outliers(65, 0)["status"] == pnc.PASS
+
+    failed = pnc.evaluate_openbb_outliers(65, 1)
+    assert failed["status"] == pnc.FAIL
+    assert "1 unquarantined" in failed["detail"]
+    assert "65 known" in failed["detail"]
+
+
 def test_freshness_fails_only_on_a_breach_and_not_on_an_unaged_source():
     ok = {"source": "a", "age_hours": 5, "sla_hours": 240, "within_sla": True}
     unaged = {"source": "b", "age_hours": None, "sla_hours": 840, "within_sla": None}

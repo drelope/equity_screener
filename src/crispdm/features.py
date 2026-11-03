@@ -5,6 +5,7 @@ import pandas as pd
 from sqlalchemy import text
 
 from .db import engine, read_df
+from .dividend_limits import MAX_OPENBB_PER_SHARE_DIVIDEND
 from .versioning import FEATURE_SET_V1, FEATURE_VERSION, compute_feature_set_hash
 
 #: Hash of the model feature definition stored alongside every feature row, so a
@@ -652,6 +653,11 @@ def build_features(date_from=None, date_to=None):
              provider, frequency
       FROM raw.dividend_data
       WHERE amount > 0
+        -- A valid pre-split OpenBB payment can be tens of thousands of dollars
+        -- per unadjusted share, so this is not the SEC $1,000 cap. It only
+        -- removes the absurd tail (TOPS $226tn, WHLR $153bn, SUNE $2.1m).
+        AND (provider <> 'OPENBB'
+             OR COALESCE(adjusted_amount, amount) <= :max_openbb_per_share)
         AND (provider <> 'SEC_XBRL' OR concept IN (
               'CommonStockDividendsPerShareDeclared',
               'CommonStockDividendsPerShareCashPaid',
@@ -693,10 +699,10 @@ def build_features(date_from=None, date_to=None):
       -- treated as reinvested at the close of its ex-date.
       --
       -- A single payment larger than the prior close is a unit or currency
-      -- error, not a dividend (19 of 65,351 stored events, one of them 2.1
-      -- million per share), and one such row would turn a 63-day return into
-      -- a number no holder ever earned. It is left out of the return rather
-      -- than the whole security.
+      -- error, not a dividend, and one such row would turn a 63-day return
+      -- into a number no holder ever earned. It is left out of the return
+      -- rather than the whole security. The absurd OpenBB tail is already
+      -- removed by :max_openbb_per_share when d is built.
       SELECT m.security_id, m.observation_date, m.close,
         LN(m.close/NULLIF(LAG(m.close) OVER w,0)) daily_return,
         LN((m.close + CASE WHEN dv.amount <= :max_payment_ratio * LAG(m.close) OVER w
@@ -1257,6 +1263,7 @@ def build_features(date_from=None, date_to=None):
         "date_from": date_from or date.min,
         "date_to": date_to or date.max,
         "max_payment_ratio": MAX_SINGLE_PAYMENT_RATIO,
+        "max_openbb_per_share": MAX_OPENBB_PER_SHARE_DIVIDEND,
     }
     df = read_df(sql, params)
     annual = df["annual_dividend"]

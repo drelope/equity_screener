@@ -55,6 +55,7 @@ Do not use when:
 
    ```bash
    python -m scripts.lessons_audit --recall stage 1 retype
+   python -m scripts.lessons_audit --recall openbb dividend    # provider ceilings (L012)
    ```
 2. **Capture.** State the symptom with the evidence.
 3. **Root cause.** Name the mechanism, not the trigger. If you cannot, mark the lesson `open`.
@@ -93,6 +94,7 @@ python -m pytest -q tests/test_lessons_audit.py
 - No evidence: stop and ask for the command and counts; do not write a lesson from memory.
 - No guard possible: record it as `open` and say so; never mark it `guarded` to close it.
 - Two lessons share a cause: amend the existing one.
+- A cap or threshold from one provider is being reused for another: measure the new provider's valid range first (L012).
 - A result is gross of costs: say so, and report the after-cost figure with its sensitivity (L011).
 
 ## Handoffs

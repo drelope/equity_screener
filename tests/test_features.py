@@ -397,6 +397,24 @@ def test_the_payment_sanity_bound_is_passed_to_the_query(monkeypatch):
     assert captured["params"]["max_payment_ratio"] == features.MAX_SINGLE_PAYMENT_RATIO
 
 
+def test_the_openbb_per_share_ceiling_is_passed_to_the_query(monkeypatch):
+    captured = {}
+
+    def fake_read_df(sql, params=None):
+        captured["sql"] = sql
+        captured["params"] = params
+        return pd.DataFrame(
+            columns=list(features.FEATURE_COLUMNS) + ["eps_ttm", "eps_ttm_prior", "fcf_ttm"]
+        )
+
+    monkeypatch.setattr(features, "read_df", fake_read_df)
+    features.build_features()
+
+    assert captured["params"]["max_openbb_per_share"] == features.MAX_OPENBB_PER_SHARE_DIVIDEND
+    assert "COALESCE(adjusted_amount, amount) <= :max_openbb_per_share" in captured["sql"]
+    assert "provider <> 'OPENBB'" in captured["sql"]
+
+
 def test_volatility_252d_requires_a_full_window_of_returns(monkeypatch):
     # STDDEV_SAMP returns a value from two samples, so an unguarded
     # ROWS BETWEEN 251 PRECEDING AND CURRENT ROW published a "252-day"

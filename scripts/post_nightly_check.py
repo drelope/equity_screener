@@ -23,6 +23,7 @@ from sqlalchemy import text
 
 from scripts.run_full_etl import BULK_EDGAR_LOADER, PIPELINE_LOCK_KEY, SUPPORTING_LOADERS
 from src.crispdm.db import engine, read_df
+from src.crispdm.dividend_limits import MAX_OPENBB_PER_SHARE_DIVIDEND
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 OUTPUT_DIR = PROJECT_ROOT / "artifacts" / "post_nightly"
@@ -237,6 +238,25 @@ def _issuer_terms_test() -> dict:
     return check("issuer_terms_invariant", PASS if proc.returncode == 0 else FAIL, tail)
 
 
+def evaluate_openbb_outliers(total: int, unquarantined: int) -> dict:
+    """Known quarantined rows are allowed; a new unquarantined one is not."""
+    if unquarantined:
+        return check(
+            "openbb_dividend_outliers",
+            FAIL,
+            f"{unquarantined} unquarantined OpenBB amount(s) > "
+            f"${MAX_OPENBB_PER_SHARE_DIVIDEND:,.0f}/share (of {total} known)",
+        )
+    return check(
+        "openbb_dividend_outliers",
+        PASS,
+        f"no unquarantined OpenBB amount > ${MAX_OPENBB_PER_SHARE_DIVIDEND:,.0f}/share "
+        f"({total} known quarantined)"
+        if total
+        else "no OpenBB amount above the ceiling",
+    )
+
+
 def _data_checks() -> list[dict]:
     out = []
     gaps = int(
@@ -247,6 +267,32 @@ def _data_checks() -> list[dict]:
     )
     out.append(
         check("lineage_stamps", FAIL if gaps else PASS, f"{gaps} lineage rows missing a stamp")
+    )
+    outlier_row = read_df(
+        """
+        WITH outliers AS (
+          SELECT concat_ws('|', d.security_id, d.ex_dividend_date, d.provider) AS row_key,
+                 COALESCE(d.adjusted_amount, d.amount)::text AS observed_value
+          FROM raw.dividend_data d
+          WHERE d.provider = 'OPENBB'
+            AND COALESCE(d.adjusted_amount, d.amount) > :max_openbb_per_share
+        )
+        SELECT count(*) AS total,
+               count(*) FILTER (
+                 WHERE NOT EXISTS (
+                   SELECT 1 FROM audit.quarantined_values q
+                   WHERE q.rule = 'OPENBB_DIVIDEND_AMOUNT_ABSURD'
+                     AND q.resolved_at IS NULL
+                     AND q.row_key = outliers.row_key
+                     AND q.observed_value = outliers.observed_value
+                 )
+               ) AS unquarantined
+        FROM outliers
+        """,
+        {"max_openbb_per_share": MAX_OPENBB_PER_SHARE_DIVIDEND},
+    ).iloc[0]
+    out.append(
+        evaluate_openbb_outliers(int(outlier_row["total"]), int(outlier_row["unquarantined"]))
     )
     dates = read_df(
         "SELECT (SELECT max(as_of_date) FROM model.features) AS features, "

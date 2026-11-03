@@ -41,6 +41,16 @@ Thresholds are overridable (e.g. `--min-coverage 0.90`). Every run inserts a
 verification row into `audit.nightly_checks` (disable with `--no-check-log`,
 label ownership with `--verified-by`, annotate with `--notes`).
 
+### Post-nightly OpenBB dividend amount guard
+
+The one-time post-nightly check (`python -m scripts.post_nightly_check --run-date <date>`)
+also fails on any OPENBB per-share amount above `$1,000,000` that is not already parked in
+`audit.quarantined_values` with rule `OPENBB_DIVIDEND_AMOUNT_ABSURD`. Known rows are allowed
+because the raw values stay as evidence; a new unquarantined amount means the ingestion
+ceiling did not apply. The result appears in the post-nightly markdown report
+(`artifacts/post_nightly/latest.md`). A blanket `$1,000` OpenBB cap is deliberately not used: valid pre-split payments can be tens of thousands of
+dollars per unadjusted share (L012).
+
 ### Preferred security consistency
 
 Missing coupons/preferences, repeated titles and issuer-only titles are

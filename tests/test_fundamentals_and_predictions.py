@@ -1055,7 +1055,9 @@ def test_momentum_is_total_return_and_ignores_impossible_payments():
         conn.execute(text(ddl))
         rows = {
             r[0]: (float(r[1]), r[2])
-            for r in conn.execute(text(query), {"max_payment_ratio": 1.0}).fetchall()
+            for r in conn.execute(
+                text(query), {"max_payment_ratio": 1.0, "max_openbb_per_share": 1_000_000.0}
+            ).fetchall()
         }
 
     assert rows[1][1] == 63 and rows[2][1] == 63

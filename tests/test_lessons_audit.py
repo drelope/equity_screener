@@ -75,6 +75,18 @@ def test_the_index_must_match_the_files(tmp_path):
     assert any("lists missing file L009-ghost.md" in m for m in messages)
 
 
+def test_the_index_status_must_match_the_lesson_file(tmp_path):
+    d = _setup(tmp_path)
+    (d / "INDEX.md").write_text(
+        "| Lesson | Status | Area |\n|---|---|---|\n| [L001](L001-example.md) | open | stage 1 |\n",
+        encoding="utf-8",
+    )
+
+    messages = [f.message for f in la.audit(d, tmp_path)]
+
+    assert any("L001-example.md says open, file says guarded" in m for m in messages)
+
+
 def test_duplicate_ids_and_unresolved_markers_fail(tmp_path):
     d = _setup(tmp_path)
     (d / "L001-second.md").write_text(GOOD + "\nTODO fix\n", encoding="utf-8")

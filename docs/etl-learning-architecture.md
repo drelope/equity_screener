@@ -44,8 +44,8 @@ mechanism behind it.
 
 `scripts/lessons_audit.py` is deterministic and runs in the test suite
 (`tests/test_lessons_audit.py::test_the_real_ledger_is_consistent`). It fails on a missing
-field, an unknown status, a duplicate id, an index that disagrees with the files, an unresolved
-marker, and a `guarded` lesson whose guard path does not exist. It cannot judge whether a guard
+field, an unknown status, a duplicate id, an index that disagrees with the files (including a
+status mismatch), an unresolved marker, and a `guarded` lesson whose guard path does not exist. It cannot judge whether a guard
 is good; that is review's job, which is why each guarded lesson names a recurrence check.
 
 ## Executable recall
@@ -83,6 +83,8 @@ Each step was driven by a failure, and each left a check behind.
 | 8 | Recall was prose that nobody had to run | `--recall`, with open lessons first |
 | 9 | A lesson's recurrence check ran only when someone remembered | An identity guard in the one-time post-nightly check: no scored security may go inactive and the table may not grow by more than 60 rows, against a snapshot taken before the run. Linked from L001, L003 and L004 |
 | 10 | L007 blamed `ruff format` for flipped line endings; a direct test showed Python text mode was the cause | The lesson was corrected in place (a diagnosis, not a retraction of a rule), and `scripts/check_line_endings.py` now fails on any changed file whose endings differ from the committed ones |
+| 11 | An OpenBB per-share dividend tail reached `$226tn` while the SEC path refused `>$1,000`; a blanket OpenBB cap would have discarded valid pre-split scale (L012) | A provider-specific `$1M` ceiling in `src/crispdm/dividend_limits.py`, enforced at ingestion, feature annualization and the post-nightly check; the 65 existing rows are quarantined with evidence rather than deleted |
+| 12 | L008's index row still said `open` after its file said `guarded`, and the audit passed because it only compared file names | `scripts/lessons_audit.py` now compares the INDEX status with the lesson file status; the L008 row was corrected and the mismatch has a regression test |
 
 What the steps share: measure against the real data before shipping, ship the smallest change,
 prove the guard fails when the code is broken, and write the lesson in the same change.

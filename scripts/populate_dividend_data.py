@@ -68,6 +68,10 @@ if __package__ in (None, ""):
 from scripts.populate_companyfacts import upsert_companyfacts
 from src.crispdm.config import settings
 from src.crispdm.db import engine
+from src.crispdm.dividend_limits import (
+    MAX_OPENBB_PER_SHARE_DIVIDEND,
+    MAX_PER_SHARE_DIVIDEND,
+)
 from src.crispdm.doc_clauses import depositary_ratio
 from src.crispdm.sec_client import (
     build_companyfacts_concept_groups,
@@ -227,13 +231,6 @@ SEC_DIVIDEND_CONCEPTS = (
 #: as if they were dividend history.
 MAX_DIVIDEND_HORIZON_YEARS = 2
 MIN_DIVIDEND_YEAR = 1970
-
-#: Filers occasionally tag a per-share concept with the period's aggregate
-#: dollars (HIG files 1,125,000,000 as PreferredStockDividendsPerShareDeclared;
-#: ARR-PC files 306,800,000 as CommonStockDividendsPerShareCashPaid). The stored
-#: median is 0.48 and the 99th percentile is 80, so no real per-share dividend
-#: approaches this; anything larger is a unit error and is refused.
-MAX_PER_SHARE_DIVIDEND = 1000.0
 
 
 def plausible_dividend_date(value, today=None):
@@ -421,6 +418,17 @@ def normalize_openbb_dividend_rows(ticker, data_frame):
         if _is_projection(ex_dividend_date, declaration_date):
             continue
 
+        adjusted_amount = (
+            safe_float(row.get("adjusted_amount"))
+            or safe_float(row.get("adj_amount"))
+            or safe_float(row.get("adjusted_dividend"))
+        )
+        # Judge the amount features will actually use. A split-restated row with
+        # an absurd as-declared figure but a sane adjusted one is still usable.
+        selected_amount = adjusted_amount if adjusted_amount is not None else amount
+        if selected_amount > MAX_OPENBB_PER_SHARE_DIVIDEND:
+            continue
+
         normalized.append(
             {
                 "ticker": ticker,
@@ -433,11 +441,7 @@ def normalize_openbb_dividend_rows(ticker, data_frame):
                 "payment_date": parse_date(row.get("payment_date") or row.get("date")),
                 "amount": amount,
                 "amount_feed": _text(row.get("amount_feed")) or feed,
-                "adjusted_amount": (
-                    safe_float(row.get("adjusted_amount"))
-                    or safe_float(row.get("adj_amount"))
-                    or safe_float(row.get("adjusted_dividend"))
-                ),
+                "adjusted_amount": adjusted_amount,
                 "frequency": _text(row.get("frequency")) or _text(row.get("period")) or "Annual",
                 "currency": normalize_currency(row.get("currency")),
             }

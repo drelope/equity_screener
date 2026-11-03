@@ -54,6 +54,7 @@ def audit(lessons_dir: Path = LESSONS_DIR, root: Path = ROOT) -> list[Finding]:
     findings: list[Finding] = []
     files = sorted(p for p in lessons_dir.glob("L*.md"))
     ids: dict[str, Path] = {}
+    statuses: dict[str, str] = {}
     for path in files:
         rel = path.relative_to(root).as_posix() if path.is_relative_to(root) else path.name
         match = ID.match(path.name)
@@ -70,6 +71,8 @@ def audit(lessons_dir: Path = LESSONS_DIR, root: Path = ROOT) -> list[Finding]:
         status = fields.get("Status", "")
         if status and status not in STATUSES:
             findings.append(Finding(rel, f"Status must be one of {STATUSES}, got {status!r}"))
+        if status:
+            statuses[path.name] = status
         paths = guard_paths(fields.get("Guard", ""))
         if status == "guarded":
             if not paths:
@@ -83,14 +86,31 @@ def audit(lessons_dir: Path = LESSONS_DIR, root: Path = ROOT) -> list[Finding]:
     if not index.exists():
         findings.append(Finding("docs/etl-lessons/INDEX.md", "missing index"))
     else:
-        listed = set(
-            re.findall(r"\]\((L\d{3}-[a-z0-9-]+\.md)\)", index.read_text(encoding="utf-8"))
-        )
+        index_text = index.read_text(encoding="utf-8")
+        listed = set(re.findall(r"\]\((L\d{3}-[a-z0-9-]+\.md)\)", index_text))
         actual = {p.name for p in files}
         for name in sorted(actual - listed):
             findings.append(Finding("docs/etl-lessons/INDEX.md", f"does not list {name}"))
         for name in sorted(listed - actual):
             findings.append(Finding("docs/etl-lessons/INDEX.md", f"lists missing file {name}"))
+
+        # The index table is the human-facing status. A file cannot be guarded
+        # while the ledger still says open (or the reverse); that is how L008
+        # drifted even though both the file and the index existed.
+        for line in index_text.splitlines():
+            link = re.search(r"\]\((L\d{3}-[a-z0-9-]+\.md)\)", line)
+            if link is None:
+                continue
+            cells = [cell.strip() for cell in line.strip().strip("|").split("|")]
+            index_status = next((cell for cell in cells if cell in STATUSES), None)
+            file_status = statuses.get(link.group(1))
+            if index_status and file_status and index_status != file_status:
+                findings.append(
+                    Finding(
+                        "docs/etl-lessons/INDEX.md",
+                        f"{link.group(1)} says {index_status}, file says {file_status}",
+                    )
+                )
     return findings
 
 

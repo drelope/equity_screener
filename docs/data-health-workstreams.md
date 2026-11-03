@@ -18,6 +18,10 @@ fixing.
 | 8 | Checkpoint contract versioning | **Fixed**; declared-feature and test-block validity enforced |
 | 9 | Run isolation / unpriced-symbol reporting | **Fixed**; pipeline-wide advisory lock, `errors` split from unpriceable instruments |
 | 10 | Unpriced reporting, run isolation, retired-feature audit | **Fixed**; see WS10 for the full account. `liquidation_discount` remains retired, and `legal_rights_score` was retired from the composite weight on 2026-10-15, so no share of the composite is constant |
+| 11 | features_v4 total-return momentum and filing-date clamp | **Fixed**; see WS11 |
+| 12 | features_v5, ticker-conflict record, ML decision | **Fixed**; see WS12 |
+| 13 | V0068 financial metrics | **Fixed**; see WS13 |
+| 14 | OpenBB per-share dividend tail | **Fixed**; see WS14 |
 
 The dividend path is now correct and auditable, and the feature set is real
 rather than declared. WS5 added the label embargo, four defects it exposed, and
@@ -1959,3 +1963,33 @@ NULL when their denominator is absent, so a blank cell is still a gap, not a zer
 The reported line items gain `cost_of_revenue` and `gross_profit` on the
 Fundamentals tab, keeping the derivation auditable next to the ratio it feeds.
 
+## WS14 -- OpenBB per-share dividend tail (this change)
+
+**Status: fixed.**
+
+The SEC dividend path refuses a per-share amount above `$1,000` because a filer can tag the
+period's aggregate dollars as a per-share concept. That ceiling does not transfer to OpenBB:
+yfinance history is not fully split-restated, so a valid pre-split payment can be tens or
+hundreds of thousands of dollars per unadjusted share. SUNE's `$96,000` quarterly payment is
+about a 5.5% yield against its roughly `$1.74M` price, and CMCT's roughly `$205,000` event is
+about 3.4% against roughly `$136k`.
+
+The defect is the far tail, not the scale. A read-only audit found 65 OPENBB rows above
+`$1,000,000` (TOPS `$226,799,993,000,000`, WHLR `$153,628,869,000`, SUNE `$2,100,000`, CETX
+`$1,764,000`), alongside 322 rows above `$1,000`, most of which are internally consistent
+pre-split values. The feature build summed the tail without a ceiling.
+
+The fix separates the two ideas:
+
+- A provider-specific `$1M` ceiling (`MAX_OPENBB_PER_SHARE_DIVIDEND`) in
+  `src/crispdm/dividend_limits.py`, applied to the same `COALESCE(adjusted_amount, amount)`
+  value the feature build uses.
+- Ingestion refuses new rows above it; the feature CTE excludes it; the post-nightly check
+  fails only on an unquarantined row above it.
+- V0104 parks the 65 existing rows in `audit.quarantined_values`; the raw rows stay as evidence.
+- A blanket `$1,000` OpenBB cap and a cap on `annualized_dividend` were both rejected. Only 253
+  historical SUNE feature rows are touched by the filter, and all already had
+  `annualized_dividend IS NULL` because their yield exceeded 25%.
+
+This is dividend-only. The open fundamentals quarantines (shares outstanding `<= 0`, filed
+before period end, negative debt/liabilities) remain separate follow-up work.

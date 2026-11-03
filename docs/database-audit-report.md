@@ -793,3 +793,38 @@ only because the current provider (`OPENBB`) does not return adjusted close. Dro
 it would free no meaningful space (a NULL costs one null-bitmap bit, and the column is
 not removed from the heap without a rewrite) while deleting the hook for any provider
 that does. Kept, as first recorded.
+
+---
+
+# OpenBB Dividend Amount Audit (2026-11-02)
+
+**Method:** read-only PostgreSQL queries over `raw.dividend_data`, `model.features`, `reference.securities` and `audit.quarantined_values`, plus the live feature/score dates. No rows were changed during the audit.
+
+## Findings
+
+| Check | Result |
+|---|---|
+| OPENBB `amount > 1000` | 322 rows; most are scale-consistent pre-split values, not unit errors |
+| OPENBB `COALESCE(adjusted_amount, amount) > 1000` | 323 rows |
+| OPENBB selected amount `> 1,000,000` | 65 rows: TOPS 8, WHLR 55, SUNE 1, CETX 1 |
+| Largest selected amount | TOPS `$226,799,993,000,000` on 2006-03-28 |
+| SEC `amount > 1,000` | 0; the SEC ceiling is applied in `normalize_sec_dividend_rows` |
+| `model.features.annualized_dividend > 100` | 3,646 rows; mostly pre-split scale |
+| `model.features.annualized_dividend > 1,000` | 1,244 rows; 1,076 have an OpenBB payment `> 1,000` in the trailing window, 168 do not (mostly CMCT scale-consistent rows) |
+| Latest feature date | 2026-10-30: 2,752 rows, max annualized 75, max raw annual 560, max yield 0.2478 |
+| Features affected by a `>$1M` filter | 253 SUNE rows (2021-10-18 to 2022-10-18), all already `annualized_dividend IS NULL` |
+| Open quarantines | fundamentals only: 1,050 shares outstanding `<= 0`, 651 filed-before-period-end, 211 debt `< 0`, 61 liabilities `< 0`; no open dividend quarantine |
+
+The 1,976 OPENBB 1970 ex-dividend rows are full-history data, not a sentinel. The 851 future-dated OPENBB rows are mostly near-term declared events; `_is_projection` already drops only the 7 undeclared dates more than 120 days out. Cross-provider overlap remains expected: 2,236 security/ex-date pairs carry both OPENBB and SEC_XBRL rows, and 1,683 differ materially because SEC_XBRL stores annual totals while OPENBB stores per-payment amounts.
+
+## Decision
+
+A blanket `$1,000` OpenBB cap would discard valid pre-split history. A cap on `annualized_dividend` would also be wrong: TDG's annualized 165 is two real payments (75 and 90) in one rolling 365-day window, and CMCT's annualized 4,595.59 is about a 3.4% yield at its pre-split price. The defect is the absurd provider tail, so the remediation uses a provider-specific `$1,000,000` per-share ceiling, applied to the selected amount and preserved as raw evidence.
+
+## Remediation
+
+- V0104 quarantines the 65 existing rows as `OPENBB_DIVIDEND_AMOUNT_ABSURD`.
+- `MAX_OPENBB_PER_SHARE_DIVIDEND` is shared by ingestion, the feature CTE and the post-nightly check.
+- Ingestion rejects new rows above the ceiling; the feature build excludes them; the nightly check fails on any new unquarantined amount.
+- The 253 affected historical SUNE feature rows are rebuilt; latest scores are unchanged because their annualized values were already NULL.
+- L012 records the lesson and the provider-specific-cap rule.
