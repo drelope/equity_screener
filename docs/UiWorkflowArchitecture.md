@@ -678,17 +678,23 @@ Example
 
 # Session State Management
 
+Implemented in `app/nav.py`. Pages never import each other for navigation; the
+entrypoint registers its `st.Page` objects with `nav.register()` and views call
+`nav.open_page(name, ticker, origin=...)`.
+
 ```python
-st.session_state.current_ticker
-
-st.session_state.current_analysis
-
-st.session_state.workspace_tab
-
-st.session_state.return_route
-
-st.session_state.selected_comparison
+st.session_state["selected_ticker"]    # the one ticker shared by every page
+st.session_state["return_route"]       # page that opened the current one ("Back to ...")
+st.session_state["selected_comparison"]  # tickers multi-selected on the Screener
+st.session_state["screener_order"]     # visible Screener order, for Prev/Next
 ```
+
+Workflow: Screener -> Security detail -> Investment analysis -> Model Portfolio.
+Security, Analysis and Dashboard show a flow bar (breadcrumb, Back, Prev/Next).
+Dashboard tables select a row and offer Security detail / Worksheet buttons.
+`?ticker=` seeds the selection on a fresh session (Screener, Dashboard) and is kept
+in sync by the Security and Analysis ticker picker. The `/security/{ticker}` routes
+above are the target design, not the current implementation.
 
 ---
 

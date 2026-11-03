@@ -772,15 +772,16 @@ def test_go_to_analysis_switches_pages_and_carries_the_ticker(without_token):
             if st.button("Analyze here"):
                 investment_analysis.go_to_analysis(ticker)
 
+        from app import nav
+
+        analysis = st.Page(
+            investment_analysis.render,
+            title=investment_analysis.PAGE_TITLE,
+            url_path=investment_analysis.PAGE_PATH,
+        )
+        nav.register({nav.ANALYSIS: analysis})
         st.navigation(
-            [
-                st.Page(home, title="Home", url_path="home", default=True),
-                st.Page(
-                    investment_analysis.render,
-                    title=investment_analysis.PAGE_TITLE,
-                    url_path=investment_analysis.PAGE_PATH,
-                ),
-            ]
+            [st.Page(home, title="Home", url_path="home", default=True), analysis]
         ).run()
 
     at = AppTest.from_function(shell, args=(ticker,), default_timeout=TIMEOUT).run()
@@ -1275,3 +1276,23 @@ def test_auto_complete_is_off_without_the_operator_token(without_token):
 
     assert not at.exception, [e.value for e in at.exception]
     assert button(at, "Auto-complete").disabled
+
+
+def test_the_dashboard_renders_the_flow_bar_and_accepts_a_url_ticker(without_token):
+    at = AppTest.from_function(page_script, args=("dashboard",), default_timeout=TIMEOUT)
+    at.query_params["ticker"] = "AAPL"
+
+    at.run()
+
+    assert not at.exception, [e.value for e in at.exception]
+    assert at.session_state["selected_ticker"] == "AAPL"
+
+
+def test_the_screener_offers_the_next_steps_for_a_selected_ticker(without_token):
+    at = AppTest.from_function(page_script, args=("screener",), default_timeout=TIMEOUT)
+    at.run()
+    assert not at.exception, [e.value for e in at.exception]
+    at.session_state["selected_ticker"] = "AAPL"
+    at.run()
+    assert not at.exception, [e.value for e in at.exception]
+    assert not [b for b in at.button if b.label == "Security detail"]  # needs a table row
