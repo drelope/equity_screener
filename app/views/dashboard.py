@@ -64,64 +64,70 @@ def _ratio(value, digits: int = 2) -> str:
     return f"{value:.{digits}f}"
 
 
+@st.cache_data(ttl=300, show_spinner="Building the model portfolio...")
+def _build_context() -> dict | None:
+    """The heavy portfolio build. Cached so reruns (row selection, buttons, tabs) are instant."""
+    dates = pf.load_score_dates(query=ui.query)
+    if len(dates) == 0:
+        return None
+    formed = pf.rebalance_date(dates)
+    latest = pd.Timestamp(dates[-1])
+    scored = pf.load_universe(formed, query=ui.query)
+    if scored.empty:
+        return None
+    split_events = pf.load_split_events(query=ui.query)
+    # One cleaned pass over the scored universe. Names with unreliable histories are
+    # removed before the book is chosen, the same rule the backtest applies.
+    cleaned, _ = pf.clean_prices(
+        pf.load_prices(scored["security_id"], formed, latest, query=ui.query),
+        split_events=split_events,
+    )
+    universe = pf.exclude_unreliable(scored, cleaned)
+    if universe.empty:
+        return None
+    book = pf.select_portfolio(universe)
+    prices = cleaned[cleaned["security_id"].isin(book["security_id"].astype(str))]
+    returns = pf.total_return_matrix(prices)
+    path = pf.portfolio_returns(returns, book)
+    if path.empty:
+        return None
+    benchmark = None
+    benchmark_prices = cleaned[cleaned["security_id"].isin(universe["security_id"].astype(str))]
+    if not benchmark_prices.empty:
+        benchmark = pf.total_return_matrix(benchmark_prices).mean(axis=1, skipna=True)
+    risk_free = pf.load_risk_free(path.index, query=ui.query)
+    performance = pf.performance_metrics(path["return"], benchmark, risk_free=risk_free)
+    risk = pf.risk_metrics(returns, book)
+    f_scores = pf.load_f_scores(book["security_id"], formed, query=ui.query)
+    table = pf.holdings_table(book, returns, f_scores, risk)
+    analyses = pf.load_analyses(query=ui.query)
+    catalysts = pf.load_catalysts(
+        book["security_id"], latest, latest + pd.Timedelta(days=90), query=ui.query
+    )
+    completed = [
+        period for period in dates.to_period("M").unique() if period <= formed.to_period("M")
+    ]
+    return {
+        "dates": dates,
+        "formed": formed,
+        "latest": latest,
+        "universe": universe,
+        "book": book,
+        "returns": returns,
+        "path": path,
+        "benchmark": benchmark,
+        "performance": performance,
+        "risk": risk,
+        "table": table,
+        "analyses": analyses,
+        "catalysts": catalysts,
+        "rebalances": len(completed),
+    }
+
+
 def _load_context() -> dict | None:
     try:
-        dates = pf.load_score_dates(query=ui.query)
-        if len(dates) == 0:
-            return None
-        formed = pf.rebalance_date(dates)
-        latest = pd.Timestamp(dates[-1])
-        scored = pf.load_universe(formed, query=ui.query)
-        if scored.empty:
-            return None
-        split_events = pf.load_split_events(query=ui.query)
-        # One cleaned pass over the scored universe. Names with unreliable histories are
-        # removed before the book is chosen, the same rule the backtest applies.
-        cleaned, _ = pf.clean_prices(
-            pf.load_prices(scored["security_id"], formed, latest, query=ui.query),
-            split_events=split_events,
-        )
-        universe = pf.exclude_unreliable(scored, cleaned)
-        if universe.empty:
-            return None
-        book = pf.select_portfolio(universe)
-        prices = cleaned[cleaned["security_id"].isin(book["security_id"].astype(str))]
-        returns = pf.total_return_matrix(prices)
-        path = pf.portfolio_returns(returns, book)
-        if path.empty:
-            return None
-        benchmark = None
-        benchmark_prices = cleaned[cleaned["security_id"].isin(universe["security_id"].astype(str))]
-        if not benchmark_prices.empty:
-            benchmark = pf.total_return_matrix(benchmark_prices).mean(axis=1, skipna=True)
-        risk_free = pf.load_risk_free(path.index, query=ui.query)
-        performance = pf.performance_metrics(path["return"], benchmark, risk_free=risk_free)
-        risk = pf.risk_metrics(returns, book)
-        f_scores = pf.load_f_scores(book["security_id"], formed, query=ui.query)
-        table = pf.holdings_table(book, returns, f_scores, risk)
-        analyses = pf.load_analyses(query=ui.query)
-        catalysts = pf.load_catalysts(
-            book["security_id"], latest, latest + pd.Timedelta(days=90), query=ui.query
-        )
-        completed = [
-            period for period in dates.to_period("M").unique() if period <= formed.to_period("M")
-        ]
-        return {
-            "dates": dates,
-            "formed": formed,
-            "latest": latest,
-            "universe": universe,
-            "book": book,
-            "returns": returns,
-            "path": path,
-            "benchmark": benchmark,
-            "performance": performance,
-            "risk": risk,
-            "table": table,
-            "analyses": analyses,
-            "catalysts": catalysts,
-            "rebalances": len(completed),
-        }
+        return _build_context()
     except Exception:
         # Keep user-facing messages safe while logging context for debugging.
         import logging
