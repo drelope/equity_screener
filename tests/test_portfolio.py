@@ -78,6 +78,20 @@ def test_select_portfolio_builds_equal_weight_sleeves_without_overlap():
     }
 
 
+def test_select_portfolio_can_weight_sleeves_by_inverse_volatility_when_requested():
+    book = select_portfolio(_universe(), risk_parity=True)
+    longs = book[book["side"] == "Long"]
+    shorts = book[book["side"] == "Short"]
+
+    assert longs["weight"].sum() == pytest.approx(1.0)
+    assert shorts["weight"].sum() == pytest.approx(-0.5)
+    assert book["weight"].abs().sum() == pytest.approx(1.5)
+    assert (longs["weight"] > 0).all()
+    assert (shorts["weight"] < 0).all()
+    assert longs["weight"].nunique() > 1
+    assert shorts["weight"].nunique() > 1
+
+
 def test_select_portfolio_refuses_a_universe_that_cannot_fill_both_sleeves():
     with pytest.raises(ValueError, match="need 23"):
         select_portfolio(_universe(10))

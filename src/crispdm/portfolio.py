@@ -31,6 +31,7 @@ from statistics import NormalDist
 import numpy as np
 import pandas as pd
 
+from ..math_engine import RiskParityCalculator
 from .db import read_df
 
 LONG_COUNT = 15
@@ -238,6 +239,15 @@ def load_universe(as_of_date, min_coverage=MIN_COVERAGE, query=read_df) -> pd.Da
     return frame
 
 
+def _risk_parity_weights(frame: pd.DataFrame, volatility_column: str, gross: float) -> np.ndarray:
+    """Inverse-volatility weights scaled to a sleeve's gross exposure."""
+    volatilities = pd.to_numeric(frame[volatility_column], errors="coerce").to_numpy(dtype=float)
+    if np.any(~np.isfinite(volatilities)) or np.any(volatilities <= 0):
+        raise ValueError(f"risk parity requires positive finite {volatility_column}")
+    weights = RiskParityCalculator.calculate_weights(volatilities)
+    return weights * gross
+
+
 def select_portfolio(
     universe: pd.DataFrame,
     long_count: int = LONG_COUNT,
@@ -245,12 +255,18 @@ def select_portfolio(
     long_gross: float = LONG_GROSS,
     short_gross: float = SHORT_GROSS,
     base_nav: float = BASE_NAV,
+    *,
+    risk_parity: bool = False,
 ) -> pd.DataFrame:
     """Top names long and bottom names short, equal-weighted within each sleeve.
 
     Sizing is 100% of NAV long and 50% short, so gross exposure is 150% and net
     exposure is 50% long. Both sleeves are equal-weighted, not score-weighted, so
     the book's return is not dominated by one high-conviction name.
+
+    ``risk_parity`` switches the sleeves from equal-weight sizing to inverse
+    volatility risk parity, scaled to each sleeve's gross exposure. The default
+    preserves the published equal-weight book.
     """
     frame = universe.dropna(subset=["composite_score"]).drop_duplicates("security_id").copy()
     frame["security_id"] = frame["security_id"].astype(str)
@@ -263,9 +279,15 @@ def select_portfolio(
         raise ValueError("long and short sleeves overlap")
 
     longs["side"] = "Long"
-    longs["weight"] = long_gross / long_count
+    if risk_parity:
+        longs["weight"] = _risk_parity_weights(longs, "risk_score", long_gross)
+    else:
+        longs["weight"] = long_gross / long_count
     shorts["side"] = "Short"
-    shorts["weight"] = -short_gross / short_count
+    if risk_parity:
+        shorts["weight"] = -_risk_parity_weights(shorts, "risk_score", short_gross)
+    else:
+        shorts["weight"] = -short_gross / short_count
 
     book = pd.concat([longs, shorts], ignore_index=True)
     book["notional"] = book["weight"].abs() * base_nav

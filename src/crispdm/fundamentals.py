@@ -198,13 +198,20 @@ def extract_periodic_financials(companyfacts, max_periods=DEFAULT_MAX_PERIODS, a
                 by_concept.setdefault(priority, {})[filed] = value
 
     # period key -> metric -> concept priority -> {filed: value}, after the
-    # per-metric recency bound. Grouping by period first matters: a vintage
-    # belongs to the period, not to whichever metric happened to be restated.
+    # recency bound. Keep the union of recent periods across all metrics so a
+    # period that appears for some metrics is not dropped if another metric's
+    # history is longer (which would silently omit that metric for the period
+    # and allow an upsert to overwrite a quarantined source value with NULL).
+    all_period_keys = set()
+    for metric_key_periods in metric_periods.values():
+        all_period_keys.update(metric_key_periods.keys())
+    latest_periods = sorted(all_period_keys, key=lambda item: item[0], reverse=True)[:max_periods]
     periods: dict = {}
-    for metric, metric_periods in metric_periods.items():
-        latest = sorted(metric_periods.items(), key=lambda item: item[0][0], reverse=True)
-        for key, by_concept in latest[:max_periods]:
-            periods.setdefault(key, {})[metric] = by_concept
+    for key in latest_periods:
+        for metric, metric_key_periods in metric_periods.items():
+            by_concept = metric_key_periods.get(key)
+            if by_concept is not None:
+                periods.setdefault(key, {})[metric] = by_concept
 
     rows: dict[tuple, dict] = {}
     for (period_end, fiscal_year, fiscal_period), per_metric in periods.items():

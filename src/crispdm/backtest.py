@@ -227,3 +227,99 @@ def run_from_warehouse(query=read_df, **kwargs) -> BacktestResult:
         split_events=pf.load_split_events(query=query),
         **kwargs,
     )
+
+
+def compare_to_baselines(
+    strategy_returns: pd.Series,
+    baseline_returns: pd.DataFrame,
+    risk_free: pd.Series | None = None,
+) -> pd.DataFrame:
+    """Compare strategy to baselines with risk metrics."""
+    from src.crispdm.portfolio import performance_metrics
+
+    results = []
+    for name, ret in baseline_returns.items():
+        # Align
+        common = strategy_returns.index.intersection(ret.index)
+        if len(common) == 0:
+            continue
+        metrics = performance_metrics(ret.loc[common], risk_free=risk_free)
+        metrics["strategy"] = name
+        results.append(metrics)
+
+    # Add strategy
+    if not strategy_returns.empty:
+        common_idx = strategy_returns.index
+        rf = risk_free.loc[common_idx] if risk_free is not None else None
+        metrics = performance_metrics(strategy_returns, risk_free=rf)
+        metrics["strategy"] = "proposed"
+        results.append(metrics)
+
+    return pd.DataFrame(results)
+
+
+def run_walk_forward_validated(
+    rebalance_dates,
+    universe_for,
+    prices_for,
+    risk_free_for=None,
+    *,
+    split_events=None,
+    long_count: int = pf.LONG_COUNT,
+    short_count: int = pf.SHORT_COUNT,
+    base_nav: float = pf.BASE_NAV,
+    use_baselines: bool = True,
+) -> BacktestResult:
+    """Run walk-forward backtest with baseline comparisons."""
+    result = run_walk_forward(
+        rebalance_dates,
+        universe_for,
+        prices_for,
+        risk_free_for=risk_free_for,
+        split_events=split_events,
+        long_count=long_count,
+        short_count=short_count,
+        base_nav=base_nav,
+    )
+
+    if use_baselines and not result.daily.empty:
+        from src.crispdm.baselines import (
+            compute_portfolio_returns,
+            equal_weight_portfolio,
+            inverse_volatility_portfolio,
+            yield_weight_portfolio,
+        )
+
+        # Build universe returns for baselines
+        dates = pd.DatetimeIndex(pd.to_datetime(list(rebalance_dates))).sort_values().unique()
+        if len(dates) >= 2:
+            start = dates[0]
+            scored = universe_for(start)
+            ids = sorted(set(scored["security_id"].astype(str)))
+            prices, _ = pf.clean_prices(prices_for(ids, dates[0], dates[-1] + CLEANING_LOOKAHEAD))
+            returns = pf.total_return_matrix(prices) if not prices.empty else pd.DataFrame()
+            if not returns.empty:
+                # Align to backtest period
+                aligned = returns.loc[result.daily.index].fillna(0)
+                baseline_returns = pd.DataFrame()
+
+                w_eq = equal_weight_portfolio(list(aligned.columns))
+                baseline_returns["equal_weight"] = compute_portfolio_returns(w_eq, aligned)
+
+                if "dividend_yield" in scored.columns:
+                    yields = scored.set_index("security_id")["dividend_yield"]
+                    w_yield = yield_weight_portfolio(list(aligned.columns), yields)
+                    baseline_returns["yield_weight"] = compute_portfolio_returns(w_yield, aligned)
+
+                volatilities = aligned.std() * np.sqrt(252)
+                w_inv = inverse_volatility_portfolio(list(aligned.columns), volatilities)
+                baseline_returns["inverse_volatility"] = compute_portfolio_returns(w_inv, aligned)
+
+                rf = risk_free_for(result.daily.index) if risk_free_for is not None else None
+                baseline_metrics = compare_to_baselines(
+                    result.daily["return"], baseline_returns, risk_free=rf
+                )
+                result.metrics["baselines"] = baseline_metrics.to_dict("records")
+                result.metrics["baseline_comparison"] = True
+
+    return result
