@@ -220,6 +220,67 @@ def report(conn, ticker: str) -> dict:
     }
 
 
+def carry_quarantine_to_active(conn, sids, active) -> dict[str, int]:
+    """Keep unresolved fundamentals quarantine entries pointing at a row that still exists.
+
+    ``audit.quarantined_values`` keys a value as ``security_id|period_end|fiscal_period|filed``,
+    so deleting a twin orphans every entry keyed by its id even when the same value lives on
+    under the active identity (V0093 and V0105 repaired exactly this after the fact; L013).
+    For each twin, an entry whose row exists on the active identity with the same value is
+    re-keyed to it. If the active identity already holds its own unresolved entry for that
+    value the stale one is closed with a note, never deleted; the unique key forbids a rewrite.
+    An entry whose value is not on the active identity (the row was skipped or dropped) is
+    closed with a note rather than left pointing at nothing. Returns counts by outcome.
+    """
+    value = """
+        CASE q.column_name
+          WHEN 'period_end' THEN f.period_end::text
+          WHEN 'filed' THEN f.filed::text
+          WHEN 'shares_outstanding' THEN f.shares_outstanding::text
+          WHEN 'debt' THEN f.debt::text
+          WHEN 'liabilities' THEN f.liabilities::text
+        END"""
+    new_key = "(:a)::text || substring(q.row_key from 37)"
+    held = f"""
+        EXISTS (SELECT 1 FROM fundamentals.periodic_financials f
+                WHERE concat_ws('|', f.security_id, f.period_end, f.fiscal_period, f.filed)
+                      = {new_key}
+                  AND {value} = q.observed_value)"""  # noqa: S608
+    scope = (
+        "q.resolved_at IS NULL AND q.table_schema = 'fundamentals' "
+        "AND split_part(q.row_key, '|', 1) = ANY(:sids)"
+    )
+    params = {"a": str(active), "sids": [str(s) for s in sids]}
+    duplicate = conn.execute(
+        text(
+            "UPDATE audit.quarantined_values q SET resolved_at = now(), resolution_note = "
+            "'duplicate of the active identity entry after a twin merge; the same value is "
+            f"still parked under the active id' WHERE {scope} AND {held} "  # noqa: S608
+            "AND EXISTS (SELECT 1 FROM audit.quarantined_values w "
+            "WHERE w.table_schema = q.table_schema AND w.table_name = q.table_name "
+            "AND w.column_name = q.column_name AND w.observed_value = q.observed_value "
+            f"AND w.resolved_at IS NULL AND w.row_key = {new_key})"
+        ),
+        params,
+    ).rowcount
+    rekeyed = conn.execute(
+        text(
+            f"UPDATE audit.quarantined_values q SET row_key = {new_key} "  # noqa: S608
+            f"WHERE {scope} AND {held}"
+        ),
+        params,
+    ).rowcount
+    dropped = conn.execute(
+        text(
+            "UPDATE audit.quarantined_values q SET resolved_at = now(), resolution_note = "
+            "'the row was not carried to the active identity in a twin merge; the value is "
+            f"kept only in the archive' WHERE {scope}"  # noqa: S608
+        ),
+        params,
+    ).rowcount
+    return {"duplicate_closed": duplicate, "rekeyed": rekeyed, "dropped_closed": dropped}
+
+
 def delete_twins(conn, ticker: str, archive_path: Path | None) -> dict:
     """Archive then delete every redundant twin of ``ticker``. Caller owns the transaction."""
     rep = report(conn, ticker)
@@ -248,6 +309,7 @@ def delete_twins(conn, ticker: str, archive_path: Path | None) -> dict:
             json.dump(body, handle, indent=1, default=str)
             handle.flush()
             os.fsync(handle.fileno())
+    carried = carry_quarantine_to_active(conn, sids, rep["active"]["security_id"])
     deleted = {}
     for item in plan:  # children first, root last
         n = conn.execute(
@@ -262,7 +324,12 @@ def delete_twins(conn, ticker: str, archive_path: Path | None) -> dict:
     ).scalar()
     if left:
         raise RuntimeError(f"{ticker}: a twin is still present after the delete")
-    return {"ticker": ticker, "twins_deleted": sids, "rows_deleted": deleted}
+    return {
+        "ticker": ticker,
+        "twins_deleted": sids,
+        "rows_deleted": deleted,
+        "quarantine_carried": carried,
+    }
 
 
 #: Date column of the dated history/derived tables, for ``--skip-move-before``.
@@ -517,6 +584,7 @@ def merge_twins(
             conn, twin, active, skip_before, accepted, fill_nulls
         ).items():
             moved[table] = moved.get(table, 0) + n
+    carried = carry_quarantine_to_active(conn, sids, active)
     # Whatever remains on the twins is overlap (already guarded) or skipped-by-request history.
     deleted = {}
     for item in plan:
@@ -538,6 +606,7 @@ def merge_twins(
         "twins_deleted": sids,
         "rows_moved": moved,
         "rows_deleted": deleted,
+        "quarantine_carried": carried,
         "accepted_overlap_conflicts": accepted,
     }
 

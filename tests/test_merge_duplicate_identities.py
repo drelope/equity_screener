@@ -419,3 +419,88 @@ def test_fill_nulls_still_refuses_when_both_hold_different_values(pair):
 
     with pytest.raises(RuntimeError, match="different non-NULL values"):
         mdi.merge_twins(conn, TICKER, None, fill_nulls=True)
+
+
+def _fundamental(conn, sid, shares=0):
+    conn.execute(
+        text(
+            "INSERT INTO fundamentals.periodic_financials "
+            "(security_id, period_end, fiscal_period, filed, shares_outstanding) "
+            "VALUES (:s, DATE '2023-12-31', 'FY', DATE '2024-03-01', :n)"
+        ),
+        {"s": sid, "n": shares},
+    )
+
+
+def _quarantine(conn, sid, value="0"):
+    conn.execute(
+        text(
+            "INSERT INTO audit.quarantined_values (table_schema, table_name, column_name, "
+            "row_key, ticker, observed_value, reason, rule) VALUES "
+            "('fundamentals', 'periodic_financials', 'shares_outstanding', :k, :t, :v, 'r', "
+            "'shares_outstanding <= 0')"
+        ),
+        {"k": f"{sid}|2023-12-31|FY|2024-03-01", "t": TICKER, "v": value},
+    )
+
+
+def _entries(conn):
+    return conn.execute(
+        text(
+            "SELECT row_key, resolved_at IS NOT NULL, resolution_note "
+            "FROM audit.quarantined_values WHERE ticker = :t ORDER BY quarantine_id"
+        ),
+        {"t": TICKER},
+    ).all()
+
+
+def _unmatched(conn):
+    return conn.execute(
+        text(
+            "SELECT count(*) FROM audit.quarantined_values q WHERE q.ticker = :t "
+            "AND q.resolved_at IS NULL AND NOT EXISTS (SELECT 1 FROM "
+            "fundamentals.periodic_financials f WHERE concat_ws('|', f.security_id, "
+            "f.period_end, f.fiscal_period, f.filed) = q.row_key)"
+        ),
+        {"t": TICKER},
+    ).scalar()
+
+
+def test_merge_rekeys_a_twin_quarantine_entry_to_the_active_identity(pair):
+    """L013: deleting a twin must not orphan the entries that name its fundamentals."""
+    conn, active, twin = pair
+    _fundamental(conn, twin)  # only the twin has the row, so the merge moves it
+    _quarantine(conn, twin)
+
+    result = mdi.merge_twins(conn, TICKER, None)
+
+    assert result["quarantine_carried"]["rekeyed"] == 1
+    assert _entries(conn)[0][0].startswith(str(active))
+    assert _unmatched(conn) == 0
+
+
+def test_merge_closes_a_twin_entry_the_active_identity_already_holds(pair):
+    conn, active, twin = pair
+    _fundamental(conn, active)
+    _fundamental(conn, twin)  # identical row: overlap, the active one stays
+    _quarantine(conn, active)
+    _quarantine(conn, twin)
+
+    result = mdi.merge_twins(conn, TICKER, None)
+
+    assert result["quarantine_carried"]["duplicate_closed"] == 1
+    closed = [e for e in _entries(conn) if e[1]]
+    assert len(closed) == 1 and "duplicate" in closed[0][2]
+    assert _unmatched(conn) == 0, "the entry must be closed and kept, never deleted"
+
+
+def test_delete_twins_carries_the_entry_too(pair):
+    conn, active, twin = pair
+    _fundamental(conn, active)
+    _fundamental(conn, twin)
+    _quarantine(conn, twin)
+
+    result = mdi.delete_twins(conn, TICKER, None)
+
+    assert result["quarantine_carried"]["rekeyed"] == 1
+    assert _unmatched(conn) == 0
