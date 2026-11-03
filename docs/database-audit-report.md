@@ -884,3 +884,11 @@ Owner rule: keep a security when `dividend = TRUE` and it is a United States ins
 No `dividend` flag was changed. `populate_reference_tables` rewrites the flag on every run, so a manual edit would not hold, and 19 of the 30 have no profile country to decide on (mostly OTC `...F` ordinaries, warrants and bond series). Enforcing the rule needs a country source for those 19 and a rule in the reference stage.
 
 Scope note: applied to the whole active universe, the same rule would exclude 675 payers (585 non-US by country, 90 unknown), 541 of them scored today. That is a universe change and needs a backtest first (L009), so it was not applied.
+
+### US-instrument rule, as decided (2026-11-03)
+
+A US instrument is USD-priced and either listed on a US exchange (NYSE, NASDAQ, AMEX, ARCA, BATS) or, on an OTC venue, has a US SEC business address (state code or `X1`). `reference.v_us_instruments` (V0106) implements it and reports `us_basis` as `us_exchange_usd`, `us_business_address`, `non_us` or `unknown`. A missing address is `unknown`, never assumed either way.
+
+Over the active payers: 2,665 `us_exchange_usd`, 98 `us_business_address`, 120 `non_us`, 45 `unknown`. Of the 28 non-trading payers: 20 are US (15 on a US exchange, 5 OTC with a US address) and 8 are non-US OTC ordinaries (EMRJF, ENBSF, ENFFF, FINCF, FTPSF, HYNLY, TCENF, TRPRF).
+
+The `dividend` flag is not edited: the reference stage rewrites it every run and it is part of the `security_id` hash. Enforcing the rule inside that stage would also drop 120 non-US payers (48 scored today) and leave 45 unknown, which is a universe change needing a backtest first (L009). The view makes that a one-line join when the owner chooses to do it.
