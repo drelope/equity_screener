@@ -7,8 +7,8 @@ import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
 
-from app import column_docs, ui
-from app.views.screener import SELECTED_KEY
+from app import column_docs, nav, ui
+from app.nav import SELECTED_KEY
 from app.views.ticker_picker import render_ticker_picker
 from src.crispdm.analysis import store
 
@@ -1027,16 +1027,15 @@ def render() -> None:
     ticker = render_ticker_picker("security")
     if ticker is None:
         return
+    nav.render_flow_bar(nav.SECURITY, ticker)
     _, action = st.columns([4, 1])
     if action.button(
         "Analyze",
         key="security_analyze",
         help="Open the investment-analysis worksheet for this ticker",
+        type="primary",
     ):
-        # Imported here: the worksheet imports this module for its context-panel helpers.
-        from app.views.investment_analysis import go_to_analysis  # noqa: PLC0415
-
-        go_to_analysis()
+        nav.open_page(nav.ANALYSIS, ticker, origin=nav.SECURITY)
 
     found = profile(ticker)
     if found.empty:

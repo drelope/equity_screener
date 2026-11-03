@@ -11,7 +11,7 @@ from __future__ import annotations
 import streamlit as st
 
 from app import ui
-from app.views.screener import SELECTED_KEY
+from app.nav import SELECTED_KEY
 
 DIVIDEND_TICKERS_SQL = (
     "SELECT s.ticker FROM reference.securities s "

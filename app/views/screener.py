@@ -5,7 +5,7 @@ from __future__ import annotations
 import plotly.express as px
 import streamlit as st
 
-from app import column_docs, ui
+from app import column_docs, nav, ui
 from src.crispdm.feature_window import carry_forward_days, dashboard_features_sql
 
 #: The V0068 point-in-time ratios the screener can display, as
@@ -64,7 +64,7 @@ TABLE_COLUMNS = [
     "composite_score",
 ]
 
-SELECTED_KEY = "selected_ticker"
+SELECTED_KEY = nav.SELECTED_KEY
 
 # The table mixes several relations and renames a few columns, so each output column names
 # its source explicitly: (relation, column, note). A note sharpens a column whose value the
@@ -278,25 +278,38 @@ def table(view, metric_columns) -> None:
         hide_index=True,
         width="stretch",
         on_select="rerun",
-        selection_mode="single-row",
+        selection_mode="multi-row",
         key="screener_table",
         column_config=config,
     )
     rows = event.selection.rows if event and event.selection else []
+    # Remember the visible order so Security/Analysis can step to prev/next.
+    st.session_state[nav.ORDER_KEY] = [str(x) for x in shown["ticker"]]
     if rows:
-        ticker = str(shown.iloc[rows[0]]["ticker"])
+        picked = [str(shown.iloc[i]["ticker"]) for i in rows]
+        ticker = picked[0]
         st.session_state[SELECTED_KEY] = ticker
-        left, right = st.columns([4, 1])
-        left.info(f"{ticker} selected. Open **Security detail**, or start the worksheet below.")
-        if right.button(
-            "Analyze",
-            key="screener_analyze",
-            help="Open the investment-analysis worksheet for this ticker",
-        ):
-            # Imported here: the worksheet imports this module for SELECTED_KEY.
-            from app.views.investment_analysis import go_to_analysis  # noqa: PLC0415
-
-            go_to_analysis()
+        st.session_state[nav.COMPARISON_KEY] = picked
+        st.info(
+            f"{ticker} selected"
+            + (f" (+{len(picked) - 1} for comparison)" if len(picked) > 1 else "")
+            + ". Continue to Security detail, the worksheet or the dashboard."
+        )
+        c1, c2, c3, _ = st.columns([1, 1, 1, 3])
+        if c1.button("Security detail", key="screener_security", type="primary"):
+            nav.open_page(nav.SECURITY, ticker, origin=nav.SCREENER)
+        if c2.button("Analyze", key="screener_analyze"):
+            nav.open_page(nav.ANALYSIS, ticker, origin=nav.SCREENER)
+        if c3.button("Dashboard", key="screener_dashboard"):
+            nav.open_page(nav.DASHBOARD, ticker, origin=nav.SCREENER)
+        if len(picked) > 1:
+            st.subheader("Comparison")
+            st.dataframe(shown.iloc[rows].set_index("ticker").T, width="stretch")
+    else:
+        st.session_state.pop(nav.COMPARISON_KEY, None)
+        current = st.session_state.get(SELECTED_KEY)
+        if current and current not in set(shown["ticker"]):
+            st.caption(f"Current selection {current} is not in this filtered view.")
     st.download_button(
         "Download this table as CSV",
         shown.to_csv(index=False).encode("utf-8"),
@@ -353,6 +366,7 @@ def charts(view) -> None:
 
 def render() -> None:
     st.title("Screener")
+    nav.seed_from_url()
     st.caption(column_docs.SCORING_CAPTION)
     st.caption(
         "Scores are rule-based percentile ranks across the universe, not probabilities. "

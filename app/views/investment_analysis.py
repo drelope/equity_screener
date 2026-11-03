@@ -15,8 +15,8 @@ import streamlit as st
 from sqlalchemy.exc import SQLAlchemyError
 
 from app import analysis_schema as schema
-from app import llm_client, ui
-from app.views.screener import SELECTED_KEY
+from app import llm_client, nav, ui
+from app.nav import SELECTED_KEY
 from app.views.security import (
     feature_section,
     financials_section,
@@ -43,9 +43,7 @@ PAGE_PATH = "analysis"
 
 def go_to_analysis(ticker: str | None = None) -> None:
     """Hand the ticker over to the worksheet and switch to it."""
-    if ticker:
-        st.session_state[SELECTED_KEY] = ticker
-    st.switch_page(st.Page(render, title=PAGE_TITLE, url_path=PAGE_PATH))
+    nav.open_page(nav.ANALYSIS, ticker)
 
 
 def _key(section: schema.Section, field: schema.Field) -> str:
@@ -621,6 +619,7 @@ def render() -> None:
     ticker = render_ticker_picker("ia")
     if ticker is None:
         return
+    nav.render_flow_bar(nav.ANALYSIS, ticker)
 
     found = profile(ticker)
     if found.empty:

@@ -18,7 +18,7 @@ import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
 
-from app import ui
+from app import nav, ui
 from src.crispdm import portfolio as pf
 
 PAGE_TITLE = "Analyst dashboard"
@@ -209,10 +209,10 @@ def _portfolio_tab(context: dict) -> None:
             ]
         )
         shown = top[["ticker", "side", "sector", "weight", "total_return", "pnl", "conviction"]]
-        st.dataframe(
-            shown,
-            hide_index=True,
-            width="stretch",
+        nav.selectable_table(
+            shown.reset_index(drop=True),
+            key="dashboard_top_positions",
+            origin=nav.DASHBOARD,
             column_config={
                 "weight": st.column_config.NumberColumn("Weight", format="percent"),
                 "total_return": st.column_config.NumberColumn("Return", format="percent"),
@@ -562,10 +562,10 @@ def _position_book_tab(context: dict) -> None:
             "conviction",
         ]
     ]
-    st.dataframe(
-        shown,
-        hide_index=True,
-        width="stretch",
+    nav.selectable_table(
+        shown.reset_index(drop=True),
+        key="dashboard_position_book",
+        origin=nav.DASHBOARD,
         column_config={
             "ticker": st.column_config.TextColumn("Ticker", pinned=True),
             "side": st.column_config.TextColumn("Side"),
@@ -683,10 +683,10 @@ def _research_tab(context: dict) -> None:
             subset = merged[merged["status"] == status]
             st.subheader(status)
             st.metric("Positions", len(subset), border=False)
-            st.dataframe(
-                subset[["ticker", "side", "sector"]],
-                hide_index=True,
-                width="stretch",
+            nav.selectable_table(
+                subset[["ticker", "side", "sector"]].reset_index(drop=True),
+                key=f"dashboard_research_{status.lower()}",
+                origin=nav.DASHBOARD,
             )
     left, right = st.columns(2)
     with left:
@@ -916,6 +916,7 @@ def _reports_tab(context: dict) -> None:
 
 def render() -> None:
     st.title(PAGE_TITLE)
+    nav.seed_from_url()
     st.caption(
         "Simulated 15 long / 8 short model portfolio built from the ranked dividend "
         "universe. Research construct, not an account or investment advice."
@@ -930,6 +931,7 @@ def render() -> None:
     if context is None:
         st.warning("No published scores yet. Run feature engineering and scoring first.")
         return
+    nav.render_flow_bar(nav.DASHBOARD)
     tabs = st.tabs(TAB_NAMES)
     with tabs[0]:
         _portfolio_tab(context)

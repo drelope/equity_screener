@@ -15,7 +15,7 @@ from sqlalchemy.exc import SQLAlchemyError
 # ever installed.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from app import column_docs, ui  # noqa: E402
+from app import column_docs, nav, ui  # noqa: E402
 from app.views import (  # noqa: E402
     dashboard,
     data_explorer,
@@ -42,39 +42,43 @@ st.set_page_config(
     },
 )
 
+PAGES = {
+    nav.SCREENER: st.Page(
+        screener.render,
+        title="Screener",
+        icon=":material/filter_alt:",
+        url_path="screener",
+        default=True,
+    ),
+    nav.SECURITY: st.Page(
+        security.render,
+        title="Security detail",
+        icon=":material/query_stats:",
+        url_path="security",
+    ),
+    nav.ANALYSIS: st.Page(
+        investment_analysis.render,
+        title=investment_analysis.PAGE_TITLE,
+        icon=":material/edit_note:",
+        url_path=investment_analysis.PAGE_PATH,
+    ),
+    nav.DASHBOARD: st.Page(
+        dashboard.render,
+        title=dashboard.PAGE_TITLE,
+        icon=":material/space_dashboard:",
+        url_path=dashboard.PAGE_PATH,
+    ),
+}
+nav.register(PAGES)
 navigation = st.navigation(
     {
+        "Workflow": list(PAGES.values()),
         "Data": [
-            st.Page(
-                screener.render,
-                title="Screener",
-                icon=":material/filter_alt:",
-                url_path="screener",
-                default=True,
-            ),
-            st.Page(
-                dashboard.render,
-                title=dashboard.PAGE_TITLE,
-                icon=":material/space_dashboard:",
-                url_path=dashboard.PAGE_PATH,
-            ),
-            st.Page(
-                security.render,
-                title="Security detail",
-                icon=":material/query_stats:",
-                url_path="security",
-            ),
             st.Page(
                 data_explorer.render,
                 title="Data explorer",
                 icon=":material/table_view:",
                 url_path="explorer",
-            ),
-            st.Page(
-                investment_analysis.render,
-                title=investment_analysis.PAGE_TITLE,
-                icon=":material/edit_note:",
-                url_path=investment_analysis.PAGE_PATH,
             ),
         ],
         "Operations": [
