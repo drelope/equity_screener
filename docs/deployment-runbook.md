@@ -255,3 +255,34 @@ in all three options.
 - Target at Azure: Application Insights for the API and Function/Job runs;
   log-instrument `run_full_etl` per-stage exit codes (already printed) into
   Insights; alert on non-zero stage exits.
+## Promotion Criteria: Shadow → Live
+
+Before promoting any strategy from shadow to live trading, all criteria must be met:
+
+### Performance Requirements
+- [ ] **Outperform Baselines:** Strategy outperforms equal-weight and yield-weight baselines on risk-adjusted basis (Sharpe/Sortino) over shadow period ≥ 12 months
+- [ ] **Risk Constraints Met:** Max drawdown < benchmark, volatility within limits
+- [ ] **Consistency:** Positive performance across multiple market regimes
+- [ ] **Statistical Significance:** Results not due to luck (if applicable)
+
+### Operational Requirements
+- [ ] **Stability:** No critical bugs or constraint violations in shadow period
+- [ ] **Data Quality:** Data freshness and quality meet SLAs
+- [ ] **Monitoring:** All alerts and dashboards operational
+- [ ] **Rollback Plan:** Tested and documented
+- [ ] **Capacity:** Sufficient liquidity for planned allocations
+
+### Governance Requirements
+- [ ] **Review Complete:** Investment committee review and approval
+- [ ] **Documentation:** ADRs updated, risk assessment complete
+- [ ] **Compliance:** Security/compliance checks passed
+- [ ] **Approval Chain:** Documented sign-offs
+
+### Promotion Checklist
+1. Review shadow performance vs baselines
+2. Run validation framework on out-of-sample data
+3. Verify all guardrails functioning
+4. Conduct dry-run in staging
+5. Get explicit approvals
+6. Execute promotion with monitoring
+7. Post-promotion review after 7 days

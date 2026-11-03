@@ -340,3 +340,13 @@ ran ≥ the days in period, (b) every verification is recorded, and (c) any
 `attention` row has a follow-up note. This closes the PM/coordinator role's
 "ad hoc tracking" gap from the SDLC review — the tracking artifact now exists;
 performing the ritual keeps it honest.
+## CRISP-DM Health Checks
+Add these checks to nightly verification:
+
+- [ ] **Phase 1-2:** Universe and data understanding - check row counts in `audit.nightly_runs`
+- [ ] **Phase 3:** Data preparation - verify features built successfully, no repair failures
+- [ ] **Phase 4:** Modeling - check scores/predictions generated
+- [ ] **Phase 5:** Evaluation - verify forward returns updated
+- [ ] **Phase 6:** Deployment - check shadow performance, no constraint violations
+- [ ] **Validation:** Run leakage checks on recent predictions
+- [ ] **Baselines:** Ensure baseline comparisons available

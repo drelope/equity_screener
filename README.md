@@ -1333,3 +1333,7 @@ python -m scripts.populate_sec_documents
 ```
 
 For model training, the production target must be populated from future dividend events/financial coverage before training; the starter code deliberately does not fabricate labels.
+## CRISP-DM Workflow & Governance
+- [CRISP-DM Workflow](CRISP_DM_Workflow.md) — Canonical phases, metrics, validation, and governance
+- [CRISP-DM Implementation Mapping](docs/CRISP_DM_Implementation_Mapping.md) — Maps phases to code/artifacts
+- [Architecture Decision Records](docs/adr/) — Key design decisions and rationale
