@@ -13,7 +13,7 @@ together cover every observation date exactly once.
 import argparse
 import sys
 import time
-from datetime import timedelta
+from datetime import date, timedelta
 
 from sqlalchemy import text
 
@@ -58,6 +58,18 @@ def main():
         "nightly run needs only the recent tail; a full rebuild of 2019-present takes "
         "~50 minutes against ~7 for the last window.",
     )
+    parser.add_argument(
+        "--date-from",
+        type=date.fromisoformat,
+        default=None,
+        help="Rebuild observation dates on or after this ISO date (targeted repair).",
+    )
+    parser.add_argument(
+        "--date-to",
+        type=date.fromisoformat,
+        default=None,
+        help="Rebuild observation dates on or before this ISO date.",
+    )
     args = parser.parse_args()
 
     first, last = observation_date_range()
@@ -70,6 +82,16 @@ def main():
         cutoff = last - timedelta(days=args.days)
         first = max(first, cutoff)
         print(f"Incremental build: {first} .. {last} ({args.days} days)")
+
+    if args.date_from is not None:
+        first = max(first, args.date_from)
+    if args.date_to is not None:
+        last = min(last, args.date_to)
+    if first is not None and last is not None and first > last:
+        print(f"Empty range: {first} .. {last}")
+        return 1
+    if args.date_from is not None or args.date_to is not None:
+        print(f"Targeted build: {first} .. {last}")
 
     total = 0
     # Row counts alone hide a build that ran clean but produced an empty
