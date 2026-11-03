@@ -49,7 +49,8 @@ also fails on any OPENBB per-share amount above `$1,000,000` that is not already
 because the raw values stay as evidence; a new unquarantined amount means the ingestion
 ceiling did not apply. The result appears in the post-nightly markdown report
 (`artifacts/post_nightly/latest.md`). A blanket `$1,000` OpenBB cap is deliberately not used: valid pre-split payments can be tens of thousands of
-dollars per unadjusted share (L012).
+dollars per unadjusted share (L012). It also fails when an unresolved fundamentals quarantine entry no longer matches a
+stored row, which means a security was re-keyed without its entries (L013, V0105).
 
 ### Preferred security consistency
 

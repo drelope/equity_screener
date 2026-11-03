@@ -86,6 +86,12 @@ def test_openbb_outliers_fail_only_when_unquarantined():
     assert "65 known" in failed["detail"]
 
 
+def test_stale_quarantine_keys_fail():
+    assert pnc.evaluate_quarantine_keys(0)["status"] == pnc.PASS
+    failed = pnc.evaluate_quarantine_keys(22)
+    assert failed["status"] == pnc.FAIL and "22" in failed["detail"]
+
+
 def test_freshness_fails_only_on_a_breach_and_not_on_an_unaged_source():
     ok = {"source": "a", "age_hours": 5, "sla_hours": 240, "within_sla": True}
     unaged = {"source": "b", "age_hours": None, "sla_hours": 840, "within_sla": None}

@@ -257,6 +257,18 @@ def evaluate_openbb_outliers(total: int, unquarantined: int) -> dict:
     )
 
 
+def evaluate_quarantine_keys(unmatched: int) -> dict:
+    """Unresolved fundamentals entries must still point at a stored row (L013)."""
+    return check(
+        "quarantine_keys_match",
+        FAIL if unmatched else PASS,
+        f"{unmatched} unresolved fundamentals quarantine entr(y/ies) match no stored row; "
+        "re-key them to the successor security (see V0105)"
+        if unmatched
+        else "every unresolved fundamentals quarantine entry matches a stored row",
+    )
+
+
 def _data_checks() -> list[dict]:
     out = []
     gaps = int(
@@ -294,6 +306,19 @@ def _data_checks() -> list[dict]:
     out.append(
         evaluate_openbb_outliers(int(outlier_row["total"]), int(outlier_row["unquarantined"]))
     )
+    unmatched = int(
+        read_df(
+            """
+            SELECT count(*) FROM audit.quarantined_values q
+            WHERE q.resolved_at IS NULL AND q.table_schema = 'fundamentals'
+              AND NOT EXISTS (
+                SELECT 1 FROM fundamentals.periodic_financials f
+                WHERE concat_ws('|', f.security_id, f.period_end, f.fiscal_period, f.filed)
+                      = q.row_key)
+            """
+        ).iloc[0, 0]
+    )
+    out.append(evaluate_quarantine_keys(unmatched))
     dates = read_df(
         "SELECT (SELECT max(as_of_date) FROM model.features) AS features, "
         "(SELECT max(as_of_date) FROM model.scores) AS scores, "
