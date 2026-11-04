@@ -1,5 +1,6 @@
 [server]
 # The poll-based watcher stats every loaded module on each script run. On WSL with the repo
 # under /mnt/<drive> that blocks the server for ~20 s, so page switches appear to hang.
-# Restart the app after editing code.
+# Restart the app after editing code. To keep hot-reload locally (e.g. native Linux), run with
+# STREAMLIT_SERVER_FILE_WATCHER_TYPE=auto, which overrides this file.
 fileWatcherType = "none"
