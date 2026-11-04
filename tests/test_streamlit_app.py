@@ -1306,3 +1306,20 @@ def test_the_dashboard_shows_the_ticker_carried_from_the_screener(without_token)
 
     assert not at.exception, [e.value for e in at.exception]
     assert any("AAPL" in s.value for s in at.subheader)
+
+
+def test_the_dashboard_panel_ranks_the_selected_ticker_against_the_universe(without_token):
+    with engine.connect() as conn:
+        ticker = conn.execute(
+            text(
+                "SELECT s.ticker FROM reference.securities s JOIN model.scores sc USING (security_id) "
+                "WHERE s.active AND sc.composite_score IS NOT NULL "
+                "ORDER BY sc.as_of_date DESC, sc.composite_score DESC LIMIT 1"
+            )
+        ).scalar()
+    at = AppTest.from_function(page_script, args=("dashboard",), default_timeout=TIMEOUT)
+    at.session_state["selected_ticker"] = ticker
+    at.run()
+    assert not at.exception, [e.value for e in at.exception]
+    labels = [m.label for m in at.metric]
+    assert "Universe rank" in labels and "Sector weight in book" in labels

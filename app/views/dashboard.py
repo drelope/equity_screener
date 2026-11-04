@@ -170,6 +170,31 @@ def _allocation_chart(book: pd.DataFrame) -> None:
     st.plotly_chart(figure, width="stretch")
 
 
+def _context_metrics(context: dict, ticker: str) -> None:
+    """Rank of the selected name in the scored universe and its sector, and book weights."""
+    universe = context["universe"].dropna(subset=["composite_score"])
+    row = universe[universe["ticker"] == ticker]
+    if row.empty:
+        st.caption("Not in the scored universe at the last rebalance, so no peer ranking.")
+        return
+    row = row.iloc[0]
+    rank = int((universe["composite_score"] > row["composite_score"]).sum()) + 1
+    peers = universe[universe["sector"] == row["sector"]]
+    sector_rank = int((peers["composite_score"] > row["composite_score"]).sum()) + 1
+    book = context["table"]
+    sector_book = book[book["sector"] == row["sector"]]
+    with st.container(horizontal=True):
+        st.metric("Composite score", f"{row['composite_score']:.3f}", border=True)
+        st.metric("Universe rank", f"{rank} / {len(universe)}", border=True)
+        st.metric("Sector rank", f"{sector_rank} / {len(peers)}", help=str(row["sector"]), border=True)
+        st.metric(
+            "Sector weight in book",
+            _pct(sector_book["weight"].sum()),
+            help=f"{len(sector_book)} held names in {row['sector']}",
+            border=True,
+        )
+
+
 def _selected_panel(context: dict) -> None:
     """Show the ticker carried from Screener / Security / Analysis and where it sits here."""
     ticker = st.session_state.get(nav.SELECTED_KEY)
@@ -192,6 +217,7 @@ def _selected_panel(context: dict) -> None:
             )
         status = covered.iloc[0]["status"] if not covered.empty else "no worksheet"
         st.caption(f"Research status: {status}")
+        _context_metrics(context, ticker)
         found = security.profile(ticker)
         if found.empty:
             st.warning(f"{ticker} is not an active security, so there is no analysis to show.")
