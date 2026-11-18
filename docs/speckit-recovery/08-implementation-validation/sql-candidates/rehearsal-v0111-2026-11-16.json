@@ -1,0 +1,97 @@
+{
+  "status": "pass",
+  "scope": "V0111 trigger apply + immutability behavior + reverse rollback",
+  "target": {
+    "host": "127.0.0.1",
+    "port": 55442,
+    "database": "rehearsal",
+    "container": "postgres:17-alpine",
+    "created_destroyed_by_agent": true
+  },
+  "apply": {
+    "evidence": "rehearsal-v0111-apply-2026-11-16.json",
+    "status": "applied",
+    "verification": {
+      "reference.security_membership_history": true,
+      "reference.security_eligibility_asof": true,
+      "reference.securities.delisted_date": true,
+      "raw.dividend_data_evidence": true,
+      "audit.dividend_quarantine": true,
+      "audit.dividend_corrections": true,
+      "audit.run_manifests": true,
+      "audit.run_outputs": true,
+      "audit.run_manifests_append_only": true,
+      "audit.run_outputs_append_only": true,
+      "public.schema_migrations": true
+    }
+  },
+  "insert": {
+    "run_id": "rehearsal-run-1",
+    "manifest_hash": "79d68817cec9100a53d4077c155517778b32a58e45306a9494823498204f9775",
+    "manifest_inserted": true,
+    "outputs_inserted": 1,
+    "outputs_requested": 1
+  },
+  "immutability_attempts": [
+    {
+      "attempt": "update_manifest",
+      "blocked": true,
+      "sqlstate": "23000",
+      "error": "append-only ledger: UPDATE is not allowed on audit.run_manifests (run_id=rehearsal-run-1)"
+    },
+    {
+      "attempt": "delete_manifest",
+      "blocked": true,
+      "sqlstate": "23000",
+      "error": "append-only ledger: DELETE is not allowed on audit.run_manifests (run_id=rehearsal-run-1)"
+    },
+    {
+      "attempt": "update_output",
+      "blocked": true,
+      "sqlstate": "23000",
+      "error": "append-only ledger: UPDATE is not allowed on audit.run_outputs (run_id=rehearsal-run-1)"
+    },
+    {
+      "attempt": "delete_output",
+      "blocked": true,
+      "sqlstate": "23000",
+      "error": "append-only ledger: DELETE is not allowed on audit.run_outputs (run_id=rehearsal-run-1)"
+    }
+  ],
+  "readback_after_blocked_attempts": {
+    "manifests": 1,
+    "outputs": 1,
+    "manifest_status": "created",
+    "output_content_hash": "deadbeef"
+  },
+  "rollback": {
+    "files_applied_in_reverse": [
+      "rollback/V0111_rollback.sql",
+      "rollback/V0110_rollback.sql",
+      "rollback/V0109_rollback.sql",
+      "rollback/V0108_rollback.sql",
+      "rollback/V0107_rollback.sql"
+    ],
+    "verification": {
+      "reference.security_membership_history": false,
+      "reference.security_eligibility_asof": false,
+      "reference.securities.delisted_date": false,
+      "raw.dividend_data_evidence": false,
+      "audit.dividend_quarantine": false,
+      "audit.dividend_corrections": false,
+      "audit.run_manifests": false,
+      "audit.run_outputs": false,
+      "audit.run_manifests_append_only": false,
+      "audit.run_outputs_append_only": false,
+      "public.schema_migrations": true
+    },
+    "leftovers": []
+  },
+  "caveats": [
+    "V0111 is a candidate, not approved or applied to a shared/project database.",
+    "No role/grant model, retention policy, or incident-response bypass is implemented.",
+    "DDL + trigger behavior + empty-ledger rollback only; no load/retention/approval evidence.",
+    "Manual schema_migrations ledger deletion was not performed.",
+    "Not promotion-grade evidence; no AC closure."
+  ]
+}

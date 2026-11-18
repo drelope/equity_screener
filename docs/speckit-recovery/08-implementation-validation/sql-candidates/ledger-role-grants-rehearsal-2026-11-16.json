@@ -1,0 +1,10 @@
+{
+  "status": "applied_and_rolled_back",
+  "target": "disposable postgres:17-alpine 127.0.0.1:55447 (destroyed)",
+  "roles_prerequisite": ["manifest_writer", "manifest_reader", "ledger_auditor"],
+  "evidence": "ledger-roles-events-apply-rollback-2026-11-16.json",
+  "rollback_order_ok": true,
+  "final_objects_absent": true,
+  "schema_migrations_intact": true,
+  "notes": "Roles are cluster-level and intentionally not dropped by the V0112 rollback. Privilege behavior is covered by ledger-governance-events-behavior-2026-11-16.json."
+}

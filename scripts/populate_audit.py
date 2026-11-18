@@ -26,7 +26,7 @@ Usage:
 
 import argparse
 import sys
-from datetime import date
+from datetime import date, datetime, timezone
 from pathlib import Path
 
 from sqlalchemy import text
@@ -35,6 +35,8 @@ if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from src.crispdm.db import engine
+from src.crispdm.pit import pit_manifest_metadata
+from src.crispdm.run_manifest import build_run_manifest, get_git_state, write_manifest_file
 from src.crispdm.versioning import FEATURE_SET_V1, MODEL_VERSION, compute_feature_set_hash
 
 #: Provider -> sourcing reliability used by the confidence/heuristic scores.
@@ -277,6 +279,43 @@ def populate_audit(as_of=None):
     print(f"  audit.source_lineage rows: {lineage}")
     print(f"  audit.data_quality rows:   {quality}")
     print(f"  lineage rows missing source/model/feature stamp: {gaps}")
+    try:
+        git_state = get_git_state(Path(__file__).resolve().parents[1])
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        manifest = build_run_manifest(
+            run_type="populate_audit",
+            code_sha=git_state.get("sha"),
+            code_dirty=git_state.get("dirty"),
+            parameters={"as_of": str(as_of)},
+            inputs={
+                "tables": ["raw.ticker_profile", "raw.companyfacts", "reference.securities"],
+                "pit": pit_manifest_metadata(
+                    as_of=str(as_of),
+                    universe_mode="active_reference_securities_draft",
+                    feature_timing_mode="snapshot_as_of_draft",
+                    notes="Draft PIT metadata: audit snapshot scored for as_of; lineage/timing completeness not fully PIT-verified.",
+                ),
+            },
+            outputs={
+                "source_lineage_rows": lineage,
+                "data_quality_rows": quality,
+                "lineage_provenance_gaps": gaps,
+            },
+            resolved_as_of=str(as_of),
+            environment={"script": "scripts.populate_audit"},
+            status="completed",
+        )
+        manifest_path = (
+            Path(__file__).resolve().parents[1]
+            / "artifacts"
+            / "runs"
+            / f"populate_audit_{stamp}"
+            / "manifest.json"
+        )
+        write_manifest_file(manifest, manifest_path)
+        print(f"Manifest: {manifest_path}")
+    except Exception as exc:
+        print(f"Manifest write failed: {exc}")
     return quality
 
 

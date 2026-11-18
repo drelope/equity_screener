@@ -89,6 +89,8 @@ from pathlib import Path
 from sqlalchemy import text
 
 from src.crispdm.db import engine
+from src.crispdm.pit import pit_manifest_metadata
+from src.crispdm.run_manifest import build_run_manifest, get_git_state, write_manifest_file
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
@@ -841,6 +843,45 @@ def main():
             print(f"\nSupporting loaders failed (non-blocking): {', '.join(soft_failed)}")
         stages["_seconds"] = stage_seconds
         record_nightly_run(args.trigger, started_at, stages, exit_code)
+
+        try:
+            git_state = get_git_state(Path(__file__).resolve().parents[1])
+            stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+            manifest = build_run_manifest(
+                run_type="run_full_etl",
+                code_sha=git_state.get("sha"),
+                code_dirty=git_state.get("dirty"),
+                parameters={
+                    "trigger": args.trigger,
+                    "limit": args.limit,
+                    "tickers": args.tickers,
+                    "skip_derived": args.skip_derived,
+                    "run_labels": args.run_labels,
+                },
+                inputs={
+                    "orchestrator": "scripts.run_full_etl",
+                    "pit": pit_manifest_metadata(
+                        as_of=None,
+                        universe_mode="orchestrated_stage_pipeline_draft",
+                        feature_timing_mode="stage_dependent_draft",
+                        notes="Draft PIT metadata: full ETL orchestrates multiple stages with differing PIT semantics; not fully implemented/verified.",
+                    ),
+                },
+                outputs={"stages": stages, "exit_code": exit_code, "soft_failed": soft_failed},
+                environment={"script": "scripts.run_full_etl"},
+                status="completed" if exit_code == 0 else "failed",
+            )
+            manifest_path = (
+                Path(__file__).resolve().parents[1]
+                / "artifacts"
+                / "runs"
+                / f"run_full_etl_{stamp}"
+                / "manifest.json"
+            )
+            write_manifest_file(manifest, manifest_path)
+            print(f"Manifest: {manifest_path}")
+        except Exception as exc:
+            print(f"Manifest write failed: {exc}")
 
         if all_ok and not soft_failed:
             print("\nFull ETL pipeline complete.")

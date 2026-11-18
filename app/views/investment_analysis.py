@@ -16,7 +16,6 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from app import analysis_schema as schema
 from app import llm_client, nav, ui
-from app.nav import SELECTED_KEY
 from app.views.security import (
     feature_section,
     financials_section,

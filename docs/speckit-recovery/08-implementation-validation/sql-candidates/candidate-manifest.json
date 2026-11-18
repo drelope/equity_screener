@@ -1,0 +1,254 @@
+{
+  "schema": "p0_migration_candidates/v1",
+  "status": "candidate_not_applied",
+  "generated_at_utc": "2026-11-16T10:30:00+00:00",
+  "baseline": {
+    "migrations_dir": "sql/migrations",
+    "max_existing_version": 106,
+    "missing_versions": [
+      45
+    ],
+    "numbering_policy": "Use V0107+ after current max V0106. Do not reuse V0045: the gap is historical and its rationale remains undocumented (UNK-006)."
+  },
+  "promotion_policy": "Candidates must not be moved into sql/migrations/ until approval gates, isolated apply evidence, backfill/reconciliation, and cutover/rollback review are recorded. scripts/check_migration_candidates.py validates internal consistency only; it does not approve or apply.",
+  "candidates": [
+    {
+      "version": 107,
+      "filename": "V0107_rm01_pit_membership.sql",
+      "sha256": "0257904521c1b0822041bbc8f480eedf5917f5ea32397a5ee8301a5abbe984e9",
+      "area": "RM-01",
+      "title": "PIT membership/status history, as-of eligibility scaffold, delisted_date",
+      "requirements": [
+        "FR-UNI-01",
+        "FR-UNI-03",
+        "FR-FEAT-03",
+        "NFR-PIT-02",
+        "NFR-PIT-04"
+      ],
+      "approval_gates": [
+        "M1",
+        "EX-001",
+        "EX-004",
+        "UNK-003"
+      ],
+      "depends_on_candidates": [],
+      "soft_depends_on": [],
+      "depends_on_schema": [
+        "reference.securities"
+      ],
+      "backfill_required": true,
+      "backfill_ref": "migration-backfill-plan.md#rm-01",
+      "rollback_file": "rollback/V0107_rollback.sql",
+      "destructive_forward_sql": false,
+      "rehearsal_ref": "rehearsal-apply-rollback-2026-11-16.json",
+      "notes": "Additive only. No membership rows or delisted dates are populated by this candidate; current reference.securities flags remain the active proxy."
+    },
+    {
+      "version": 108,
+      "filename": "V0108_rm02_pit_timing.sql",
+      "sha256": "763a94e912d420d7d2b6bfc230b18ba93a35ad98ef0401adc26b978878e60efb",
+      "area": "RM-02",
+      "title": "Dividend known-as-of timing columns and availability indexes",
+      "requirements": [
+        "NFR-PIT-01",
+        "FR-DIV-03",
+        "FR-DIV-04",
+        "FR-FEAT-01",
+        "FR-FEAT-02"
+      ],
+      "approval_gates": [
+        "M1",
+        "EX-003",
+        "UNK-001",
+        "UNK-002"
+      ],
+      "depends_on_candidates": [],
+      "soft_depends_on": [
+        107
+      ],
+      "depends_on_schema": [
+        "raw.dividend_data"
+      ],
+      "backfill_required": true,
+      "backfill_ref": "migration-backfill-plan.md#rm-02",
+      "rollback_file": "rollback/V0108_rollback.sql",
+      "destructive_forward_sql": false,
+      "rehearsal_ref": "rehearsal-apply-rollback-2026-11-16.json",
+      "notes": "Fundamentals availability ALTERs remain commented pending canonical fundamentals-table reconciliation. No consumer filters on available_at yet."
+    },
+    {
+      "version": 109,
+      "filename": "V0109_rm03_dividend_evidence.sql",
+      "sha256": "5e651e09770cfd64fdd6ad5053153a7a5c8dc7cc27f937211fbd44830cff8c75",
+      "area": "RM-03",
+      "title": "Append-only dividend evidence, quarantine, and correction history",
+      "requirements": [
+        "FR-DIV-01",
+        "FR-DIV-04",
+        "FR-DIV-05",
+        "FR-DIV-07",
+        "FR-DIV-08"
+      ],
+      "approval_gates": [
+        "M1",
+        "EX-002",
+        "UNK-002",
+        "UNK-005"
+      ],
+      "depends_on_candidates": [],
+      "soft_depends_on": [
+        108
+      ],
+      "depends_on_schema": [
+        "reference.securities",
+        "raw.dividend_data",
+        "audit"
+      ],
+      "backfill_required": true,
+      "backfill_ref": "migration-backfill-plan.md#rm-03",
+      "rollback_file": "rollback/V0109_rollback.sql",
+      "destructive_forward_sql": false,
+      "rehearsal_ref": "rehearsal-apply-rollback-2026-11-16.json",
+      "notes": "Current raw.dividend_data remains authoritative until evidence-first loader, curated projection, dual-read/cutover, and conflict-key/precedence approval."
+    },
+    {
+      "version": 110,
+      "filename": "V0110_rm04_run_manifest_ledger.sql",
+      "sha256": "4153eff0a30884c97ef1dde2ceab434e658ed4bf8f3dc5df8d68ac90ea3b1a5a",
+      "area": "RM-04/RM-05",
+      "title": "Immutable run manifest ledger and run-keyed output references",
+      "requirements": [
+        "FR-BT-05",
+        "FR-AI-02",
+        "FR-REP-02",
+        "NFR-REPRO-03",
+        "NFR-PIT-05"
+      ],
+      "approval_gates": [
+        "M1",
+        "DEC-002",
+        "DEC-003",
+        "DEC-005"
+      ],
+      "depends_on_candidates": [],
+      "soft_depends_on": [
+        107,
+        108,
+        109
+      ],
+      "depends_on_schema": [
+        "audit"
+      ],
+      "backfill_required": false,
+      "backfill_ref": null,
+      "rollback_file": "rollback/V0110_rollback.sql",
+      "destructive_forward_sql": false,
+      "rehearsal_ref": "rehearsal-apply-rollback-2026-11-16.json",
+      "notes": "Creates ledger tables only. Scripts still write file manifests; immutability trigger, role model, and run-keyed output cutover remain follow-up work."
+    },
+    {
+      "version": 111,
+      "filename": "V0111_rm04_manifest_immutability.sql",
+      "sha256": "9714d7c8b0bc190d7d14f3d1103c171b820e4d8196a8e27470b0110e96be9a51",
+      "area": "RM-04",
+      "title": "Database-enforced append-only run manifest/output ledger",
+      "requirements": [
+        "FR-BT-05",
+        "FR-AI-02",
+        "NFR-REPRO-03",
+        "NFR-PIT-05"
+      ],
+      "approval_gates": [
+        "M1",
+        "DEC-002",
+        "DEC-003",
+        "DEC-005"
+      ],
+      "depends_on_candidates": [
+        110
+      ],
+      "soft_depends_on": [],
+      "depends_on_schema": [
+        "audit.run_manifests",
+        "audit.run_outputs"
+      ],
+      "backfill_required": false,
+      "backfill_ref": null,
+      "rollback_file": "rollback/V0111_rollback.sql",
+      "destructive_forward_sql": false,
+      "rehearsal_ref": "rehearsal-apply-rollback-v0111-2026-11-16.json",
+      "notes": "Adds trigger-based append-only enforcement only. Role/retention/incident-response policy is deferred to DEC-002/003/005.",
+      "behavior_rehearsal_ref": "rehearsal-v0111-2026-11-16.json"
+    },
+    {
+      "version": 112,
+      "filename": "V0112_rm04_ledger_role_grants.sql",
+      "sha256": "5d7ca4dfb544009580ae15cca9e1b2f8abfa6a68884ba313051bab55798b6956",
+      "area": "RM-04/RM-05",
+      "title": "Least-privilege ledger role grants (speculative)",
+      "requirements": [
+        "FR-BT-05",
+        "FR-AI-02",
+        "NFR-REPRO-03"
+      ],
+      "approval_gates": [
+        "M1",
+        "DEC-002",
+        "DEC-003",
+        "DEC-005"
+      ],
+      "depends_on_candidates": [
+        110,
+        111
+      ],
+      "soft_depends_on": [],
+      "depends_on_schema": [
+        "audit.run_manifests",
+        "audit.run_outputs",
+        "audit.run_outputs_output_id_seq",
+        "public.schema_migrations",
+        "pg_roles"
+      ],
+      "backfill_required": false,
+      "backfill_ref": null,
+      "rollback_file": "rollback/V0112_rollback.sql",
+      "destructive_forward_sql": false,
+      "rehearsal_ref": "ledger-role-grants-rehearsal-2026-11-16.json",
+      "notes": "Speculative least-privilege grants. Requires DBA-provisioned NOLOGIN NOINHERIT group roles; does not create/drop roles. Deployment role mapping and approval remain external."
+    },
+    {
+      "version": 113,
+      "filename": "V0113_rm04_ledger_governance_events.sql",
+      "sha256": "f9b26f525da884988efe2496d77e09fe23d7d1b19772af6da9afb888b18fd196",
+      "area": "RM-04/RM-05",
+      "title": "Append-only ledger governance event log (speculative)",
+      "requirements": [
+        "FR-BT-05",
+        "FR-AI-02",
+        "NFR-REPRO-03"
+      ],
+      "approval_gates": [
+        "M1",
+        "DEC-002",
+        "DEC-003",
+        "DEC-005"
+      ],
+      "depends_on_candidates": [
+        110
+      ],
+      "soft_depends_on": [
+        111
+      ],
+      "depends_on_schema": [
+        "audit.run_manifests"
+      ],
+      "backfill_required": false,
+      "backfill_ref": null,
+      "rollback_file": "rollback/V0113_rollback.sql",
+      "destructive_forward_sql": false,
+      "rehearsal_ref": "ledger-governance-events-rehearsal-2026-11-16.json",
+      "behavior_rehearsal_ref": "ledger-governance-events-behavior-2026-11-16.json",
+      "notes": "Speculative append-only event log for holds/exports/purges/incidents/break-glass. Records decisions only; no retention/purge/legal-hold enforcement. Retention period and incident runbook approvals remain external."
+    }
+  ]
+}

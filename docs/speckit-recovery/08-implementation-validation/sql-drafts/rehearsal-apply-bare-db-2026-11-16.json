@@ -1,0 +1,36 @@
+{
+  "timestamp_utc": "2026-11-17T00:04:52.782764+00:00",
+  "drafts_dir": "/mnt/d/dividend_equity_crispdm_implementation/dividend_equity_crispdm/docs/speckit-recovery/08-implementation-validation/sql-drafts",
+  "drafts": [
+    {
+      "name": "rm01_pit_membership_additive.sql",
+      "path": "/mnt/d/dividend_equity_crispdm_implementation/dividend_equity_crispdm/docs/speckit-recovery/08-implementation-validation/sql-drafts/rm01_pit_membership_additive.sql",
+      "sha256": "d7d7bfe1b42990e453a5aea0d0daff021dac6fa37f8d8bdc78b926d6c8d19b50",
+      "statements": 6
+    },
+    {
+      "name": "rm02_pit_timing_additive.sql",
+      "path": "/mnt/d/dividend_equity_crispdm_implementation/dividend_equity_crispdm/docs/speckit-recovery/08-implementation-validation/sql-drafts/rm02_pit_timing_additive.sql",
+      "sha256": "8f6ea344cd40c9c1576a3512ba64fea37b4fa815f72349560f9166386f05cd71",
+      "statements": 4
+    },
+    {
+      "name": "rm03_dividend_evidence_quarantine.sql",
+      "path": "/mnt/d/dividend_equity_crispdm_implementation/dividend_equity_crispdm/docs/speckit-recovery/08-implementation-validation/sql-drafts/rm03_dividend_evidence_quarantine.sql",
+      "sha256": "6fff7fd679ca95eabd0c60cf9121a73f9ce63de57689324b2a04786b650265dc",
+      "statements": 7
+    },
+    {
+      "name": "rm04_run_manifest_ledger.sql",
+      "path": "/mnt/d/dividend_equity_crispdm_implementation/dividend_equity_crispdm/docs/speckit-recovery/08-implementation-validation/sql-drafts/rm04_run_manifest_ledger.sql",
+      "sha256": "1df020947151fa2caa803ccc159e3f2049c8db8b73437991f15d324596fb71b1",
+      "statements": 5
+    }
+  ],
+  "applied": [],
+  "errors": [
+    "(psycopg.errors.InvalidSchemaName) schema \"reference\" does not exist\nLINE 8: CREATE TABLE IF NOT EXISTS reference.security_membership_his...\n                                   ^\n[SQL: -- RM-01 PIT membership additive draft (NOT APPLIED / DEC approvals pending)\n-- Purpose: support as-of eligible universe, delisted/inactive PIT validity, reproducible PIT recomputes.\n-- Safety: additive-first; no destructive changes to reference.securities in this draft.\n\nBEGIN;\n\n-- Historical membership/status intervals (authoritative where available)\nCREATE TABLE IF NOT EXISTS reference.security_membership_history (\n    membership_id BIGSERIAL PRIMARY KEY,\n    security_id UUID NOT NULL REFERENCES reference.securities(security_id),\n    status TEXT NOT NULL, -- e.g. active/inactive/listed/delisted/suspended (taxonomy TBD DEC/M1)\n    effective_from DATE NOT NULL,\n    effective_to DATE,    -- NULL = open/current interval as known at load time\n    listed_date DATE,\n    delisted_date DATE,\n    source TEXT,\n    source_ref TEXT,\n    observed_at TIMESTAMPTZ NOT NULL DEFAULT now(),\n    loaded_at TIMESTAMPTZ NOT NULL DEFAULT now(),\n    run_id TEXT,\n    notes TEXT,\n    CHECK (effective_to IS NULL OR effective_to >= effective_from)\n);\n\nCREATE INDEX IF NOT EXISTS idx_security_membership_history_security_dates\n    ON reference.security_membership_history (security_id, effective_from, effective_to);\n\n-- Optional PIT eligibility cache/materialization for audited recomputes (populate after backfill)\nCREATE TABLE IF NOT EXISTS reference.security_eligibility_asof (\n    as_of_date DATE NOT NULL,\n    security_id UUID NOT NULL REFERENCES reference.securities(security_id),\n    is_eligible BOOLEAN NOT NULL,\n    eligibility_reason TEXT,\n    source_run_id TEXT,\n    computed_at TIMESTAMPTZ NOT NULL DEFAULT now(),\n    PRIMARY KEY (as_of_date, security_id)\n);\n\n-- Delisted date capture on canonical security row (additive; backfill policy TBD)\nALTER TABLE reference.securities\n    ADD COLUMN IF NOT EXISTS delisted_date DATE;\n\n-- Example as-of eligibility view (draft; final logic depends on approved status taxonomy/evidence)\n-- CREATE OR REPLACE VIEW reference.v_security_eligible_asof AS ...\n\nCOMMIT;\n]\n(Background on this error at: https://sqlalche.me/e/20/f405)"
+  ],
+  "status": "failed",
+  "dsn_safety_issues": []
+}

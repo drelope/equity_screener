@@ -1,0 +1,585 @@
+{
+  "timestamp_utc": "2026-11-17T02:06:43.622205+00:00",
+  "status": "applied",
+  "phases": {
+    "schema": {
+      "file": "sql/schema.sql",
+      "sha256": "08c79315b6d2acb6f9000da6088ad8df1c4284bf6d4e72a340f8625645f02b15",
+      "statements": 273
+    },
+    "init_inline": {
+      "file": "scripts/init_db.py#migrations",
+      "count": 35,
+      "statements": 100,
+      "sha256": "5a08cd9f0cf8feb5323d9f36fb4e1df7964510f690113d88c79a891eeb0ed0bf"
+    },
+    "versioned_migrations": {
+      "available": 104,
+      "applied_now": [
+        {
+          "version": 2,
+          "name": "V0002_audit_table_comment.sql",
+          "sha256": "2d30f47e78fdbe3aea1dfae595ed47fdf89a4fe8d1c87446ab9b83c34b972da2"
+        },
+        {
+          "version": 3,
+          "name": "V0003_comments_manifest.sql",
+          "sha256": "35af3d6515e0dd36d88aadb5e8721e194c1fef8bfb96a8c673ea535eabc848d6"
+        },
+        {
+          "version": 4,
+          "name": "V0004_issuer_name_consolidation.sql",
+          "sha256": "063626fd2194f714c8809dc966f012fb1ea412a143ee601dd65fec84146ccfea"
+        },
+        {
+          "version": 5,
+          "name": "V0005_nightly_run_tracking.sql",
+          "sha256": "55139761f6ef5e76db0342a4d82f989577e9a648c28893f1413807e028de741e"
+        },
+        {
+          "version": 6,
+          "name": "V0006_dividend_amount_units.sql",
+          "sha256": "21bb4a10e89a2e78a10a839c91be873a653ff093f8168d40fde988d150c5835d"
+        },
+        {
+          "version": 7,
+          "name": "V0007_feature_price_quality.sql",
+          "sha256": "2e352d1faa01377f2140ce1067c2cbf4946695d20c39cd28461d14b09ba88efe"
+        },
+        {
+          "version": 8,
+          "name": "V0008_model_run_imbalance_metrics.sql",
+          "sha256": "63d0199a923b19c032ccb726db88a0f943b07f1db5fd16f2cb4ac143e62a371d"
+        },
+        {
+          "version": 9,
+          "name": "V0009_periodic_financials_filing_date.sql",
+          "sha256": "1a10898a273ac6111db16072b354323b27412acde7ac0b69e1ee0a5b541e5fbb"
+        },
+        {
+          "version": 10,
+          "name": "V0010_retired_feature_comments.sql",
+          "sha256": "daddef25a1175f902c416aad5dfc596fcc62cd5bebd2c7b4fcfd0e3191570c1b"
+        },
+        {
+          "version": 11,
+          "name": "V0011_fundamentals_leverage_inputs.sql",
+          "sha256": "a20a9718b186d62b21cac3866f060fec3f6cc22d09b726c52375d276cab8ff2e"
+        },
+        {
+          "version": 12,
+          "name": "V0012_restore_leverage_features.sql",
+          "sha256": "baded0943f6782719365a58943ff3cdac951aadb41ae649203685cea8840acee"
+        },
+        {
+          "version": 13,
+          "name": "V0013_score_coverage.sql",
+          "sha256": "4eee14b8ab6e5297c14006b502196aed2548b8c20e4561726fff9cb2990c5d72"
+        },
+        {
+          "version": 14,
+          "name": "V0014_earnings_trajectory.sql",
+          "sha256": "c91b2f2d189805592fd45bec74c29991fddd959c7b2bf53f9bfae7ab877512a0"
+        },
+        {
+          "version": 15,
+          "name": "V0015_regime_layer.sql",
+          "sha256": "a98feb8879ee558ec345ff9bea5511960f245016036c49efb5e1ac7c66c41add"
+        },
+        {
+          "version": 16,
+          "name": "V0016_current_basis_liquidity.sql",
+          "sha256": "07ae96ee510aa5af1ec022f0ad8e6a0faaca82982a4b20e4f5b72894ce6ff2b0"
+        },
+        {
+          "version": 17,
+          "name": "V0017_regime_cap_honesty.sql",
+          "sha256": "57c34335944883cfc82c3258cb67165b68e9819e1de98ac3c1de693adde22844"
+        },
+        {
+          "version": 18,
+          "name": "V0018_debt_maturity_ladder.sql",
+          "sha256": "68f182adc428a016be20c206b8858711b79a7e98e2b4fedc4104fc5f710b223f"
+        },
+        {
+          "version": 19,
+          "name": "V0019_c4_audit_warning.sql",
+          "sha256": "46456352f7f9277043e2e0ddf4ea34e8ce5d6a3a7d9b9c73fd3c7fcd3ebb97ef"
+        },
+        {
+          "version": 20,
+          "name": "V0020_debt_exempt.sql",
+          "sha256": "a1f9bbc346492fca12440849429ed71d3bfb06b042040759ca3976950a3467aa"
+        },
+        {
+          "version": 21,
+          "name": "V0021_features_debt.sql",
+          "sha256": "4fdc52d6d6c97665da1b6aaed7a821aa394e26ab0697edb9720bd45fd05b7283"
+        },
+        {
+          "version": 22,
+          "name": "V0022_committed_undrawn_facility.sql",
+          "sha256": "1c5c1751d500d2389e2aa9de1268ff3c1941205d431e8cca56b2f81bb929a6b1"
+        },
+        {
+          "version": 23,
+          "name": "V0023_pg_stat_statements.sql",
+          "sha256": "5bc9ff75ec60a1cd000eb83bfbc1fbf3049dc8d3d0e1509cda1298806c06094a"
+        },
+        {
+          "version": 24,
+          "name": "V0024_schema_object_comments.sql",
+          "sha256": "73db898d0f48ef41d5c18a011207085b7662fa53b46b3b1ee584c9487508ad9a"
+        },
+        {
+          "version": 25,
+          "name": "V0025_clean_ticker_profile.sql",
+          "sha256": "4c7ba90e137e658f2e80bd1973120f64d9f742d1488419fdb4305e3b439c5dc5"
+        },
+        {
+          "version": 26,
+          "name": "V0026_company_profile_and_officers.sql",
+          "sha256": "f2a6121c97c7f0e76b4ce6ca3faace4d0a06d45e24fdd9eef3c80b4eef0e912d"
+        },
+        {
+          "version": 27,
+          "name": "V0027_company_officer_identity.sql",
+          "sha256": "5e0e52deb5bd1bff74700a5c61f8379f06f076626027e7b450304a3c14e2861b"
+        },
+        {
+          "version": 28,
+          "name": "V0028_foreign_key_indexes.sql",
+          "sha256": "8aa13bcd442524d0ac363b4e8fb1ae9d7aa748276f7635c22a07c13658905eb8"
+        },
+        {
+          "version": 29,
+          "name": "V0029_dividend_recency.sql",
+          "sha256": "a90edb1aabbcdc39c521ee3ae7c0d470f2df64d10516ed681b49c0b18846c653"
+        },
+        {
+          "version": 30,
+          "name": "V0030_provider_unit_semantics.sql",
+          "sha256": "c8e298d8cc8272553b7664793c5b30b9452adcc03eda4252be42df26cb9c529b"
+        },
+        {
+          "version": 31,
+          "name": "V0031_dividend_recency_opt_in.sql",
+          "sha256": "8f59bfce2d30358b860ae817cc3254e16c49f17ffeb4523f61dd7c5f80c5fa9d"
+        },
+        {
+          "version": 32,
+          "name": "V0032_issuer_terms_view.sql",
+          "sha256": "81a6cd1ac62b84cf3ef559e6f123181e4657be8cdd11b7e2758aba667b03b45a"
+        },
+        {
+          "version": 33,
+          "name": "V0033_prune_pre_fix_data_quality.sql",
+          "sha256": "fe2b713d1c4e845ba34b507696f0ceb9a97928afcb85e5b3f138f84a0ef7e746"
+        },
+        {
+          "version": 34,
+          "name": "V0034_inactive_dividend_cleanup.sql",
+          "sha256": "b1c39dd11eab35c507a845a1bbae0edd02f409291d652fde9d525df8f239ae49"
+        },
+        {
+          "version": 35,
+          "name": "V0035_classification_cache_dividend_last_paid.sql",
+          "sha256": "0c8bed0fd939f609726a0e921a483fe46696154e6504dfeb88119627a0b8e10f"
+        },
+        {
+          "version": 36,
+          "name": "V0036_backfill_dividend_last_paid.sql",
+          "sha256": "25f823d7d756d2ae1eb423fcdb6a2f8df116cf8e3d7f38673db2b31532099ac7"
+        },
+        {
+          "version": 37,
+          "name": "V0037_features_as_of_index.sql",
+          "sha256": "1845c72a8a64753e3576729cfc42dc934fb9af3f9414b5c44587893683bdad09"
+        },
+        {
+          "version": 38,
+          "name": "V0038_quarantined_values.sql",
+          "sha256": "6b3e4bddcddaeed5f2141efa9bd5bd39a53149346a758f56c38cf711098ba2c8"
+        },
+        {
+          "version": 39,
+          "name": "V0039_deactivate_superseded_security_duplicates.sql",
+          "sha256": "64d9182e2dde75c43390a1c99899150a0fd7a0793c6b09d1c5434c1d3e172600"
+        },
+        {
+          "version": 40,
+          "name": "V0040_clamp_future_dividend_last_paid.sql",
+          "sha256": "bfe62cbb980b606e11ff6e01f2924c14f0396290b771d3429738f315baeaf44b"
+        },
+        {
+          "version": 41,
+          "name": "V0041_clear_inactive_dividend_exceptions.sql",
+          "sha256": "ad64cad24011b309b7b059466f841caaeade3fb33c397e7c628e1db73b35b416"
+        },
+        {
+          "version": 42,
+          "name": "V0042_preferred_series_names_from_sec_titles.sql",
+          "sha256": "47ef56bba8265492329efb0c64a29c25e089b33c7404a2c4031280ee5ceb3733"
+        },
+        {
+          "version": 43,
+          "name": "V0043_current_predictions_view.sql",
+          "sha256": "6634a8fc8850851f5dc5176226ce762510a16732d0deec5a32dbd90d119cc2c3"
+        },
+        {
+          "version": 44,
+          "name": "V0044_current_predictions_per_security.sql",
+          "sha256": "240c72f59333eafb176ed1b4f69fe660fec3bcaf396e9ba1ce4ca59c2f12e952"
+        },
+        {
+          "version": 46,
+          "name": "V0046_validate_securities_company_ticker_fk.sql",
+          "sha256": "3ec5ebf9100c464f2c8eafe14e5023a69191b3ec8861d5dbc4cf7a9b4e3e4d76"
+        },
+        {
+          "version": 47,
+          "name": "V0047_deactivate_stale_dividend_flip_duplicates.sql",
+          "sha256": "8b7fd34f14686435ef8ca4c2cf654c70f74a9b9e6ae4c7a1a0c6deff34fd7abc"
+        },
+        {
+          "version": 48,
+          "name": "V0048_nightly_runs_row_counts.sql",
+          "sha256": "57efd85a11a68d28d931a80f7b55f628a47a83c41beae40121847ab619201179"
+        },
+        {
+          "version": 49,
+          "name": "V0049_correct_adjusted_column_comments.sql",
+          "sha256": "0d70f0e0ca2523b8413939d6a082187ed466592d2b11eba6b815e22dbb318558"
+        },
+        {
+          "version": 50,
+          "name": "V0050_quarantine_fundamentals_anomalies.sql",
+          "sha256": "630de5a1f7a744422fa24ed761b676f739606d07acf017bf2353ea83b686ac61"
+        },
+        {
+          "version": 51,
+          "name": "V0051_momentum_total_return_comments.sql",
+          "sha256": "780513664f74d666e7766917a452b1d8a72f33077bcb2e83d53525e925d5753a"
+        },
+        {
+          "version": 52,
+          "name": "V0052_ggn_pb_security_name.sql",
+          "sha256": "26962d1e18c7322e8da4847c8197f000e00d362a309e984a7c0fc3dd508e04e8"
+        },
+        {
+          "version": 53,
+          "name": "V0053_ops_tasks.sql",
+          "sha256": "f6c8b7c952b3f30d5bf274e83704b0a185943dc864d52d4120b14dcaba4d4683"
+        },
+        {
+          "version": 54,
+          "name": "V0054_ticker_profile_load_history.sql",
+          "sha256": "ca5a415d208291b55e764133a364e1d0f14c8515f8162871c16304edff71e6ff"
+        },
+        {
+          "version": 55,
+          "name": "V0055_clean_corporate_action.sql",
+          "sha256": "45bd7d70f269a95f09bc8cbb710d9d39d80b7ad0d2162e4aedef3440f198db62"
+        },
+        {
+          "version": 56,
+          "name": "V0056_company_profile_non_finite_fields.sql",
+          "sha256": "523c78c986b9b16b02f1e74fbc4a7f1ddeb2dc8887daf5eb2f7836f5b927178a"
+        },
+        {
+          "version": 57,
+          "name": "V0057_company_profile_types_and_keys.sql",
+          "sha256": "e172bfc19a9bbf56d787aa55c4aad1972a414a763bd294e342820f3dbb1cd393"
+        },
+        {
+          "version": 58,
+          "name": "V0058_clean_ticker_profile_source_lineage.sql",
+          "sha256": "f99d2f3d2f38ba8c9c1479c7b0cd8e94a67d94ebe36fc60e836b5ded18ecfed6"
+        },
+        {
+          "version": 59,
+          "name": "V0059_company_profile_column_comments.sql",
+          "sha256": "cc4cbf469ab508dcc2cc1c21254634c6e5d33363220dae6c92613c986b8059a1"
+        },
+        {
+          "version": 60,
+          "name": "V0060_company_hierarchy_view.sql",
+          "sha256": "8c6ced5d20ba28334aec536669ae76747063a141de70b668391c47592c4cfa4f"
+        },
+        {
+          "version": 61,
+          "name": "V0061_company_hierarchy_refinements.sql",
+          "sha256": "40ef784e8f62e2132b6a8fb20ac82dfdaf7df3acabcf68c609d71ab02f7ced32"
+        },
+        {
+          "version": 62,
+          "name": "V0062_company_hierarchy_refinements_reassertion.sql",
+          "sha256": "15839867d2abcaf6e1913182a70bb8e4495b880884ed209930c93cbf73479969"
+        },
+        {
+          "version": 63,
+          "name": "V0063_company_hierarchy_issuer_keys_refinement.sql",
+          "sha256": "c0e005bd7867befced02be1a79e479c1a0238e44dbea52803c78b83ffca6a359"
+        },
+        {
+          "version": 64,
+          "name": "V0064_company_hierarchy_issuer_keys_noise_trim.sql",
+          "sha256": "a12f0c2518adaae029604fa63ca239ed48cd07f239d4695d7280c722cc5c3a61"
+        },
+        {
+          "version": 65,
+          "name": "V0065_dividend_frequency_cadence.sql",
+          "sha256": "5c5d483782a6ed0aa41186a4e5f99a536f7b5bcceac798851175ee61f55178ca"
+        },
+        {
+          "version": 66,
+          "name": "V0066_security_terms_view.sql",
+          "sha256": "98a4b103aa6516bfa4c21599cd14277fc28313fc0d161b4ea605b47067fa5405"
+        },
+        {
+          "version": 67,
+          "name": "V0067_share_repurchases.sql",
+          "sha256": "23691f99a96ec28ea25acc39c3550fd6677423b4ceceea5ccd89ede7e5e7bf3c"
+        },
+        {
+          "version": 68,
+          "name": "V0068_financial_metrics.sql",
+          "sha256": "344bc5abe40ea2ba9b3561015b2652298b550e383e934808f2c6f7063bf7b04f"
+        },
+        {
+          "version": 69,
+          "name": "V0069_cost_of_revenue.sql",
+          "sha256": "d9a72766d67a568aa73649d6c5fa8d46c884adbfd005892064f99ac8b4c76055"
+        },
+        {
+          "version": 70,
+          "name": "V0070_measurable_subtotal_comments.sql",
+          "sha256": "b8de12e85f88dae8250f2130e77ef4f415c0d82029da1779310239214e9bccb2"
+        },
+        {
+          "version": 71,
+          "name": "V0071_market_data_observation_date_index.sql",
+          "sha256": "962860a22aa0ed9a08a697ce3c04a522f6be72fee8126a8c2f2438d9a903b327"
+        },
+        {
+          "version": 72,
+          "name": "V0072_market_intraday_schema.sql",
+          "sha256": "cbc2dba6dca891260ab75a8fe2c6fc1add03fba0333ebf33c5fd86e6e553c17c"
+        },
+        {
+          "version": 73,
+          "name": "V0073_drop_unused_feature_price_quality_index.sql",
+          "sha256": "b646aa48199343709aa8467c1c0ec67c564a1dd107b42240ee969cb3f7759142"
+        },
+        {
+          "version": 74,
+          "name": "V0074_update_heavy_fillfactor.sql",
+          "sha256": "52d6618468924dea22f57b04d2d4ce3c3cca340bbf62d6af836d112e7ae1c080"
+        },
+        {
+          "version": 75,
+          "name": "V0075_features_double_precision.sql",
+          "sha256": "388f6885a819232b662c7bb7885fbbb07699da4cf3475654243d4fab919172a0"
+        },
+        {
+          "version": 76,
+          "name": "V0076_update_heavy_autovacuum.sql",
+          "sha256": "e416d39f897024b074e0e9ab0fdc26cc7ec65315d8f4febc7e227c3543f771f3"
+        },
+        {
+          "version": 77,
+          "name": "V0077_close_securities_unique_drift.sql",
+          "sha256": "2a145359e0b180a5eebe8bd3d185f4229d90f115137bcfd36f602443d4f2c630"
+        },
+        {
+          "version": 78,
+          "name": "V0078_drop_future_period_end.sql",
+          "sha256": "7ee2de270df8a25fa6dab19d301a5d7392ef9be0151c79aac54e6c15a02f15f8"
+        },
+        {
+          "version": 79,
+          "name": "V0079_retire_legal_rights_comments.sql",
+          "sha256": "60f78662b353d1f67767109c49a6ee5ef96c24f5ce7052e576a46d31652821b2"
+        },
+        {
+          "version": 80,
+          "name": "V0080_dividend_source_policy.sql",
+          "sha256": "740a644c8e5d7fee9bfce473586331add103fdbde55b60089ec1d7cbe8e05878"
+        },
+        {
+          "version": 81,
+          "name": "V0081_dividend_feed_provenance.sql",
+          "sha256": "832111a880a41ace211711f7ab6e7fb0556f457aaffd6eff822cfd478e0fb95e"
+        },
+        {
+          "version": 82,
+          "name": "V0082_resolve_orphaned_filed_quarantine.sql",
+          "sha256": "7c8e16915d0867a49df5506a48f5423b85bc4947a9a356d6289359e2ba88cd85"
+        },
+        {
+          "version": 83,
+          "name": "V0083_dividend_amount_reconciliation.sql",
+          "sha256": "3a57638c676158a431382a75f2b09c56f77fd748b5bb1b97717959d549a63e59"
+        },
+        {
+          "version": 84,
+          "name": "V0084_exchange_listings.sql",
+          "sha256": "a64ac04e619bc525843d5a9da78a31c654d4ec0a6445ef91cd0b52a1d91adf51"
+        },
+        {
+          "version": 85,
+          "name": "V0085_contract_floating_terms.sql",
+          "sha256": "9e0a8413e2eb1f409933391f5d0b3495d3c61ef783694b6195c0f46e8f740065"
+        },
+        {
+          "version": 86,
+          "name": "V0086_investment_analyses.sql",
+          "sha256": "746aeef29f26272ef72ed77e38785672bf659ee2c9fc7a0efbe7ce7d866010db"
+        },
+        {
+          "version": 87,
+          "name": "V0087_analysis_updated_by.sql",
+          "sha256": "2ee11956c22ac85b0e3cbb698893f152e9b2cac79a42bb6af21d223aa2c18005"
+        },
+        {
+          "version": 88,
+          "name": "V0088_investment_analysis_revisions.sql",
+          "sha256": "a25664f2bd80ada424858ec85e261935740cc8287c00ed54f60c6931c5e052fa"
+        },
+        {
+          "version": 89,
+          "name": "V0089_fmp_fundamentals.sql",
+          "sha256": "bf468dcf6727000488c3bf111711bc1f56731d2856be2efa3eb2280d103c5cbc"
+        },
+        {
+          "version": 90,
+          "name": "V0090_macro_series.sql",
+          "sha256": "dcdb2d140301957d33cf589321a9edecaac0452e4453780312101c687dff80b8"
+        },
+        {
+          "version": 91,
+          "name": "V0091_forward_returns.sql",
+          "sha256": "1da57d530d5255fc3cb2a2fa728ab3b0420e3c753c7738a97f93faf3299881dc"
+        },
+        {
+          "version": 92,
+          "name": "V0092_identity_by_cik_ticker_type.sql",
+          "sha256": "e2e7a2a0d47888dd07f1e1d542527af52cd4771b8cb8cc01a03990af7447ae1e"
+        },
+        {
+          "version": 93,
+          "name": "V0093_quarantine_row_key_after_identity_merge.sql",
+          "sha256": "90f7a47b0eebfbb562846dea80bd3cd7fa1188f54a1ec04f7df477d7e585e378"
+        },
+        {
+          "version": 94,
+          "name": "V0094_historical_universe.sql",
+          "sha256": "7a904d4670a1d2d369baae83ed1647e64110de8cf3ea4b3dd464d5e098442a06"
+        },
+        {
+          "version": 95,
+          "name": "V0095_feature_model_versioning.sql",
+          "sha256": "5d319c71e73a4bd8463ec0168d35da626cd5c5eee69e75876d409c2a1192c122"
+        },
+        {
+          "version": 96,
+          "name": "V0096_feature_provenance_defaults.sql",
+          "sha256": "34b63d33f9874473588b8a8894408725b01f76168cff8e3a937f614faa2e0812"
+        },
+        {
+          "version": 97,
+          "name": "V0097_raw_corporate_actions.sql",
+          "sha256": "45fd4fdfdd20e6fa9812429da81fc4f3152e3d634d300936d2509d7ec5f1c69c"
+        },
+        {
+          "version": 98,
+          "name": "V0098_security_identifiers.sql",
+          "sha256": "6be7f0d634f156022df0ea9b437edfe4bd7bbc2fabd23763628e3a9976d8cf4a"
+        },
+        {
+          "version": 99,
+          "name": "V0099_dividend_calendar.sql",
+          "sha256": "2629dbef6baf0e1d14d4b94b60968441c88052b7788c0e4b3571c060d351cd96"
+        },
+        {
+          "version": 100,
+          "name": "V0100_macro_series_vintages.sql",
+          "sha256": "00a3814fd0f0386c463fd4720a822aa4cd41ae58ec650940e77aec3a6c1d0204"
+        },
+        {
+          "version": 101,
+          "name": "V0101_xbrl_frames.sql",
+          "sha256": "d2d2e6fdd325bed430351edc97d1e0080889a4159e52f440602c6a9a958b2c20"
+        },
+        {
+          "version": 102,
+          "name": "V0102_source_freshness.sql",
+          "sha256": "d09ed700eeea24b1c05c9c920e8edbf50b44919f961f7715096f7ab45d98bc0d"
+        },
+        {
+          "version": 103,
+          "name": "V0103_dividend_calendar_first_seen.sql",
+          "sha256": "9e175276746e023636972ae3c1627fbbb07ee5f10a8f442f4d2bae174f57de3c"
+        },
+        {
+          "version": 104,
+          "name": "V0104_quarantine_openbb_dividend_outliers.sql",
+          "sha256": "b733fbbf64cb319ac2907bc91cc4b7af9bfc7e5824c8fedfcaca2f23b5e8b1b6"
+        },
+        {
+          "version": 105,
+          "name": "V0105_quarantine_row_key_after_successor_rekey.sql",
+          "sha256": "baeb16521559aa98f6dc0d03e2a7ee0b7e9cf255ffc5d8859823902d6e1fe397"
+        },
+        {
+          "version": 106,
+          "name": "V0106_us_instrument_view.sql",
+          "sha256": "5bd9512cb0f9aeea71acddfb71377592e529188aa46f15c423f338aa8451054b"
+        }
+      ],
+      "applied_total_after": 105
+    },
+    "drafts_applied": [
+      "V0107_rm01_pit_membership.sql",
+      "V0108_rm02_pit_timing.sql",
+      "V0109_rm03_dividend_evidence.sql",
+      "V0110_rm04_run_manifest_ledger.sql"
+    ]
+  },
+  "drafts": [
+    {
+      "name": "V0107_rm01_pit_membership.sql",
+      "sha256": "0257904521c1b0822041bbc8f480eedf5917f5ea32397a5ee8301a5abbe984e9",
+      "statements": 7
+    },
+    {
+      "name": "V0108_rm02_pit_timing.sql",
+      "sha256": "763a94e912d420d7d2b6bfc230b18ba93a35ad98ef0401adc26b978878e60efb",
+      "statements": 5
+    },
+    {
+      "name": "V0109_rm03_dividend_evidence.sql",
+      "sha256": "5e651e09770cfd64fdd6ad5053153a7a5c8dc7cc27f937211fbd44830cff8c75",
+      "statements": 10
+    },
+    {
+      "name": "V0110_rm04_run_manifest_ledger.sql",
+      "sha256": "4153eff0a30884c97ef1dde2ceab434e658ed4bf8f3dc5df8d68ac90ea3b1a5a",
+      "statements": 7
+    }
+  ],
+  "errors": [],
+  "rollbacks": [],
+  "dsn_safety_issues": [],
+  "verification": {
+    "reference.security_membership_history": true,
+    "reference.security_eligibility_asof": true,
+    "reference.securities.delisted_date": true,
+    "raw.dividend_data_evidence": true,
+    "audit.dividend_quarantine": true,
+    "audit.dividend_corrections": true,
+    "audit.run_manifests": true,
+    "audit.run_outputs": true,
+    "public.schema_migrations": true
+  }
+}

@@ -6,6 +6,7 @@ from sqlalchemy import text
 
 from .db import engine, read_df
 from .dividend_limits import MAX_OPENBB_PER_SHARE_DIVIDEND
+from .pit import FEATURE_BUILD_TIMING_MODE_DRAFT, normalize_as_of, pit_manifest_metadata
 from .versioning import FEATURE_SET_V1, FEATURE_VERSION, compute_feature_set_hash
 
 #: Hash of the model feature definition stored alongside every feature row, so a
@@ -620,6 +621,26 @@ def apply_price_quality(df, floor=MIN_DENOMINATOR_PRICE, ratio=SPLIT_ARTIFACT_RA
         if column in out.columns:
             out.loc[bad, column] = np.nan
     return out
+
+
+def build_features_pit_metadata(*, as_of=None, date_from=None, date_to=None):
+    """Draft PIT metadata for feature-build consumers (RM-01/RM-02 integration)."""
+    meta = pit_manifest_metadata(
+        as_of=as_of,
+        universe_mode="market_data_observation_dates_with_close_draft",
+        feature_timing_mode=FEATURE_BUILD_TIMING_MODE_DRAFT,
+        notes=(
+            "Draft PIT metadata: feature build consumes observation-dated market data and fundamentals with "
+            "availability proxies including GREATEST(filed, period_end) in places; known-as-of/acceptance "
+            "timestamps, PIT universe membership, and leakage controls are not fully implemented or verified."
+        ),
+    )
+    if date_from is not None or date_to is not None:
+        meta["requested_window"] = {
+            "date_from": normalize_as_of(date_from) if date_from is not None else None,
+            "date_to": normalize_as_of(date_to) if date_to is not None else None,
+        }
+    return meta
 
 
 def build_features(date_from=None, date_to=None):

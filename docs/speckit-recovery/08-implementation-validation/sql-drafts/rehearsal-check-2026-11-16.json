@@ -1,0 +1,33 @@
+{
+  "timestamp_utc": "2026-11-17T00:00:59.718376+00:00",
+  "drafts_dir": "/mnt/d/dividend_equity_crispdm_implementation/dividend_equity_crispdm/docs/speckit-recovery/08-implementation-validation/sql-drafts",
+  "drafts": [
+    {
+      "name": "rm01_pit_membership_additive.sql",
+      "path": "/mnt/d/dividend_equity_crispdm_implementation/dividend_equity_crispdm/docs/speckit-recovery/08-implementation-validation/sql-drafts/rm01_pit_membership_additive.sql",
+      "sha256": "d7d7bfe1b42990e453a5aea0d0daff021dac6fa37f8d8bdc78b926d6c8d19b50",
+      "statements": 6
+    },
+    {
+      "name": "rm02_pit_timing_additive.sql",
+      "path": "/mnt/d/dividend_equity_crispdm_implementation/dividend_equity_crispdm/docs/speckit-recovery/08-implementation-validation/sql-drafts/rm02_pit_timing_additive.sql",
+      "sha256": "8f6ea344cd40c9c1576a3512ba64fea37b4fa815f72349560f9166386f05cd71",
+      "statements": 4
+    },
+    {
+      "name": "rm03_dividend_evidence_quarantine.sql",
+      "path": "/mnt/d/dividend_equity_crispdm_implementation/dividend_equity_crispdm/docs/speckit-recovery/08-implementation-validation/sql-drafts/rm03_dividend_evidence_quarantine.sql",
+      "sha256": "6fff7fd679ca95eabd0c60cf9121a73f9ce63de57689324b2a04786b650265dc",
+      "statements": 7
+    },
+    {
+      "name": "rm04_run_manifest_ledger.sql",
+      "path": "/mnt/d/dividend_equity_crispdm_implementation/dividend_equity_crispdm/docs/speckit-recovery/08-implementation-validation/sql-drafts/rm04_run_manifest_ledger.sql",
+      "sha256": "1df020947151fa2caa803ccc159e3f2049c8db8b73437991f15d324596fb71b1",
+      "statements": 5
+    }
+  ],
+  "applied": [],
+  "errors": [],
+  "status": "check_only_no_dsn"
+}

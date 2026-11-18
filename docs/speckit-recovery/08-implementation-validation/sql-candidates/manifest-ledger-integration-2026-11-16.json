@@ -1,0 +1,57 @@
+{
+  "status": "pass",
+  "scope": "candidate ledger persistence integration on isolated disposable Postgres",
+  "target": {
+    "host": "127.0.0.1",
+    "port": 55441,
+    "database": "rehearsal",
+    "container": "postgres:17-alpine",
+    "created_destroyed_by_agent": true
+  },
+  "preconditions": {
+    "baseline": "sql/schema.sql + scripts/init_db.py inline migrations + 104 versioned migrations",
+    "candidates_applied": ["V0107", "V0108", "V0109", "V0110"],
+    "apply_evidence": "sql-candidates/manifest-ledger-rehearsal-2026-11-16.json"
+  },
+  "steps": {
+    "insert": {
+      "command": "python3 scripts/persist_run_manifest.py --manifest /tmp/rehearsal-manifest.json --outputs /tmp/rehearsal-outputs.json --dsn <isolated-dsn> --persist --i-understand-ledger-write --recorded-by agent",
+      "exit": 0,
+      "manifest_inserted": true,
+      "outputs_inserted": 1,
+      "outputs_requested": 1
+    },
+    "idempotent_rerun": {
+      "command": "same manifest/outputs",
+      "exit": 0,
+      "manifest_inserted": false,
+      "outputs_inserted": 0,
+      "outputs_requested": 1
+    },
+    "conflict": {
+      "command": "same run_id, changed parameters.as_of",
+      "exit": 1,
+      "error": "run_id 'rehearsal-run-1' already exists with a different manifest_hash"
+    },
+    "readback": {
+      "audit.run_manifests_rows": 1,
+      "audit.run_outputs_rows": 1,
+      "run_id": "rehearsal-run-1",
+      "run_type": "score",
+      "output_kind": "score",
+      "storage_ref": "artifacts/scores/rehearsal-run-1.parquet"
+    }
+  },
+  "artifacts": {
+    "persist_result": "sql-candidates/backfill/manifest-ledger-persist-2026-11-16.json",
+    "code": ["src/crispdm/manifest_store.py", "scripts/persist_run_manifest.py", "tests/test_manifest_store.py"],
+    "schema_candidate": "sql-candidates/V0110_rm04_run_manifest_ledger.sql"
+  },
+  "caveats": [
+    "V0110 is a candidate, not approved or applied to a shared/project database.",
+    "No immutability trigger/role model exists (DEC-002/003/005 pending).",
+    "No pipeline is wired to persist automatically; this is opt-in tooling only.",
+    "No load/performance/retention/rollback-with-data evidence.",
+    "Not promotion-grade evidence; no AC closure."
+  ]
+}

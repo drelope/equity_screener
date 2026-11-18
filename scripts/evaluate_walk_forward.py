@@ -37,6 +37,7 @@ from pathlib import Path
 import pandas as pd
 from sqlalchemy import text
 
+from src.crispdm.config import settings
 from src.crispdm.db import engine, read_df
 from src.crispdm.model import (
     FEATURES,
@@ -49,7 +50,9 @@ from src.crispdm.model import (
     naive_baseline,
     walk_forward,
     walk_forward_folds,
+    walk_forward_pit_metadata,
 )
+from src.crispdm.run_manifest import build_run_manifest, get_git_state, write_manifest_file
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 CHECKPOINT_PATH = PROJECT_ROOT / "data" / "walk_forward_checkpoint.json"
@@ -671,6 +674,41 @@ def main():
                 f"headroom={e['pr_auc_headroom']:.4f} lift={e['pr_auc_lift']:+.4f} "
                 f"{'unattainable' if e['headroom_below_reference'] else 'usable'}"
             )
+
+    git_state = get_git_state(PROJECT_ROOT)
+    manifest = build_run_manifest(
+        run_type="evaluate_walk_forward",
+        code_sha=git_state.get("sha"),
+        code_dirty=git_state.get("dirty"),
+        parameters={
+            "folds": args.folds,
+            "max_flag_rate": args.max_flag_rate,
+            "out": str(args.out),
+        },
+        inputs={
+            "feature_table": "model.features",
+            "label_column": "target_sustainable_dividend",
+            "pit": walk_forward_pit_metadata(
+                embargo_days=settings.label_horizon_days,
+                test_start=checkpoint.get("test_end"),
+            ),
+        },
+        outputs={"checkpoint": str(args.out), "readiness": checkpoint.get("readiness")},
+        environment={"script": "scripts.evaluate_walk_forward"},
+        status="completed" if checkpoint.get("gate_passed") else "failed",
+        acceptance_policy_id=checkpoint.get("contract", {}).get("acceptance_policy_version"),
+        acceptance_policy_version=checkpoint.get("contract", {}).get("acceptance_policy_version"),
+    )
+    manifest_path = args.out.parent / f"walk_forward_manifest_{checkpoint['run_id']}.json"
+    try:
+        write_manifest_file(manifest, manifest_path)
+        checkpoint["manifest"] = {
+            "run_id": manifest["run_id"],
+            "path": str(manifest_path),
+            "hash": manifest["hashes"]["manifest_core_hash"],
+        }
+    except Exception as exc:
+        print(f"Manifest write failed: {exc}")
 
     persist(checkpoint)
     args.out.parent.mkdir(parents=True, exist_ok=True)

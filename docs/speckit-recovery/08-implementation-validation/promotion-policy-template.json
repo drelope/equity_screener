@@ -1,0 +1,57 @@
+{
+  "policy_id": "DRAFT-promotion-policy",
+  "version": "0.0.0-draft",
+  "status": "draft_pending_decisions",
+  "decisions_required": ["DEC-002", "DEC-003", "DEC-004", "DEC-005"],
+  "holdout": {
+    "id": null,
+    "description": null,
+    "snapshot_refs": [],
+    "freeze_date": null,
+    "owner": null,
+    "access_policy_ref": null,
+    "untouched_evidence_ref": null
+  },
+  "acceptance_policy": {
+    "blocking_checks": [],
+    "diagnostic_checks": [],
+    "minimum_evidence": [
+      "immutable_run_manifest",
+      "frozen_holdout_reference",
+      "cost_model_version",
+      "exposure_matched_benchmark_version",
+      "gross_and_net_results",
+      "reproducibility_evidence"
+    ],
+    "change_control_ref": null
+  },
+  "cost_model": {
+    "id": null,
+    "version": null,
+    "assumptions": {
+      "commission_bps": null,
+      "spread_bps": null,
+      "slippage_bps": null,
+      "financing_rate_ref": null,
+      "cash_treatment": null
+    }
+  },
+  "benchmark": {
+    "id": null,
+    "version": null,
+    "type": "exposure_matched_draft",
+    "universe_alignment": null,
+    "exposure_alignment": null,
+    "rebalance_alignment": null,
+    "cash_treatment": null
+  },
+  "promotion_decision": {
+    "production_default_model": "rule_scoring_v1",
+    "candidate_model_run_ids": [],
+    "decision": "not_promoted_draft",
+    "approver": null,
+    "approved_at": null,
+    "evidence_refs": [],
+    "exceptions": []
+  }
+}

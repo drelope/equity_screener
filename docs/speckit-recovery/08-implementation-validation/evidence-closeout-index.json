@@ -1,0 +1,386 @@
+{
+  "schema": "p0_evidence_closeout/v1",
+  "status": "draft_not_promotion_grade",
+  "generated_at_utc": "2026-11-16T15:00:00+00:00",
+  "promotion_claim": false,
+  "promotion_grade": false,
+  "promotion_blockers": [
+    "M1/EX/DEC/UNK approvals pending",
+    "candidate migrations not promoted to sql/migrations",
+    "holdout/cost/benchmark/promotion evidence incomplete",
+    "DEC-008 lock strategy not ratified",
+    "no owner/DBA sign-off for shared deployment"
+  ],
+  "artifacts": [
+    {
+      "id": "status",
+      "path": "docs/speckit-recovery/08-implementation-validation/STATUS-2026-11-16.md",
+      "sha256": "9c652bef7ac9981be27298ec3f6bf95bc80d4cf530a46c4ae2fac796d9cd3667",
+      "kind": "status_snapshot",
+      "claim_scope": "workspace_status",
+      "purpose": "Current workspace execution status and non-claims",
+      "promotion_claim": false,
+      "status": "draft_not_promotion_grade"
+    },
+    {
+      "id": "execution-log",
+      "path": "docs/speckit-recovery/08-implementation-validation/execution-log.md",
+      "sha256": "ff09538218896cd618e90d6933bf6e0a03ec13845acb78ab0b08ed9f9c631204",
+      "kind": "execution_log",
+      "claim_scope": "execution_record",
+      "purpose": "Command-level execution and validation record",
+      "promotion_claim": false,
+      "status": "draft_not_promotion_grade"
+    },
+    {
+      "id": "rtm",
+      "path": "docs/speckit-recovery/08-implementation-validation/rtm-update-draft.md",
+      "sha256": "3405815dc66894e69c964d09b17ad3895317589570f95b89740defac4bbdb25b",
+      "kind": "rtm",
+      "claim_scope": "execution_record",
+      "purpose": "Requirement-to-evidence trace draft",
+      "promotion_claim": false,
+      "status": "draft_not_promotion_grade"
+    },
+    {
+      "id": "package-readme",
+      "path": "docs/speckit-recovery/08-implementation-validation/README.md",
+      "sha256": "d2603aca88d69c1413c0f534ad369c6bd08e3e37dd63761d70d1413cffbd159c",
+      "kind": "readme",
+      "claim_scope": "workspace_status",
+      "purpose": "Implementation/validation package index",
+      "promotion_claim": false,
+      "status": "draft_not_promotion_grade"
+    },
+    {
+      "id": "governance-policy-template",
+      "path": "docs/speckit-recovery/08-implementation-validation/manifest-ledger-governance-policy-template.json",
+      "sha256": "ac91a7a0def880ae684dc1ac615089f94fd25b13daa619ac64d7f97c891efdbc",
+      "kind": "governance_policy",
+      "claim_scope": "draft_policy",
+      "purpose": "Draft role/grant/retention/incident invariants",
+      "promotion_claim": false,
+      "status": "draft_not_promotion_grade"
+    },
+    {
+      "id": "governance-policy-draft",
+      "path": "docs/speckit-recovery/08-implementation-validation/manifest-ledger-governance-policy-draft.md",
+      "sha256": "1f0a93f5961f779f0566308399f7459c231adf1994f052ea5142a12492aaed8d",
+      "kind": "governance_policy",
+      "claim_scope": "draft_policy",
+      "purpose": "Governance policy rationale and approval checklist",
+      "promotion_claim": false,
+      "status": "draft_not_promotion_grade"
+    },
+    {
+      "id": "ledger-persistence-draft",
+      "path": "docs/speckit-recovery/08-implementation-validation/manifest-ledger-persistence-draft.md",
+      "sha256": "6122db1d1860500d07c98d61428a1302aacefe0431f0f33bbf8b27155a0b9cec",
+      "kind": "policy_draft",
+      "claim_scope": "draft_policy",
+      "purpose": "Opt-in ledger persistence design and read/integrity paths",
+      "promotion_claim": false,
+      "status": "draft_not_promotion_grade"
+    },
+    {
+      "id": "promotion-policy",
+      "path": "docs/speckit-recovery/08-implementation-validation/promotion-policy-template.json",
+      "sha256": "095d40c9a01b45aeb818c05700b5c400f720562d5818d623b383b57c3205d209",
+      "kind": "promotion_policy",
+      "claim_scope": "draft_policy",
+      "purpose": "Draft promotion-policy fields with explicit gaps",
+      "promotion_claim": false,
+      "status": "draft_not_promotion_grade"
+    },
+    {
+      "id": "promotion-contract",
+      "path": "docs/speckit-recovery/08-implementation-validation/promotion-gate-contract-draft.md",
+      "sha256": "21838a4886b225acd6702066266bb9b506745c97b08b19168a7ee92965a4ad60",
+      "kind": "promotion_policy",
+      "claim_scope": "draft_policy",
+      "purpose": "Promotion evidence contract and explicit non-claim",
+      "promotion_claim": false,
+      "status": "draft_not_promotion_grade"
+    },
+    {
+      "id": "reproducibility-policy",
+      "path": "docs/speckit-recovery/08-implementation-validation/reproducibility-lock-policy-draft.md",
+      "sha256": "4858fdd5bc2ad8831aa1bd9ade6cdbbcd422e02426ac7c2de7a4d4c89a89a5b2",
+      "kind": "reproducibility_policy",
+      "claim_scope": "draft_policy",
+      "purpose": "Draft lock/runtime policy with DEC-008 gaps",
+      "promotion_claim": false,
+      "status": "draft_not_promotion_grade"
+    },
+    {
+      "id": "migration-plan",
+      "path": "docs/speckit-recovery/08-implementation-validation/migration-backfill-plan.md",
+      "sha256": "28507449107aa5ce302ffd74d06d4908b76698111844bbb62b26c4d08050234a",
+      "kind": "migration_plan",
+      "claim_scope": "workspace_status",
+      "purpose": "Migration/backfill/cutover plan and evidence links",
+      "promotion_claim": false,
+      "status": "draft_not_promotion_grade"
+    },
+    {
+      "id": "candidate-manifest",
+      "path": "docs/speckit-recovery/08-implementation-validation/sql-candidates/candidate-manifest.json",
+      "sha256": "cf19a3f921cb947ce2ca5e91303ed4115fbafe7472d74c8addfabe3787768a1e",
+      "kind": "candidate_manifest",
+      "claim_scope": "static_consistency",
+      "purpose": "Numbered candidate hashes and gates",
+      "promotion_claim": false,
+      "status": "draft_not_promotion_grade"
+    },
+    {
+      "id": "candidate-readme",
+      "path": "docs/speckit-recovery/08-implementation-validation/sql-candidates/README.md",
+      "sha256": "50daf75228a67b2b896947d1cd2cc9982f85ff7f281f832ebfa5950a93a499cf",
+      "kind": "readme",
+      "claim_scope": "workspace_status",
+      "purpose": "Candidate inventory and evidence links",
+      "promotion_claim": false,
+      "status": "draft_not_promotion_grade"
+    },
+    {
+      "id": "candidate-notes",
+      "path": "docs/speckit-recovery/08-implementation-validation/sql-candidates/dependency-and-rollback-notes.md",
+      "sha256": "6dd6f836d9c80626c5e16a834841ab0b0ea0a1db41f075f6a6d025bbf32474cf",
+      "kind": "migration_plan",
+      "claim_scope": "workspace_status",
+      "purpose": "Candidate dependencies, backfill, and rollback notes",
+      "promotion_claim": false,
+      "status": "draft_not_promotion_grade"
+    },
+    {
+      "id": "candidate-ddl-rehearsal",
+      "path": "docs/speckit-recovery/08-implementation-validation/sql-candidates/rehearsal-apply-rollback-2026-11-16.json",
+      "sha256": "bd9639b163eb1a5875e6e2e6d38d3fc36d24e502e2be9f49b6832dc34087355b",
+      "kind": "candidate_rehearsal",
+      "claim_scope": "isolated_rehearsal",
+      "purpose": "V0107\u2013V0110 apply/verify/rollback evidence",
+      "promotion_claim": false,
+      "status": "draft_not_promotion_grade"
+    },
+    {
+      "id": "v0111-behavior",
+      "path": "docs/speckit-recovery/08-implementation-validation/sql-candidates/rehearsal-v0111-2026-11-16.json",
+      "sha256": "e6cd1642727dfeddc28d278a92fea46ee4ab33b7ca33e5ec1be9cc931c374f5d",
+      "kind": "candidate_rehearsal",
+      "claim_scope": "isolated_rehearsal",
+      "purpose": "Append-only trigger behavior evidence",
+      "promotion_claim": false,
+      "status": "draft_not_promotion_grade"
+    },
+    {
+      "id": "v0111-apply-rollback",
+      "path": "docs/speckit-recovery/08-implementation-validation/sql-candidates/rehearsal-apply-rollback-v0111-2026-11-16.json",
+      "sha256": "e770b5f06f305a1fc3b54a786d82170fd406691e2b6ed8e90139412c36078476",
+      "kind": "candidate_rehearsal",
+      "claim_scope": "isolated_rehearsal",
+      "purpose": "V0111 full apply/rollback evidence",
+      "promotion_claim": false,
+      "status": "draft_not_promotion_grade"
+    },
+    {
+      "id": "ledger-integration",
+      "path": "docs/speckit-recovery/08-implementation-validation/sql-candidates/manifest-ledger-integration-2026-11-16.json",
+      "sha256": "84f7fbc68efe164831bc4c99f545af08eda310426d6fdee7f5909ea3fb623143",
+      "kind": "candidate_rehearsal",
+      "claim_scope": "isolated_rehearsal",
+      "purpose": "Manifest insert/idempotency/conflict evidence",
+      "promotion_claim": false,
+      "status": "draft_not_promotion_grade"
+    },
+    {
+      "id": "role-grants-rehearsal",
+      "path": "docs/speckit-recovery/08-implementation-validation/sql-candidates/ledger-role-grants-rehearsal-2026-11-16.json",
+      "sha256": "e7189ca7531d26d33f3e515cfc890408ef6577c1ce4c8f69859eb18a3680248e",
+      "kind": "candidate_rehearsal",
+      "claim_scope": "isolated_rehearsal",
+      "purpose": "V0112 role-grant apply/rollback evidence",
+      "promotion_claim": false,
+      "status": "draft_not_promotion_grade"
+    },
+    {
+      "id": "governance-behavior",
+      "path": "docs/speckit-recovery/08-implementation-validation/sql-candidates/ledger-governance-events-behavior-2026-11-16.json",
+      "sha256": "40017634d2651f0293a586ad3e39436d1da7ebf26d99548413737c14f91817b6",
+      "kind": "candidate_rehearsal",
+      "claim_scope": "isolated_rehearsal",
+      "purpose": "Privilege/governance behavior evidence",
+      "promotion_claim": false,
+      "status": "draft_not_promotion_grade"
+    },
+    {
+      "id": "governance-events-rehearsal",
+      "path": "docs/speckit-recovery/08-implementation-validation/sql-candidates/ledger-governance-events-rehearsal-2026-11-16.json",
+      "sha256": "58c31625d9b599adb59ba031db977faa003ef6f47ea01f9de205e1d6e1f1aadc",
+      "kind": "candidate_rehearsal",
+      "claim_scope": "isolated_rehearsal",
+      "purpose": "V0113 apply/rollback evidence",
+      "promotion_claim": false,
+      "status": "draft_not_promotion_grade"
+    },
+    {
+      "id": "roles-events-apply-rollback",
+      "path": "docs/speckit-recovery/08-implementation-validation/sql-candidates/ledger-roles-events-apply-rollback-2026-11-16.json",
+      "sha256": "fc8bcf4ee9a9d4ae026b2046c3a7bfcaf8c5b11410115d7599483e495a919554",
+      "kind": "candidate_rehearsal",
+      "claim_scope": "isolated_rehearsal",
+      "purpose": "Full V0107\u2013V0113 apply/rollback evidence",
+      "promotion_claim": false,
+      "status": "draft_not_promotion_grade"
+    },
+    {
+      "id": "backfill-readiness-empty",
+      "path": "docs/speckit-recovery/08-implementation-validation/sql-candidates/backfill/readiness-2026-11-16.json",
+      "sha256": "d491c274a66f00cc3649f83bea715bbd6d03f9a00835be4ce84d004f628f1d0f",
+      "kind": "backfill_readiness",
+      "claim_scope": "read_only_diagnostics",
+      "purpose": "Read-only readiness on schema-only target",
+      "promotion_claim": false,
+      "status": "draft_not_promotion_grade"
+    },
+    {
+      "id": "ledger-read",
+      "path": "docs/speckit-recovery/08-implementation-validation/sql-candidates/backfill/run-ledger-read-2026-11-16.json",
+      "sha256": "1b8472e19eab2d471140e6f6cbb3a1d1e222a6145eadb489c0da76f27db61d26",
+      "kind": "backfill_readiness",
+      "claim_scope": "read_only_diagnostics",
+      "purpose": "Run-keyed read path evidence",
+      "promotion_claim": false,
+      "status": "draft_not_promotion_grade"
+    },
+    {
+      "id": "ledger-integrity",
+      "path": "docs/speckit-recovery/08-implementation-validation/sql-candidates/backfill/run-ledger-integrity-2026-11-16.json",
+      "sha256": "8033d28064bb1e612216f576b565a77864cca1f65d703bf150ccc1ccce308237",
+      "kind": "backfill_readiness",
+      "claim_scope": "read_only_diagnostics",
+      "purpose": "Ledger integrity pass evidence",
+      "promotion_claim": false,
+      "status": "draft_not_promotion_grade"
+    },
+    {
+      "id": "synthetic-fixture",
+      "path": "docs/speckit-recovery/08-implementation-validation/sql-candidates/backfill/synthetic-backfill-2026-11-16.sql",
+      "sha256": "ed3ca7474ae93f00bfd17d0330e24b42bf76eb25fc1fc1aa0af18df99bd3da90",
+      "kind": "synthetic_rehearsal",
+      "claim_scope": "synthetic_rehearsal",
+      "purpose": "Synthetic backfill fixture",
+      "promotion_claim": false,
+      "status": "draft_not_promotion_grade"
+    },
+    {
+      "id": "synthetic-report",
+      "path": "docs/speckit-recovery/08-implementation-validation/sql-candidates/backfill/synthetic-backfill-2026-11-16.json",
+      "sha256": "cf12594bc1716d4082173c3ba6ff4659d0d69addcc2d1be1254fa7b7e09ff3c8",
+      "kind": "synthetic_rehearsal",
+      "claim_scope": "synthetic_rehearsal",
+      "purpose": "Synthetic backfill rehearsal result",
+      "promotion_claim": false,
+      "status": "draft_not_promotion_grade"
+    },
+    {
+      "id": "synthetic-readiness",
+      "path": "docs/speckit-recovery/08-implementation-validation/sql-candidates/backfill/readiness-after-synthetic-synthetic-backfill-2026-11-16.json",
+      "sha256": "0cd131da34ac4accb0c05aca657b0a177d6d132a40f357e0c56e0a1814b4fb50",
+      "kind": "synthetic_rehearsal",
+      "claim_scope": "synthetic_rehearsal",
+      "purpose": "Readiness result after synthetic load",
+      "promotion_claim": false,
+      "status": "draft_not_promotion_grade"
+    },
+    {
+      "id": "synthetic-cutover",
+      "path": "docs/speckit-recovery/08-implementation-validation/sql-candidates/backfill/synthetic-cutover-dry-run.md",
+      "sha256": "e9971cef21bcc9012709ec2a933256e2d10f88aadc7a66ab42464295db05b35e",
+      "kind": "synthetic_rehearsal",
+      "claim_scope": "synthetic_rehearsal",
+      "purpose": "Cutover dry-run sequence",
+      "promotion_claim": false,
+      "status": "draft_not_promotion_grade"
+    },
+    {
+      "id": "evidence-gate",
+      "path": "scripts/check_evidence_closeout.py",
+      "sha256": "fa4427cf9f2c43b192fc43c775767f028ffb2fc766ecb633bc722aa5b6db3bbb",
+      "kind": "ci_gate",
+      "claim_scope": "ci_gate",
+      "purpose": "Non-promotion evidence closeout checker",
+      "promotion_claim": false,
+      "status": "draft_not_promotion_grade"
+    },
+    {
+      "id": "ci-workflow",
+      "path": ".github/workflows/ci.yml",
+      "sha256": "db485cb7197c33523dc0e2fc8aa7602728386e8494098333a3e57c8e00c28fad",
+      "kind": "ci_gate",
+      "claim_scope": "ci_gate",
+      "purpose": "CI jobs including the non-promotion evidence closeout gate",
+      "promotion_claim": false,
+      "status": "draft_not_promotion_grade"
+    },
+    {
+      "id": "reproducibility-enforcement-checker",
+      "path": "scripts/check_reproducibility_enforcement.py",
+      "sha256": "b6ef88fd07de9f00e7cb335b5c78170206295f0e0e013b3f7a6acb596dc9a0f5",
+      "kind": "ci_gate",
+      "claim_scope": "ci_gate",
+      "purpose": "RM-06 draft lock-enforcement gap reporter",
+      "promotion_claim": false,
+      "status": "draft_not_promotion_grade"
+    },
+    {
+      "id": "reproducibility-enforcement-tests",
+      "path": "tests/test_check_reproducibility_enforcement.py",
+      "sha256": "cdc9db3598bea39b2adc1b000757075b6f2d1417e309e077e29663490e49e9c7",
+      "kind": "ci_gate",
+      "claim_scope": "ci_gate",
+      "purpose": "Tests for the RM-06 gap reporter",
+      "promotion_claim": false,
+      "status": "draft_not_promotion_grade"
+    },
+    {
+      "id": "run-output-store-doc",
+      "path": "docs/speckit-recovery/08-implementation-validation/run-output-store-draft.md",
+      "sha256": "7794de8b8b075702bd943b6a0b364ba766e981c1508ea1a7ed269bf5af6f0d8c",
+      "kind": "policy_draft",
+      "claim_scope": "draft_policy",
+      "purpose": "RM-05 output store design and non-claims",
+      "promotion_claim": false,
+      "status": "draft_not_promotion_grade"
+    },
+    {
+      "id": "output-store-module",
+      "path": "src/crispdm/output_store.py",
+      "sha256": "c235ff78f9948b88e15a85556df10ab5e2898a0b4f93884dac3eecb0037e3f4e",
+      "kind": "code_scaffolding",
+      "claim_scope": "draft_scaffolding",
+      "purpose": "Run-keyed non-overwriting output store module",
+      "promotion_claim": false,
+      "status": "draft_not_promotion_grade"
+    },
+    {
+      "id": "persist-run-output-cli",
+      "path": "scripts/persist_run_output.py",
+      "sha256": "602df627d580858ab1e82144663e94b057853e6fde830796f0f337c808753efe",
+      "kind": "code_scaffolding",
+      "claim_scope": "draft_scaffolding",
+      "purpose": "Opt-in run output CLI",
+      "promotion_claim": false,
+      "status": "draft_not_promotion_grade"
+    },
+    {
+      "id": "output-store-tests",
+      "path": "tests/test_output_store.py",
+      "sha256": "9d2022bf0bc6cf12d958e04da83d9e83ad765e7d519019019b3dba5e1055c6c2",
+      "kind": "ci_gate",
+      "claim_scope": "ci_gate",
+      "purpose": "Tests for run-keyed output store",
+      "promotion_claim": false,
+      "status": "draft_not_promotion_grade"
+    }
+  ]
+}

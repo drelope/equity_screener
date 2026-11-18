@@ -188,3 +188,62 @@ def test_the_backtest_loader_reports_no_run_when_the_directory_is_empty(tmp_path
     from app.views.dashboard import _load_latest_backtest
 
     assert _load_latest_backtest(str(tmp_path)) is None
+
+
+def test_reports_include_provenance_metadata_and_caveat():
+    index = pd.to_datetime(["2026-10-01", "2026-10-02"])
+    path = pd.DataFrame(
+        {
+            "return": [0.01, -0.005],
+            "nav": [BASE_NAV * 1.01, BASE_NAV * 1.01 * 0.995],
+            "drawdown": [0.0, -0.005],
+        },
+        index=index,
+    )
+    table = pd.DataFrame(
+        {
+            "security_id": ["s1"],
+            "ticker": ["AAA"],
+            "side": ["Long"],
+            "sector": ["Tech"],
+            "weight": [0.1],
+            "notional": [1_000_000.0],
+            "pnl": [1000.0],
+        }
+    )
+    context = {
+        "path": path,
+        "table": table,
+        "book": table,
+        "risk": {
+            "historical_var": 0.01,
+            "historical_var_amount": 1000.0,
+            "expected_shortfall": 0.02,
+            "parametric_var": 0.015,
+            "components": pd.DataFrame({"security_id": ["s1"], "component_var": [0.01]}),
+        },
+        "performance": {"cumulative_return": 0.00495},
+        "analyses": pd.DataFrame(
+            columns=[
+                "ticker",
+                "status",
+                "recommendation",
+                "confidence",
+                "overall_risk_score",
+                "created_at",
+                "updated_at",
+            ]
+        ),
+        "formed": pd.Timestamp("2026-09-30"),
+        "latest": pd.Timestamp("2026-10-02"),
+    }
+
+    reports = _reports(context)
+    morning = reports["Morning note"]
+
+    assert "Simulated model portfolio" in morning
+    assert "resolved_as_of `2026-10-02`" in morning
+    assert "generated_at_utc `" in morning
+    assert "run_ref `" in morning
+    assert "storage `transient (in-memory draft)`" in morning
+    assert "historical_selection `not available`" in morning

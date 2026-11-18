@@ -71,3 +71,39 @@ jobs:
         uses: gitleaks/gitleaks-action@v2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  reproducibility:
+    name: Reproducibility lock scaffolding (RM-06/DEC-008 draft)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Check lock artifacts (scaffolding)
+        run: python scripts/check_reproducibility_locks.py
+      - name: Validate dev lock resolves (dry-run, non-enforcing)
+        continue-on-error: true
+        run: pip install --dry-run -r requirements-dev.lock.txt
+
+  evidence-closeout:
+    name: Evidence closeout (draft, non-promotion gate)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Validate evidence bundle (draft, not promotion-grade)
+        run: python scripts/check_evidence_closeout.py
+
+  reproducibility-gaps:
+    name: Reproducibility enforcement gaps (RM-06/DEC-008 draft)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Report lock-enforcement gaps (draft, non-enforcing)
+        run: python scripts/check_reproducibility_enforcement.py

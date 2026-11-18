@@ -1,0 +1,6 @@
+{
+  "status": "applied_and_rolled_back",
+  "evidence": "ledger-roles-events-apply-rollback-2026-11-16.json",
+  "behavior": "ledger-governance-events-behavior-2026-11-16.json",
+  "behavior_script": "ledger-governance-behavior-2026-11-16.sql"
+}

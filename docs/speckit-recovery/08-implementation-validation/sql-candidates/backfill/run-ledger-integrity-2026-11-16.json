@@ -1,0 +1,19 @@
+{
+  "issues": [],
+  "output_count": 1,
+  "passed": true,
+  "read_only": true,
+  "run_count": 1,
+  "runs": [
+    {
+      "hash_ok": true,
+      "manifest_hash": "79d68817cec9100a53d4077c155517778b32a58e45306a9494823498204f9775",
+      "run_id": "rehearsal-run-1"
+    }
+  ],
+  "target": {
+    "database": "rehearsal",
+    "driver": "postgresql+psycopg",
+    "host": "127.0.0.1"
+  }
+}

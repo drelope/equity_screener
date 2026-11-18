@@ -110,9 +110,9 @@ DIVIDEND_UPSERT = text(
             :amount, :adjusted_amount, :frequency, :currency, :provider,
             :feed, :amount_feed, :concept, :retrieved_at, :is_special)
     ON CONFLICT (security_id, ex_dividend_date, provider) DO UPDATE SET
-        declaration_date = EXCLUDED.declaration_date,
-        record_date = EXCLUDED.record_date,
-        payment_date = EXCLUDED.payment_date,
+        declaration_date = COALESCE(EXCLUDED.declaration_date, raw.dividend_data.declaration_date),
+        record_date = COALESCE(EXCLUDED.record_date, raw.dividend_data.record_date),
+        payment_date = COALESCE(EXCLUDED.payment_date, raw.dividend_data.payment_date),
         amount = EXCLUDED.amount,
         adjusted_amount = EXCLUDED.adjusted_amount,
         frequency = EXCLUDED.frequency,
@@ -124,6 +124,55 @@ DIVIDEND_UPSERT = text(
         retrieved_at = EXCLUDED.retrieved_at
     """
 )
+
+
+def _dividend_row_completeness(row):
+    """Completeness score for deterministic in-batch dedupe precedence."""
+    fields = (
+        row.get("decl_date"),
+        row.get("rec_date"),
+        row.get("pay_date"),
+        row.get("amount"),
+        row.get("adjusted_amount"),
+        row.get("frequency"),
+        row.get("currency"),
+        row.get("feed"),
+        row.get("concept"),
+    )
+    return sum(1 for value in fields if value not in (None, ""))
+
+
+def dedupe_dividend_rows(rows):
+    """Collapse rows sharing the same conflict key deterministically.
+
+    Precedence (approved draft contract): higher completeness, then latest
+    retrieved_at. A stable key-preserving order is returned so cadence/frequency
+    stamping remains aligned with surviving rows.
+    """
+    if not rows:
+        return []
+    deduped = {}
+    order = []
+    for index, row in enumerate(rows):
+        key = (row.get("sec_id"), row.get("ex_date"), row.get("provider"))
+        if key not in deduped:
+            deduped[key] = (index, row)
+            order.append(key)
+            continue
+        prev_index, prev = deduped[key]
+        prev_rank = (
+            _dividend_row_completeness(prev),
+            prev.get("retrieved_at") or datetime.min.replace(tzinfo=timezone.utc),
+            prev_index,
+        )
+        curr_rank = (
+            _dividend_row_completeness(row),
+            row.get("retrieved_at") or datetime.min.replace(tzinfo=timezone.utc),
+            index,
+        )
+        if curr_rank >= prev_rank:
+            deduped[key] = (index, row)
+    return [deduped[key][1] for key in order]
 
 
 def is_special_dividend(provider_frequency):
@@ -1424,9 +1473,12 @@ def populate_dividend_data(
         # incoming ex-dates (OpenBB's true ex-dates first, SEC's period-end
         # proxies as the fallback) and stamp every row alike.
         frequencies = _cadence_by_security(conn, pending)
-        for row, (security_id, _, _) in zip(insert_rows, pending):
-            row["frequency"] = frequencies.get(security_id, "Irregular")
+        for row in insert_rows:
+            row["frequency"] = frequencies.get(row["sec_id"], "Irregular")
 
+        rows_before_dedupe = len(insert_rows)
+        insert_rows = dedupe_dividend_rows(insert_rows)
+        deduped_in_batch = rows_before_dedupe - len(insert_rows)
         if insert_rows:
             conn.execute(DIVIDEND_UPSERT, insert_rows)
             inserted = len(insert_rows)
@@ -1434,6 +1486,7 @@ def populate_dividend_data(
     print("\n✓ Populated raw.dividend_data:")
     print(f"  Inserted: {inserted} records")
     print(f"  Replaced: {replaced} superseded rows from another OpenBB feed")
+    print(f"  Deduped in-batch: {deduped_in_batch} rows (conflict-key deterministic precedence)")
     print(f"  Skipped: {skipped} records")
     print(f"  Errors: {errors} records")
 
@@ -1530,6 +1583,60 @@ def main():
         code = stage_exit_code(
             "populate_dividend_data", inserted + errors, inserted, skipped=skipped, errors=errors
         )
+        try:
+            from src.crispdm.pit import pit_manifest_metadata
+            from src.crispdm.run_manifest import (
+                build_run_manifest,
+                get_git_state,
+                write_manifest_file,
+            )
+
+            git_state = get_git_state(Path(__file__).resolve().parents[1])
+            stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+            manifest = build_run_manifest(
+                run_type="populate_dividend_data",
+                code_sha=git_state.get("sha"),
+                code_dirty=git_state.get("dirty"),
+                parameters={
+                    "sources": sorted(selected_sources),
+                    "start_date": args.start_date,
+                    "end_date": args.end_date,
+                    "full_history": args.full_history,
+                    "include_non_dividend": args.include_non_dividend,
+                    "include_historical": args.include_historical,
+                    "historical_only": args.historical_only,
+                    "tickers_count": len(tickers_list) if tickers_list else None,
+                    "limit": args.limit,
+                },
+                inputs={
+                    "sources": sorted(selected_sources),
+                    "pit": pit_manifest_metadata(
+                        as_of=args.end_date or args.start_date,
+                        universe_mode="reference_securities_dividend_historical_flags_draft",
+                        feature_timing_mode="ex_declaration_record_payment_dates_draft",
+                        notes="Draft PIT metadata: dividend ingestion uses provider events and date fields; known-as-of/availability semantics and feed/key evidence model not fully PIT-verified.",
+                    ),
+                },
+                outputs={
+                    "inserted": inserted,
+                    "skipped": skipped,
+                    "errors": errors,
+                    "stage_exit_code": code,
+                },
+                environment={"script": "scripts.populate_dividend_data"},
+                status="completed" if code == 0 else "completed_with_issues",
+            )
+            manifest_path = (
+                Path(__file__).resolve().parents[1]
+                / "artifacts"
+                / "runs"
+                / f"populate_dividend_data_{stamp}"
+                / "manifest.json"
+            )
+            write_manifest_file(manifest, manifest_path)
+            print(f"Manifest: {manifest_path}")
+        except Exception as exc:
+            print(f"Manifest write failed: {exc}")
         if code:
             return code
         print("\nDividend data population complete!")

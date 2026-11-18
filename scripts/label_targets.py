@@ -31,12 +31,15 @@ Usage:
 
 import argparse
 import sys
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
+from pathlib import Path
 
 from sqlalchemy import text
 
 from src.crispdm.config import settings
 from src.crispdm.db import engine
+from src.crispdm.pit import LABEL_OUTCOME_TIMING_MODE_DRAFT, pit_manifest_metadata
+from src.crispdm.run_manifest import build_run_manifest, get_git_state, write_manifest_file
 
 #: Horizon of the sustainability label. Sourced from settings so that the label
 #: definition and the walk-forward embargo in ``model.walk_forward`` cannot
@@ -170,6 +173,44 @@ def main():
             f"[label] {uncertain} otherwise-eligible rows left NULL (monitoring "
             "data does not extend past the window end)."
         )
+    try:
+        git_state = get_git_state(Path(__file__).resolve().parents[1])
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        manifest = build_run_manifest(
+            run_type="label_targets",
+            code_sha=git_state.get("sha"),
+            code_dirty=git_state.get("dirty"),
+            parameters={
+                "cutoff": str(args.cutoff),
+                "rebuild": args.rebuild,
+                "outcome_window_days": OUTCOME_WINDOW_DAYS,
+            },
+            inputs={
+                "feature_table": "model.features",
+                "dividend_table": "raw.dividend_data",
+                "pit": pit_manifest_metadata(
+                    as_of=str(args.cutoff),
+                    universe_mode="feature_rows_with_dividend_evidence_draft",
+                    feature_timing_mode=LABEL_OUTCOME_TIMING_MODE_DRAFT,
+                    notes="Draft PIT metadata: labels use dividend evidence/outcome windows relative to cutoff; dividend known-as-of/availability semantics not fully PIT-verified.",
+                ),
+            },
+            outputs={"labeled": total, "positive": positive, "negative": negative},
+            resolved_as_of=str(args.cutoff),
+            environment={"script": "scripts.label_targets"},
+            status="completed",
+        )
+        manifest_path = (
+            Path(__file__).resolve().parents[1]
+            / "artifacts"
+            / "runs"
+            / f"label_targets_{stamp}"
+            / "manifest.json"
+        )
+        write_manifest_file(manifest, manifest_path)
+        print(f"Manifest: {manifest_path}")
+    except Exception as exc:
+        print(f"Manifest write failed: {exc}")
     print(
         "[label] next: python -m scripts.evaluate_walk_forward\n"
         "        (records the walk-forward checkpoint in audit.model_runs)"

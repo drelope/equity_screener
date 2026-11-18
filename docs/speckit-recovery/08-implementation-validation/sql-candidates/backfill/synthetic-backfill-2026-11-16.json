@@ -1,0 +1,9 @@
+{
+  "errors": [],
+  "fixture": "synthetic-backfill-2026-11-16.sql",
+  "fixture_sha256": "ed3ca7474ae93f00bfd17d0330e24b42bf76eb25fc1fc1aa0af18df99bd3da90",
+  "generated_at_utc": "2026-11-17T04:56:07+00:00",
+  "readiness_exit": 0,
+  "readiness_report": "docs/speckit-recovery/08-implementation-validation/sql-candidates/backfill/readiness-after-synthetic-synthetic-backfill-2026-11-16.json",
+  "status": "synthetic_backfill_readiness_passed"
+}

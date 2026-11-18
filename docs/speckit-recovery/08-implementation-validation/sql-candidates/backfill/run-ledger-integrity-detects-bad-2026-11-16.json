@@ -1,0 +1,26 @@
+{
+  "issues": [
+    "bad-run: manifest_hash mismatch (stored=not-the-real-hash, recomputed=479501a574826dfdcd1313708d869ea53c15adc6d244fa590df9364eb276a278)"
+  ],
+  "output_count": 1,
+  "passed": false,
+  "read_only": true,
+  "run_count": 2,
+  "runs": [
+    {
+      "hash_ok": false,
+      "manifest_hash": "not-the-real-hash",
+      "run_id": "bad-run"
+    },
+    {
+      "hash_ok": true,
+      "manifest_hash": "79d68817cec9100a53d4077c155517778b32a58e45306a9494823498204f9775",
+      "run_id": "rehearsal-run-1"
+    }
+  ],
+  "target": {
+    "database": "rehearsal",
+    "driver": "postgresql+psycopg",
+    "host": "127.0.0.1"
+  }
+}

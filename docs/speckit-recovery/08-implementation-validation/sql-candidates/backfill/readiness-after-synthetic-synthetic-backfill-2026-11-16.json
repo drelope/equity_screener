@@ -1,0 +1,92 @@
+{
+  "candidates": {
+    "107": {
+      "check_errors": {},
+      "checks": {
+        "eligibility_rows": 3,
+        "inactive_securities": 1,
+        "inactive_without_delisted_date": 0,
+        "membership_rows": 3,
+        "open_membership_intervals": 2,
+        "overlapping_membership_pairs": 0,
+        "securities_total": 3,
+        "securities_with_delisted_date": 1
+      },
+      "data_status": "checks_passed",
+      "issues": [],
+      "missing_objects": [],
+      "name": "RM-01 PIT membership",
+      "objects_present": true,
+      "schema_status": "present",
+      "version": 107
+    },
+    "108": {
+      "check_errors": {},
+      "checks": {
+        "available_before_ex_date": 0,
+        "available_without_evidence_source": 0,
+        "dividend_rows": 2,
+        "known_at_after_retrieval": 0,
+        "no_availability_backfill": 0,
+        "rows_with_any_known_at": 2,
+        "rows_with_available_at": 2,
+        "rows_with_ex_known_at": 2
+      },
+      "data_status": "checks_passed",
+      "issues": [],
+      "missing_objects": [],
+      "name": "RM-02 PIT timing",
+      "objects_present": true,
+      "schema_status": "present",
+      "version": 108
+    },
+    "109": {
+      "check_errors": {},
+      "checks": {
+        "correction_rows": 1,
+        "corrections_without_evidence": 0,
+        "duplicate_source_event_groups": 0,
+        "evidence_rows": 3,
+        "open_quarantine_rows": 1,
+        "quarantine_without_evidence": 0,
+        "quarantined_evidence_rows": 1,
+        "raw_dividend_rows": 2
+      },
+      "data_status": "checks_passed",
+      "issues": [],
+      "missing_objects": [],
+      "name": "RM-03 dividend evidence/quarantine",
+      "objects_present": true,
+      "schema_status": "present",
+      "version": 109
+    },
+    "110": {
+      "check_errors": {},
+      "checks": {
+        "manifest_rows": 1,
+        "manifests_missing_hash": 0,
+        "manifests_missing_json": 0,
+        "output_rows": 1,
+        "outputs_without_content_hash": 0,
+        "outputs_without_storage_ref": 0
+      },
+      "data_status": "checks_passed",
+      "issues": [],
+      "missing_objects": [],
+      "name": "RM-04/RM-05 run manifest ledger",
+      "objects_present": true,
+      "schema_status": "present",
+      "version": 110
+    }
+  },
+  "generated_at_utc": "2026-11-17T04:56:08+00:00",
+  "issues": [],
+  "mode": "read_only",
+  "read_only": true,
+  "status": "checks_passed",
+  "target": {
+    "database": "rehearsal",
+    "driver": "postgresql+psycopg",
+    "host": "127.0.0.1"
+  }
+}
