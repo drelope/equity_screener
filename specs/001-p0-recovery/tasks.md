@@ -20,8 +20,8 @@
 
 **Purpose**: Confirm the approved feature state and governance baseline.
 
-- [ ] T001 Verify active feature state in `.specify/feature.json` and branch state in `specs/001-p0-recovery/plan.md` (SC-012)
-- [ ] T002 [P] Confirm approved spec status in `specs/001-p0-recovery/spec.md` and plan status in `specs/001-p0-recovery/plan.md` (SC-012)
+- [X] T001 Verify active feature state in `.specify/feature.json` and branch state in `specs/001-p0-recovery/plan.md` (SC-012)
+- [X] T002 [P] Confirm approved spec status in `specs/001-p0-recovery/spec.md` and plan status in `specs/001-p0-recovery/plan.md` (SC-012)
 - [x] T003 [P] M1 constitution disposition recorded in `docs/speckit-recovery/06-execution-prep/m1-decision-log-template.md` and ratified constitution in `.specify/memory/constitution.md`; named individual substitution is an audit-hygiene follow-up (FR-023, SC-010)
 
 **Checkpoint**: Feature state, approvals, and governance caveats are visible.
@@ -32,11 +32,11 @@
 
 **Purpose**: Establish static safety baselines before story work.
 
-- [ ] T004 Freeze candidate inventory and hashes with `scripts/check_migration_candidates.py` (FR-024, SC-012)
-- [ ] T005 [P] Verify the hash-locked evidence bundle in `docs/speckit-recovery/08-implementation-validation/evidence-closeout-index.json` (SC-012)
-- [ ] T006 [P] Verify draft lock artifacts with `scripts/check_reproducibility_locks.py` (FR-017, SC-007)
-- [ ] T007 [P] Confirm disposable-target safety guard in `scripts/rehearse_p0_full.py` (FR-025, SC-012)
-- [ ] T008 Run the baseline full suite documented in `specs/001-p0-recovery/quickstart.md` (SC-008, SC-012)
+- [X] T004 Freeze candidate inventory and hashes with `scripts/check_migration_candidates.py` (FR-024, SC-012)
+- [X] T005 [P] Verify the hash-locked evidence bundle in `docs/speckit-recovery/08-implementation-validation/evidence-closeout-index.json` (SC-012)
+- [X] T006 [P] Verify draft lock artifacts with `scripts/check_reproducibility_locks.py` (FR-017, SC-007)
+- [X] T007 [P] Confirm disposable-target safety guard in `scripts/rehearse_p0_full.py` (FR-025, SC-012)
+- [X] T008 Run the baseline full suite documented in `specs/001-p0-recovery/quickstart.md` (SC-008, SC-012)
 
 **Checkpoint**: Static baselines pass and no shared/production write path is enabled.
 
