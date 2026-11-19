@@ -201,8 +201,10 @@ def check_live_draft_state(root: Path) -> list[str]:
         / "docs/speckit-recovery/08-implementation-validation/reproducibility-lock-policy-draft.md"
     )
     text = reproducibility.read_text(encoding="utf-8").replace("**", "").replace("`", "")
-    if "Draft/scaffolding only" not in text or "DEC-008 pending" not in text:
-        errs.append("reproducibility policy lost its draft status")
+    if "Ratified 2026-11-18" not in text:
+        errs.append("reproducibility policy lost its DEC-008 ratification record")
+    if "exact pins plus lock-file SHA-256" not in text:
+        errs.append("reproducibility policy lost the ratified lock strategy")
     return errs
 
 

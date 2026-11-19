@@ -1,9 +1,9 @@
-"""Report RM-06 lock-enforcement gaps without claiming DEC-008 approval.
+"""Report RM-06 lock-enforcement status without claiming clean-environment parity.
 
-The checker is read-only. It inspects CI, Docker, and manifest source for locked
-installs and hash policy. Exit 0 means the draft gap report was produced; gaps
-are expected while DEC-008 is pending. Exit 1 means an artifact is missing or
-unreadable, or ``--require-enforced`` was requested. Exit 2 is usage error.
+The checker is read-only. It inspects CI, Docker, manifest source, and the ratified
+DEC-008 policy. Exit 0 means local enforcement checks pass; exit 1 means an
+artifact is missing/unreadable, a gap remains, or ``--require-enforced`` is
+requested before parity evidence exists. Exit 2 is usage error.
 """
 
 from __future__ import annotations
@@ -58,12 +58,10 @@ def check_ci(text: str) -> list[str]:
     gaps: list[str] = []
     if "requirements.lock.txt" not in text:
         gaps.append("CI does not install from requirements.lock.txt")
-    if "--require-hashes" not in text:
-        gaps.append("CI does not enforce --require-hashes")
-    if "pip install -r requirements.txt" in text:
-        gaps.append("CI still installs unpinned requirements.txt")
     if "check_reproducibility_locks.py" not in text:
         gaps.append("CI does not run the lock-file scaffolding check")
+    if "pip install -r requirements.txt" in text:
+        gaps.append("CI still installs unpinned requirements.txt")
     return gaps
 
 
@@ -71,8 +69,6 @@ def check_docker(text: str) -> list[str]:
     gaps: list[str] = []
     if "requirements.lock.txt" not in text:
         gaps.append("Dockerfile does not install from requirements.lock.txt")
-    if "--require-hashes" not in text:
-        gaps.append("Dockerfile does not enforce --require-hashes")
     if "-r requirements.txt" in text:
         gaps.append("Dockerfile still installs unpinned requirements.txt")
     if "--ignore-installed pillow" in text:
@@ -84,14 +80,20 @@ def check_manifest_capture(text: str) -> list[str]:
     gaps: list[str] = []
     if "get_dependency_lock_hashes" not in text:
         gaps.append("run manifests do not capture dependency lock hashes")
+    if "lock_strategy_version" not in text:
+        gaps.append("run manifests do not capture lock strategy version")
+    if "platform_python" not in text or "platform_system" not in text:
+        gaps.append("run manifests do not capture platform identity")
     return gaps
 
 
 def check_policy(text: str) -> list[str]:
     normalized = text.replace("**", "").replace("`", "")
     gaps: list[str] = []
-    if "Draft/scaffolding only" not in normalized or "DEC-008 pending" not in normalized:
-        gaps.append("reproducibility policy lost its DEC-008 draft status")
+    if "Ratified 2026-11-18" not in normalized:
+        gaps.append("reproducibility policy does not record DEC-008 ratification")
+    if "exact pins plus lock-file SHA-256" not in normalized:
+        gaps.append("reproducibility policy does not record the ratified lock strategy")
     return gaps
 
 
@@ -136,13 +138,15 @@ def run(root: Path, require_enforced: bool = False) -> dict[str, Any]:
     else:
         report["gaps"].append("Compose: postgres image is not digest-pinned")
 
-    if require_enforced:
-        report["errors"].append("locked-install enforcement is not approved; DEC-008 is pending")
-        report["status"] = "fail_enforcement_not_approved"
-    elif report["errors"]:
+    if report["errors"]:
         report["status"] = "fail"
+    elif report["gaps"]:
+        report["status"] = "fail_gaps"
+    elif require_enforced:
+        report["errors"].append("clean-environment parity evidence is not yet recorded")
+        report["status"] = "fail_parity_not_verified"
     else:
-        report["status"] = "pass_draft_gap_report"
+        report["status"] = "pass_local_enforcement"
     return report
 
 
@@ -164,8 +168,8 @@ def main(argv: list[str] | None = None) -> int:
             print(f"GAP: {gap}")
         for error in report["errors"]:
             print(f"ERROR: {error}", file=sys.stderr)
-        print("enforcement_claim=false; this report cannot claim DEC-008 enforcement")
-    return 0 if report["status"] == "pass_draft_gap_report" else 1
+        print("enforcement_claim=false; local enforcement is not AC-P0-09 closure")
+    return 0 if report["status"] == "pass_local_enforcement" else 1
 
 
 if __name__ == "__main__":

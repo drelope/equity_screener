@@ -56,10 +56,13 @@ def test_build_run_manifest_requires_run_type():
 
 def test_get_dependency_lock_hashes_reports_missing_files(tmp_path):
     hashes = get_dependency_lock_hashes(tmp_path)
-    assert hashes == {
-        "requirements.lock.txt": None,
-        "requirements-dev.lock.txt": None,
-    }
+    assert hashes["requirements.lock.txt"] is None
+    assert hashes["requirements-dev.lock.txt"] is None
+    assert hashes["lock_strategy"] == "exact_pins_plus_lock_sha256"
+    assert hashes["lock_strategy_version"] == "1.0.0"
+    assert hashes["platform_python"]
+    assert hashes["platform_system"]
+    assert hashes["platform_machine"]
 
 
 def test_build_run_manifest_includes_dependency_lock_hashes(tmp_path, monkeypatch):

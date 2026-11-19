@@ -6,13 +6,10 @@ FROM python:3.12-slim
 RUN useradd --create-home --shell /usr/sbin/nologin --uid 10001 app
 
 WORKDIR /app
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+COPY requirements.lock.txt .
+RUN pip install --no-cache-dir -r requirements.lock.txt
 
 COPY . .
-
-# Upgrade pillow to fix 39 pip-audit CVEs (streamlit pins <13 but 13.0.0 installs fine on Python 3.12)
-RUN pip install --no-cache-dir "pillow>=13.0.0" --ignore-installed pillow
 
 # OpenBB builds its static package the first time it is imported, into
 # site-packages, and records what it built in assets/reference.json. The

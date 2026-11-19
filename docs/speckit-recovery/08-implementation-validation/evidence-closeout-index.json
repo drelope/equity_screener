@@ -1,7 +1,7 @@
 {
   "schema": "p0_evidence_closeout/v1",
   "status": "draft_not_promotion_grade",
-  "generated_at_utc": "2026-11-18T13:00:00+00:00",
+  "generated_at_utc": "2026-11-18T14:00:00+00:00",
   "promotion_claim": false,
   "promotion_grade": false,
   "promotion_blockers": [
@@ -105,7 +105,7 @@
     {
       "id": "reproducibility-policy",
       "path": "docs/speckit-recovery/08-implementation-validation/reproducibility-lock-policy-draft.md",
-      "sha256": "4858fdd5bc2ad8831aa1bd9ade6cdbbcd422e02426ac7c2de7a4d4c89a89a5b2",
+      "sha256": "56ee510bc7f202d9d6bf8d9fe77c9d5337cf51290a7f340fa70a05d990b758b1",
       "kind": "reproducibility_policy",
       "claim_scope": "draft_policy",
       "purpose": "Draft lock/runtime policy with DEC-008 gaps",
@@ -305,7 +305,7 @@
     {
       "id": "evidence-gate",
       "path": "scripts/check_evidence_closeout.py",
-      "sha256": "fa4427cf9f2c43b192fc43c775767f028ffb2fc766ecb633bc722aa5b6db3bbb",
+      "sha256": "8682fecabc6ac38ad689ebe29f7786020abaa826066f982095b3fe7c09777ccf",
       "kind": "ci_gate",
       "claim_scope": "ci_gate",
       "purpose": "Non-promotion evidence closeout checker",
@@ -315,7 +315,7 @@
     {
       "id": "ci-workflow",
       "path": ".github/workflows/ci.yml",
-      "sha256": "db485cb7197c33523dc0e2fc8aa7602728386e8494098333a3e57c8e00c28fad",
+      "sha256": "d0a44cbbb2d07ae0b5d959b917a9a1504fee06f4ad9b082851353a0a9dd3dbcb",
       "kind": "ci_gate",
       "claim_scope": "ci_gate",
       "purpose": "CI jobs including the non-promotion evidence closeout gate",
@@ -325,7 +325,7 @@
     {
       "id": "reproducibility-enforcement-checker",
       "path": "scripts/check_reproducibility_enforcement.py",
-      "sha256": "b6ef88fd07de9f00e7cb335b5c78170206295f0e0e013b3f7a6acb596dc9a0f5",
+      "sha256": "ed074397a0e97ba2bd6f3d72a3d10392ab13d602f3a5a846c131e1f84769a7d1",
       "kind": "ci_gate",
       "claim_scope": "ci_gate",
       "purpose": "RM-06 draft lock-enforcement gap reporter",
@@ -335,7 +335,7 @@
     {
       "id": "reproducibility-enforcement-tests",
       "path": "tests/test_check_reproducibility_enforcement.py",
-      "sha256": "cdc9db3598bea39b2adc1b000757075b6f2d1417e309e077e29663490e49e9c7",
+      "sha256": "53042ba280caf772920342d4d3cebbd6af83ac038adc9b8180efc22e998d6598",
       "kind": "ci_gate",
       "claim_scope": "ci_gate",
       "purpose": "Tests for the RM-06 gap reporter",
@@ -479,6 +479,36 @@
       "kind": "ci_gate",
       "claim_scope": "ci_gate",
       "purpose": "Tests for promotion contract scaffolding",
+      "promotion_claim": false,
+      "status": "draft_not_promotion_grade"
+    },
+    {
+      "id": "us4-verification",
+      "path": "docs/speckit-recovery/08-implementation-validation/us4-verification-2026-11-18.md",
+      "sha256": "6776326e864981df84d745d33687ee1e80dcc481f7c62d0e374cbd5d9a5c264b",
+      "kind": "migration_plan",
+      "claim_scope": "workspace_status",
+      "purpose": "US4 reproducibility verification",
+      "promotion_claim": false,
+      "status": "draft_not_promotion_grade"
+    },
+    {
+      "id": "clean-env-parity",
+      "path": "scripts/check_clean_environment_parity.py",
+      "sha256": "950e2c96f6765810ddb36586ff598dee020a03c4887561ebcd060862504beaa2",
+      "kind": "ci_gate",
+      "claim_scope": "ci_gate",
+      "purpose": "Clean-environment lock parity checker",
+      "promotion_claim": false,
+      "status": "draft_not_promotion_grade"
+    },
+    {
+      "id": "clean-env-parity-tests",
+      "path": "tests/test_clean_environment_parity.py",
+      "sha256": "4ac5f553e4b234cf230ea9d36a2e1a5f45bb5dbd7e6da5a08b7c107b6e2a5d6d",
+      "kind": "ci_gate",
+      "claim_scope": "ci_gate",
+      "purpose": "Tests for clean-environment parity checker",
       "promotion_claim": false,
       "status": "draft_not_promotion_grade"
     }

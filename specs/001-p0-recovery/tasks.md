@@ -102,12 +102,12 @@
 
 **Independent Test**: Prepare two clean environments from the same approved dependency description, compare recorded dependency identity, and run the blocking suite with injected regressions.
 
-- [ ] T030 [US4] Ratify the lock strategy and record DEC-008 in `docs/speckit-recovery/06-execution-prep/decision-unknown-tracker.md` (FR-017)
-- [ ] T031 [US4] Enforce approved locked installs in `.github/workflows/ci.yml` and `Dockerfile` (FR-017)
-- [ ] T032 [P] [US4] Extend dependency identity capture in `src/crispdm/run_manifest.py` with ratified lock version and platform identity (FR-018)
-- [ ] T033 [US4] Add blocking gates for leakage, determinism, artifact contracts, and advertised dry-run commands in `.github/workflows/ci.yml` (FR-019, SC-008)
-- [ ] T034 [P] [US4] Verify draft reproducibility gap reporting with `scripts/check_reproducibility_enforcement.py` (FR-017, FR-019, SC-007, SC-008)
-- [ ] T035 [US4] Run clean-environment parity validation from `specs/001-p0-recovery/quickstart.md` (SC-007)
+- [X] T030 [US4] Ratify the lock strategy and record DEC-008 in `docs/speckit-recovery/06-execution-prep/decision-unknown-tracker.md` (FR-017)
+- [X] T031 [US4] Enforce approved locked installs in `.github/workflows/ci.yml` and `Dockerfile` (FR-017)
+- [X] T032 [P] [US4] Extend dependency identity capture in `src/crispdm/run_manifest.py` with ratified lock version and platform identity (FR-018)
+- [X] T033 [US4] Add blocking gates for leakage, determinism, artifact contracts, and advertised dry-run commands in `.github/workflows/ci.yml` (FR-019, SC-008)
+- [X] T034 [P] [US4] Verify draft reproducibility gap reporting with `scripts/check_reproducibility_enforcement.py` (FR-017, FR-019, SC-007, SC-008)
+- [X] T035 [US4] Run clean-environment parity validation from `specs/001-p0-recovery/quickstart.md` (SC-007)
 
 **Checkpoint**: Runtime identity is recorded and regression gates fail closed.
 

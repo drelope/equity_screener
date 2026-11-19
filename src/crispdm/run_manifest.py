@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import platform
 import shutil
 import subprocess
 from datetime import datetime, timezone
@@ -21,12 +22,17 @@ def _utc_now_iso() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
 
 
-def get_dependency_lock_hashes(root: str | Path | None = None) -> dict[str, str | None]:
-    """Return SHA-256 hashes for known dependency lock artifacts (RM-06/DEC-008 draft).
+LOCK_STRATEGY = "exact_pins_plus_lock_sha256"
+LOCK_STRATEGY_VERSION = "1.0.0"
 
-    Missing files are reported as ``None`` so manifests can record partial state
-    without claiming a ratified lock policy. With ``root`` provided, only that
-    path is searched; otherwise cwd and the repository root are searched.
+
+def get_dependency_lock_hashes(root: str | Path | None = None) -> dict[str, str | None]:
+    """Return ratified dependency identity for known lock artifacts.
+
+    Missing files are reported as ``None`` so manifests can record partial state.
+    With ``root`` provided, only that path is searched; otherwise cwd and the
+    repository root are searched. The strategy is exact pins plus the SHA-256 of
+    each lock file, matching DEC-008; per-package hashes are not used.
     """
     if root is not None:
         candidates = [Path(root)]
@@ -43,6 +49,11 @@ def get_dependency_lock_hashes(root: str | Path | None = None) -> dict[str, str 
             path = base / name
             if path.exists():
                 hashes[name] = hashlib.sha256(path.read_bytes()).hexdigest()
+    hashes["lock_strategy"] = LOCK_STRATEGY
+    hashes["lock_strategy_version"] = LOCK_STRATEGY_VERSION
+    hashes["platform_python"] = platform.python_version()
+    hashes["platform_system"] = platform.system()
+    hashes["platform_machine"] = platform.machine()
     return hashes
 
 
