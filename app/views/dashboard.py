@@ -23,6 +23,7 @@ import streamlit as st
 from app import nav, ui
 from app.views import security
 from src.crispdm import portfolio as pf
+from src.crispdm.output_store import store_output
 
 PAGE_TITLE = "Analyst dashboard"
 PAGE_PATH = "dashboard"
@@ -1005,7 +1006,82 @@ def _reports(context: dict) -> dict[str, str]:
     }
 
 
+def _historical_as_of_options(context: dict) -> list[str]:
+    dates = context.get("dates")
+    if dates is None:
+        return []
+    return sorted({pd.Timestamp(value).date().isoformat() for value in list(dates)}, reverse=True)
+
+
+def _report_as_of_choice(context: dict, selection: str | None) -> tuple[str | None, str | None]:
+    resolved = pd.Timestamp(context["path"].index[-1]).date().isoformat()
+    if selection in (None, "Latest available", resolved):
+        return resolved, None
+    return (
+        resolved,
+        f"Historical report generation is unavailable; selected {selection} was not used.",
+    )
+
+
+def _report_run_id(report: str) -> str:
+    marker = "run_ref `"
+    if marker in report:
+        parts = report.split(marker, 1)[1].split("`", 1)
+        if parts and parts[0]:
+            return parts[0]
+    return hashlib.sha256(report.encode("utf-8")).hexdigest()[:16]
+
+
+def _report_download_filename(choice: str, resolved_as_of: str, generated_at: str) -> str:
+    file_ts = generated_at.replace("-", "").replace(":", "")
+    return f"{choice.lower().replace(' ', '-')}-{resolved_as_of}-{file_ts}.md"
+
+
+def _persist_report_payload(
+    report: str,
+    *,
+    choice: str,
+    resolved_as_of: str,
+    generated_at: str,
+    root: str | Path,
+    write: bool = False,
+) -> dict:
+    payload = {
+        "report_type": choice,
+        "run_id": _report_run_id(report),
+        "resolved_as_of": resolved_as_of,
+        "generated_at_utc": generated_at,
+        "storage": "run_keyed_draft" if write else "transient_draft",
+        "historical_selection": "not available",
+        "content": report,
+    }
+    return store_output(
+        payload,
+        root=root,
+        run_id=payload["run_id"],
+        output_kind="report",
+        entity_type="report",
+        entity_id=choice.lower().replace(" ", "-"),
+        write=write,
+    )
+
+
 def _reports_tab(context: dict) -> None:
+    resolved_as_of, unavailable = _report_as_of_choice(
+        context, st.session_state.get("dashboard_report_as_of")
+    )
+    st.selectbox(
+        "Report as-of",
+        ["Latest available", *_historical_as_of_options(context)],
+        key="dashboard_report_as_of",
+        help="Historical as-of generation is currently unavailable and fails closed.",
+    )
+    if unavailable:
+        st.warning(unavailable)
+        st.caption(
+            "No historical report was generated. The current-context report is not a substitute."
+        )
+        return
     reports = _reports(context)
     choice = st.selectbox("Report", list(reports), key="dashboard_report_choice")
     report = reports[choice]
@@ -1020,18 +1096,35 @@ def _reports_tab(context: dict) -> None:
             generated_at = None
     if generated_at is None:
         generated_at = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
-    file_ts = generated_at.replace("-", "").replace(":", "")
     st.caption(
         f"Resolved as-of: `{resolved_as_of}` · Generated (UTC): `{generated_at}` · "
-        "Provenance: deterministic current-context draft · Historical selection: not available (transient, not persisted)"
+        "Provenance: deterministic current-context draft · Historical selection: not available "
+        "(transient unless explicitly persisted)"
     )
     st.download_button(
         "Download markdown",
         report.encode("utf-8"),
-        file_name=(f"{choice.lower().replace(' ', '-')}-{resolved_as_of}-{file_ts}.md"),
+        file_name=_report_download_filename(choice, resolved_as_of, generated_at),
         mime="text/markdown",
         key="dashboard_report_download",
     )
+    persist = st.checkbox(
+        "Persist this report as a run-keyed draft", key="dashboard_persist_report"
+    )
+    if persist:
+        if st.button("Persist report", key="dashboard_persist_report_button"):
+            ref = _persist_report_payload(
+                report,
+                choice=choice,
+                resolved_as_of=resolved_as_of,
+                generated_at=generated_at,
+                root=Path(__file__).resolve().parents[2] / "artifacts" / "run_outputs",
+                write=True,
+            )
+            st.code(
+                f"storage_ref={ref['storage_ref']} content_hash={ref['content_hash'][:12]}",
+                language="text",
+            )
     with st.container(border=True):
         st.markdown(report)
     st.caption(

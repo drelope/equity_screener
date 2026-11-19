@@ -1,7 +1,7 @@
 {
   "schema": "p0_evidence_closeout/v1",
   "status": "draft_not_promotion_grade",
-  "generated_at_utc": "2026-11-18T14:00:00+00:00",
+  "generated_at_utc": "2026-11-18T15:00:00+00:00",
   "promotion_claim": false,
   "promotion_grade": false,
   "promotion_blockers": [
@@ -509,6 +509,26 @@
       "kind": "ci_gate",
       "claim_scope": "ci_gate",
       "purpose": "Tests for clean-environment parity checker",
+      "promotion_claim": false,
+      "status": "draft_not_promotion_grade"
+    },
+    {
+      "id": "us5-verification",
+      "path": "docs/speckit-recovery/08-implementation-validation/us5-verification-2026-11-18.md",
+      "sha256": "30a6bffa46a6471ae8b86f47f78f3c89b3800b7e307f53459b457c815f347a41",
+      "kind": "migration_plan",
+      "claim_scope": "workspace_status",
+      "purpose": "US5 report provenance verification",
+      "promotion_claim": false,
+      "status": "draft_not_promotion_grade"
+    },
+    {
+      "id": "unk004-checklist",
+      "path": "docs/speckit-recovery/06-execution-prep/unk004-ui-verification-checklist.md",
+      "sha256": "a51c98f158121c24d2034c6f1eaa349f697d2988baeff3e54608309cd576001f",
+      "kind": "policy_draft",
+      "claim_scope": "draft_policy",
+      "purpose": "UNK-004 UI verification checklist with static evidence",
       "promotion_claim": false,
       "status": "draft_not_promotion_grade"
     }

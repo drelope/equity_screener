@@ -119,11 +119,11 @@
 
 **Independent Test**: Generate a report, change source data, reopen the report, and verify displayed provenance remains tied to the generating run.
 
-- [ ] T036 [P] [US5] Verify report provenance labels in `app/views/dashboard.py` (FR-020, SC-009)
-- [ ] T037 [US5] Implement historical as-of selection and explicit unavailability labeling in `app/views/dashboard.py` (FR-020, SC-009)
-- [ ] T038 [P] [US5] Persist run-keyed reports with `scripts/persist_run_output.py` (FR-021)
-- [ ] T039 [US5] Verify exported reports retain as-of and caveat labels in `app/views/dashboard.py` (FR-021, SC-009)
-- [ ] T040 [US5] Complete UI verification evidence in `docs/speckit-recovery/06-execution-prep/unk004-ui-verification-checklist.md` (SC-009)
+- [X] T036 [P] [US5] Verify report provenance labels in `app/views/dashboard.py` (FR-020, SC-009)
+- [X] T037 [US5] Implement historical as-of selection and explicit unavailability labeling in `app/views/dashboard.py` (FR-020, SC-009)
+- [X] T038 [P] [US5] Persist run-keyed reports with `scripts/persist_run_output.py` (FR-021)
+- [X] T039 [US5] Verify exported reports retain as-of and caveat labels in `app/views/dashboard.py` (FR-021, SC-009)
+- [X] T040 [US5] Complete UI verification evidence in `docs/speckit-recovery/06-execution-prep/unk004-ui-verification-checklist.md` (SC-009)
 
 **Checkpoint**: Reports are provenance-labeled and historical-selection limits are visible.
 
