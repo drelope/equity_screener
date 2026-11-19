@@ -5,6 +5,7 @@
 | Stage | 6 — Execution preparation |
 | Date | 2026-11-15 |
 | Status | **Draft; decisions pending stakeholder/owner input** |
+| Prepared M1 packet | `m1-ratification-packet-2026-11-18.md` contains prepared recommendations; no decision or ownership status is changed by that packet |
 
 ## 1. External/policy decisions (blocking or gating)
 | ID | Decision needed | Why it matters | Traceability | Proposed owner | Needed by | Status | Notes / evidence to collect |

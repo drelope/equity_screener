@@ -22,7 +22,7 @@
 
 - [ ] T001 Verify active feature state in `.specify/feature.json` and branch state in `specs/001-p0-recovery/plan.md` (SC-012)
 - [ ] T002 [P] Confirm approved spec status in `specs/001-p0-recovery/spec.md` and plan status in `specs/001-p0-recovery/plan.md` (SC-012)
-- [ ] T003 [P] Block implementation until M1 records constitution disposition in `docs/speckit-recovery/06-execution-prep/m1-decision-log-template.md` and a ratified constitution replaces `.specify/memory/constitution.md` (FR-023, SC-010)
+- [ ] T003 [P] Block implementation until M1 records constitution disposition in `docs/speckit-recovery/06-execution-prep/m1-decision-log-template.md`, using `docs/speckit-recovery/06-execution-prep/m1-ratification-packet-2026-11-18.md`, and a ratified constitution replaces `.specify/memory/constitution.md` (FR-023, SC-010)
 
 **Checkpoint**: Feature state, approvals, and governance caveats are visible.
 

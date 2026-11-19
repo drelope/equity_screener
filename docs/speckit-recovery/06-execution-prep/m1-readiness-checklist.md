@@ -7,6 +7,7 @@
 | Status | **Draft; all items Pending unless evidence recorded** |
 | Purpose | Gate-check for M1 completion (constitution ratification, Critical exceptions, decision ownership) |
 | Traceability | `RM-01..07`, `TSK-001..003`, `DEC-001..008`, `EX-001..005`, `UNK-001..007` |
+| Prepared review packet | `m1-ratification-packet-2026-11-18.md` and `project-constitution-ratification-draft.md` (recommendations only; no approvals recorded) |
 
 ## A. Constitution and exceptions (required for M1)
 

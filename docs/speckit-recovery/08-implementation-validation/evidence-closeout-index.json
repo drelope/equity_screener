@@ -1,7 +1,7 @@
 {
   "schema": "p0_evidence_closeout/v1",
   "status": "draft_not_promotion_grade",
-  "generated_at_utc": "2026-11-16T15:00:00+00:00",
+  "generated_at_utc": "2026-11-18T00:00:00+00:00",
   "promotion_claim": false,
   "promotion_grade": false,
   "promotion_blockers": [
@@ -15,7 +15,7 @@
     {
       "id": "status",
       "path": "docs/speckit-recovery/08-implementation-validation/STATUS-2026-11-16.md",
-      "sha256": "9c652bef7ac9981be27298ec3f6bf95bc80d4cf530a46c4ae2fac796d9cd3667",
+      "sha256": "3e16b07f3da5c181ff6e6141398624f26c06398264167215ac8f78c2d755ea02",
       "kind": "status_snapshot",
       "claim_scope": "workspace_status",
       "purpose": "Current workspace execution status and non-claims",
@@ -25,7 +25,7 @@
     {
       "id": "execution-log",
       "path": "docs/speckit-recovery/08-implementation-validation/execution-log.md",
-      "sha256": "ff09538218896cd618e90d6933bf6e0a03ec13845acb78ab0b08ed9f9c631204",
+      "sha256": "5dad51639b3a1daeb206eff2a1173792eede954df639f6dbf48dbd151dabe557",
       "kind": "execution_log",
       "claim_scope": "execution_record",
       "purpose": "Command-level execution and validation record",
@@ -35,7 +35,7 @@
     {
       "id": "rtm",
       "path": "docs/speckit-recovery/08-implementation-validation/rtm-update-draft.md",
-      "sha256": "3405815dc66894e69c964d09b17ad3895317589570f95b89740defac4bbdb25b",
+      "sha256": "0fa5d14ad26b31986d55daf8a402cdec00c85802ccaa929dc0bf59c573c46c26",
       "kind": "rtm",
       "claim_scope": "execution_record",
       "purpose": "Requirement-to-evidence trace draft",
@@ -379,6 +379,26 @@
       "kind": "ci_gate",
       "claim_scope": "ci_gate",
       "purpose": "Tests for run-keyed output store",
+      "promotion_claim": false,
+      "status": "draft_not_promotion_grade"
+    },
+    {
+      "id": "m1-ratification-packet",
+      "path": "docs/speckit-recovery/06-execution-prep/m1-ratification-packet-2026-11-18.md",
+      "sha256": "edba402fc4280ed1ded48ac8651424374db748b4d99d9f1069e7719a6aac698d",
+      "kind": "governance_policy",
+      "claim_scope": "draft_policy",
+      "purpose": "Prepared M1 ratification packet; not approved",
+      "promotion_claim": false,
+      "status": "draft_not_promotion_grade"
+    },
+    {
+      "id": "project-constitution-ratification-draft",
+      "path": "docs/speckit-recovery/06-execution-prep/project-constitution-ratification-draft.md",
+      "sha256": "34135dc7af81616dcaa3cb091a3e3a47fbcf16c0756a6156c89584f45dfd916c",
+      "kind": "governance_policy",
+      "claim_scope": "draft_policy",
+      "purpose": "Prepared project constitution draft; not ratified",
       "promotion_claim": false,
       "status": "draft_not_promotion_grade"
     }

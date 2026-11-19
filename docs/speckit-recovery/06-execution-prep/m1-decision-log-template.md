@@ -8,6 +8,8 @@
 | Purpose | Record formal approvals, dispositions, and decision outcomes required for M1 exit |
 
 > **Instructions:** Complete during/after stakeholder review. Attach or link evidence artifacts. Do not backfill approvals without authority/date.
+>
+> **Prepared review packet (2026-11-18):** `m1-ratification-packet-2026-11-18.md` and `project-constitution-ratification-draft.md` provide review-ready recommendations. They are not approvals; every field below remains Pending until a named authority and date are recorded.
 
 ## 1. Review session record
 
