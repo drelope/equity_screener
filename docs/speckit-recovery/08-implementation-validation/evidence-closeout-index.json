@@ -1,7 +1,7 @@
 {
   "schema": "p0_evidence_closeout/v1",
   "status": "draft_not_promotion_grade",
-  "generated_at_utc": "2026-11-18T16:00:00+00:00",
+  "generated_at_utc": "2026-11-18T17:00:00+00:00",
   "promotion_claim": false,
   "promotion_grade": false,
   "promotion_blockers": [
@@ -15,7 +15,7 @@
     {
       "id": "status",
       "path": "docs/speckit-recovery/08-implementation-validation/STATUS-2026-11-16.md",
-      "sha256": "a641fed88dd61f2f8b7706ceea3b4c4bb15ecca3f66397ac3020a21c467467c9",
+      "sha256": "9927438f184c7fd8e0aeaa5a734e2bd73f5edbbfe169dd7c2101be6960c47b21",
       "kind": "status_snapshot",
       "claim_scope": "workspace_status",
       "purpose": "Current workspace execution status and non-claims",
@@ -25,7 +25,7 @@
     {
       "id": "execution-log",
       "path": "docs/speckit-recovery/08-implementation-validation/execution-log.md",
-      "sha256": "c769f6957a773ca645e3e5c319ca83966d4d9495378e7bf032e37a23d1272102",
+      "sha256": "0a878008ce98438ee5b4bb9dcc5f436e92fa2969f16c73cda49f0f5d062a8b9b",
       "kind": "execution_log",
       "claim_scope": "execution_record",
       "purpose": "Command-level execution and validation record",
@@ -35,7 +35,7 @@
     {
       "id": "rtm",
       "path": "docs/speckit-recovery/08-implementation-validation/rtm-update-draft.md",
-      "sha256": "60a209c5f8b5ef16ff7a2e78c498ed9e61e56c268c3963776f7f6b47e0a46e52",
+      "sha256": "33cf944034019153b3177faf9535a0cf1cd8572deb086937c3a5cd68fd7311d6",
       "kind": "rtm",
       "claim_scope": "execution_record",
       "purpose": "Requirement-to-evidence trace draft",

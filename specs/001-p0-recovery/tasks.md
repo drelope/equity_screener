@@ -22,7 +22,7 @@
 
 - [X] T001 Verify active feature state in `.specify/feature.json` and branch state in `specs/001-p0-recovery/plan.md` (SC-012)
 - [X] T002 [P] Confirm approved spec status in `specs/001-p0-recovery/spec.md` and plan status in `specs/001-p0-recovery/plan.md` (SC-012)
-- [x] T003 [P] M1 constitution disposition recorded in `docs/speckit-recovery/06-execution-prep/m1-decision-log-template.md` and ratified constitution in `.specify/memory/constitution.md`; named individual substitution is an audit-hygiene follow-up (FR-023, SC-010)
+- [X] T003 [P] M1 constitution disposition recorded in `docs/speckit-recovery/06-execution-prep/m1-decision-log-template.md` and ratified constitution in `.specify/memory/constitution.md`; named individual substitution is an audit-hygiene follow-up (FR-023, SC-010)
 
 **Checkpoint**: Feature state, approvals, and governance caveats are visible.
 
@@ -149,11 +149,11 @@
 
 **Purpose**: Refresh evidence and confirm the full feature bundle remains non-promotion.
 
-- [ ] T046 [P] Refresh the hash-locked bundle in `docs/speckit-recovery/08-implementation-validation/evidence-closeout-index.json` (SC-012)
-- [ ] T047 [P] Update the status snapshot in `docs/speckit-recovery/08-implementation-validation/STATUS-2026-11-16.md` (SC-012)
-- [ ] T048 Run the full local suite from `specs/001-p0-recovery/quickstart.md` (SC-008, SC-012)
-- [ ] T049 Re-run the closeout gate with `scripts/check_evidence_closeout.py` (FR-024, SC-012)
-- [ ] T050 Record final acceptance evidence in `docs/speckit-recovery/08-implementation-validation/execution-log.md` (SC-012)
+- [X] T046 [P] Refresh the hash-locked bundle in `docs/speckit-recovery/08-implementation-validation/evidence-closeout-index.json` (SC-012)
+- [X] T047 [P] Update the status snapshot in `docs/speckit-recovery/08-implementation-validation/STATUS-2026-11-16.md` (SC-012)
+- [X] T048 Run the full local suite from `specs/001-p0-recovery/quickstart.md` (SC-008, SC-012)
+- [X] T049 Re-run the closeout gate with `scripts/check_evidence_closeout.py` (FR-024, SC-012)
+- [X] T050 Record final acceptance evidence in `docs/speckit-recovery/08-implementation-validation/execution-log.md` (SC-012)
 
 ---
 
