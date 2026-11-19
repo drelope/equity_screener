@@ -1,8 +1,13 @@
 {
   "policy_id": "DRAFT-promotion-policy",
-  "version": "0.0.0-draft",
+  "version": "0.1.0-draft-contract",
   "status": "draft_pending_decisions",
-  "decisions_required": ["DEC-002", "DEC-003", "DEC-004", "DEC-005"],
+  "decisions_required": [
+    "DEC-002",
+    "DEC-003",
+    "DEC-004",
+    "DEC-005"
+  ],
   "holdout": {
     "id": null,
     "description": null,
@@ -10,7 +15,10 @@
     "freeze_date": null,
     "owner": null,
     "access_policy_ref": null,
-    "untouched_evidence_ref": null
+    "untouched_evidence_ref": null,
+    "contract_id": "holdout_reference_contract_v1",
+    "contract_version": "0.1.0-draft",
+    "status": "draft_pending_dec_002"
   },
   "acceptance_policy": {
     "blocking_checks": [],
@@ -23,27 +31,38 @@
       "gross_and_net_results",
       "reproducibility_evidence"
     ],
-    "change_control_ref": null
+    "change_control_ref": "docs/speckit-recovery/06-execution-prep/m1-decision-log-template.md",
+    "id": "DRAFT-acceptance-policy",
+    "version": "0.1.0-draft-contract",
+    "effective_date": null,
+    "criteria": [
+      "balanced_accuracy_lift",
+      "negative_recall"
+    ]
   },
   "cost_model": {
-    "id": null,
-    "version": null,
+    "id": "cost_model_contract_v1",
+    "version": "0.1.0-draft",
     "assumptions": {
       "commission_bps": null,
       "spread_bps": null,
       "slippage_bps": null,
       "financing_rate_ref": null,
       "cash_treatment": null
-    }
+    },
+    "status": "draft_pending_dec_004",
+    "applied": false
   },
   "benchmark": {
-    "id": null,
-    "version": null,
+    "id": "benchmark_contract_v1",
+    "version": "0.1.0-draft",
     "type": "exposure_matched_draft",
     "universe_alignment": null,
     "exposure_alignment": null,
     "rebalance_alignment": null,
-    "cash_treatment": null
+    "cash_treatment": null,
+    "status": "draft_pending_dec_004",
+    "applied": false
   },
   "promotion_decision": {
     "production_default_model": "rule_scoring_v1",
@@ -52,6 +71,7 @@
     "approver": null,
     "approved_at": null,
     "evidence_refs": [],
-    "exceptions": []
+    "exceptions": [],
+    "acceptance_policy_ref": "DRAFT-acceptance-policy@0.1.0-draft-contract"
   }
 }

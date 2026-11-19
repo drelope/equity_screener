@@ -12,14 +12,17 @@ def base_manifest():
 
 
 def test_disabled_returns_none():
-    assert persist_run_if_opted_in(
-        manifest=base_manifest(),
-        outputs=[],
-        dsn=None,
-        enabled=False,
-        acknowledge=False,
-        recorded_by="test",
-    ) is None
+    assert (
+        persist_run_if_opted_in(
+            manifest=base_manifest(),
+            outputs=[],
+            dsn=None,
+            enabled=False,
+            acknowledge=False,
+            recorded_by="test",
+        )
+        is None
+    )
 
 
 def test_requires_dsn_and_acknowledgement():

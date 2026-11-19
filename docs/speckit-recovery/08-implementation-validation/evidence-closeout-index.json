@@ -85,7 +85,7 @@
     {
       "id": "promotion-policy",
       "path": "docs/speckit-recovery/08-implementation-validation/promotion-policy-template.json",
-      "sha256": "095d40c9a01b45aeb818c05700b5c400f720562d5818d623b383b57c3205d209",
+      "sha256": "c998f269ffa896206866ac0dc4771ffaf6659b70188f1edfee51f321b3cb7357",
       "kind": "promotion_policy",
       "claim_scope": "draft_policy",
       "purpose": "Draft promotion-policy fields with explicit gaps",
@@ -455,10 +455,30 @@
     {
       "id": "ledger-opt-in-tests",
       "path": "tests/test_ledger_opt_in.py",
-      "sha256": "32fb75ab21907c8985e7e42f48e2dd4a9ce38b98bda66e07c572fe321da58e0e",
+      "sha256": "83b04feb014aa2c42f860056a427c035d5869e5d08b0b17f6113505d9eb2ca45",
       "kind": "ci_gate",
       "claim_scope": "ci_gate",
       "purpose": "Tests for opt-in ledger persistence helper",
+      "promotion_claim": false,
+      "status": "draft_not_promotion_grade"
+    },
+    {
+      "id": "us3-verification",
+      "path": "docs/speckit-recovery/08-implementation-validation/us3-verification-2026-11-18.md",
+      "sha256": "37ea92357006787429f27d8e3888e1d8d08137f04a70193567336364816fff7d",
+      "kind": "migration_plan",
+      "claim_scope": "workspace_status",
+      "purpose": "US3 evaluation contract verification",
+      "promotion_claim": false,
+      "status": "draft_not_promotion_grade"
+    },
+    {
+      "id": "promotion-contract-tests",
+      "path": "tests/test_promotion_contract.py",
+      "sha256": "2f43ea729b219cadfaa20bafe7e5136da2102304a5e012be421a20f2c8f715a3",
+      "kind": "ci_gate",
+      "claim_scope": "ci_gate",
+      "purpose": "Tests for promotion contract scaffolding",
       "promotion_claim": false,
       "status": "draft_not_promotion_grade"
     }

@@ -169,14 +169,22 @@ def main():
     # replayed over history; the nightly passes None and pivots on the newest row.
     as_of_arg = parse_as_of(sys.argv)
     as_of_arg_iso = normalize_as_of(as_of_arg)
-    args = type("LedgerArgs", (), {
-        "persist_ledger": "--persist-ledger" in sys.argv,
-        "ledger_dsn": next(
-            (sys.argv[i + 1] for i, a in enumerate(sys.argv) if a == "--ledger-dsn" and i + 1 < len(sys.argv)),
-            None,
-        ),
-        "i_understand_ledger_write": "--i-understand-ledger-write" in sys.argv,
-    })()
+    args = type(
+        "LedgerArgs",
+        (),
+        {
+            "persist_ledger": "--persist-ledger" in sys.argv,
+            "ledger_dsn": next(
+                (
+                    sys.argv[i + 1]
+                    for i, a in enumerate(sys.argv)
+                    if a == "--ledger-dsn" and i + 1 < len(sys.argv)
+                ),
+                None,
+            ),
+            "i_understand_ledger_write": "--i-understand-ledger-write" in sys.argv,
+        },
+    )()
     prune_superseded, prune_reason = superseded_prune_decision(as_of_arg, sys.argv)
     if prune_reason:
         print(f"{as_of_arg}: {prune_reason}")

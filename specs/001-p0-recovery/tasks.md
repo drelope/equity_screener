@@ -84,13 +84,13 @@
 
 **Independent Test**: Open a completed evaluation bundle and verify formation rules, versioned costs, gross/net results, and matched comparison are present.
 
-- [ ] T023 [P] [US3] Define approved cost-model fields in `docs/speckit-recovery/08-implementation-validation/promotion-policy-template.json` (FR-012, FR-013)
-- [ ] T024 [US3] Replace draft economics placeholders with approved versioned fields in `scripts/backtest.py` (FR-012, FR-013, FR-014, SC-006)
-- [ ] T025 [US3] Implement the exposure-matched comparison contract in `src/crispdm/backtest.py` and `scripts/backtest.py` (FR-014, SC-006)
-- [ ] T026 [US3] Wire frozen holdout references into `scripts/evaluate_walk_forward.py` (FR-015, SC-006)
-- [ ] T027 [US3] Version the accepted evaluation policy in `docs/speckit-recovery/08-implementation-validation/promotion-policy-template.json` (FR-016, SC-006)
-- [ ] T028 [P] [US3] Enforce named promotion gaps with `scripts/check_promotion_evidence.py` (FR-015, FR-016)
-- [ ] T029 [US3] Produce evaluation evidence under `docs/speckit-recovery/08-implementation-validation/` with a dated acceptance-policy reference (SC-006)
+- [X] T023 [P] [US3] Define approved cost-model fields in `docs/speckit-recovery/08-implementation-validation/promotion-policy-template.json` (FR-012, FR-013)
+- [X] T024 [US3] Replace draft economics placeholders with approved versioned fields in `scripts/backtest.py` (FR-012, FR-013, FR-014, SC-006)
+- [X] T025 [US3] Implement the exposure-matched comparison contract in `src/crispdm/backtest.py` and `scripts/backtest.py` (FR-014, SC-006)
+- [X] T026 [US3] Wire frozen holdout references into `scripts/evaluate_walk_forward.py` (FR-015, SC-006)
+- [X] T027 [US3] Version the accepted evaluation policy in `docs/speckit-recovery/08-implementation-validation/promotion-policy-template.json` (FR-016, SC-006)
+- [X] T028 [P] [US3] Enforce named promotion gaps with `scripts/check_promotion_evidence.py` (FR-015, FR-016)
+- [X] T029 [US3] Produce evaluation evidence under `docs/speckit-recovery/08-implementation-validation/` with a dated acceptance-policy reference (SC-006)
 
 **Checkpoint**: Promotion-grade evaluation inputs are present or explicitly blocked with named gaps.
 

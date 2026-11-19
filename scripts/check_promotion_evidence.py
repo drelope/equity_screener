@@ -37,6 +37,22 @@ PROMOTION_GRADE_REQUIRED = [
     "manifest_ref",
 ]
 
+DRAFT_CONTRACT_PATHS = [
+    ("cost_model", "id"),
+    ("cost_model", "version"),
+    ("cost_model", "status"),
+    ("benchmark", "id"),
+    ("benchmark", "version"),
+    ("benchmark", "status"),
+    ("holdout", "contract_id"),
+    ("holdout", "contract_version"),
+    ("holdout", "status"),
+    ("acceptance_policy", "id"),
+    ("acceptance_policy", "version"),
+    ("acceptance_policy", "change_control_ref"),
+    ("promotion_decision", "acceptance_policy_ref"),
+]
+
 
 DEFAULT_POLICY = (
     Path(__file__).resolve().parents[1]
@@ -72,6 +88,24 @@ POLICY_REQUIRED_PATHS = [
 
 def load_json(path: Path):
     return json.loads(path.read_text(encoding="utf-8"))
+
+
+def check_draft_contract(policy_path: Path) -> list[str]:
+    """Return missing draft-contract fields; presence is not promotion evidence."""
+    if not policy_path.exists():
+        return [f"missing promotion policy: {policy_path}"]
+    try:
+        policy = load_json(policy_path)
+    except Exception as exc:  # noqa: BLE001
+        return [f"unreadable promotion policy {policy_path}: {exc}"]
+    errs: list[str] = []
+    for path in DRAFT_CONTRACT_PATHS:
+        value = get_path(policy, path)
+        if value is None or value == "":
+            errs.append(f"draft contract gap: {'.'.join(path)} is not set")
+    if policy.get("status") == "approved":
+        errs.append("draft contract must remain unapproved while decision evidence is pending")
+    return errs
 
 
 def check_policy_gaps(policy_path: Path) -> list[str]:
@@ -184,6 +218,8 @@ def main(argv: list[str] | None = None) -> int:
     if checked == 0:
         print("No artifacts specified; nothing checked.", file=sys.stderr)
         return 2
+
+    errs.extend(check_draft_contract(args.policy))
 
     if args.require_promotion_grade:
         gaps = check_policy_gaps(args.policy)

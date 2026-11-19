@@ -18,6 +18,10 @@ import pandas as pd
 from src.crispdm.backtest import run_from_warehouse
 from src.crispdm.ledger_opt_in import persist_run_if_opted_in
 from src.crispdm.pit import pit_manifest_metadata
+from src.crispdm.promotion_contract import (
+    draft_benchmark_contract,
+    draft_cost_model_contract,
+)
 from src.crispdm.run_manifest import build_run_manifest, get_git_state, write_manifest_file
 
 OUTPUT_DIR = Path(__file__).resolve().parents[1] / "artifacts" / "backtests"
@@ -71,16 +75,8 @@ def main() -> int:
     metrics_payload["manifest_path"] = str(manifest_path)
     # RM-07 draft placeholders only (DEC-002/004/005 pending): no cost/exposure
     # economics applied and no promotion-grade claim implied.
-    metrics_payload["cost_model"] = {
-        "status": "draft_pending_dec_004",
-        "applied": False,
-        "assumptions": None,
-    }
-    metrics_payload["exposure_matched_benchmark"] = {
-        "status": "draft_pending_dec_004",
-        "applied": False,
-        "definition": None,
-    }
+    metrics_payload["cost_model"] = draft_cost_model_contract()
+    metrics_payload["exposure_matched_benchmark"] = draft_benchmark_contract()
     metrics_payload["net_metrics_status"] = "not_computed_draft"
     metrics_payload["promotion_evidence_status"] = "draft_scaffolding_only"
     metrics_path.write_text(json.dumps(metrics_payload, indent=2, sort_keys=True), encoding="utf-8")
