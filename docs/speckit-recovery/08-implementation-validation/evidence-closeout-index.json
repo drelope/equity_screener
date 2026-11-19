@@ -115,7 +115,7 @@
     {
       "id": "migration-plan",
       "path": "docs/speckit-recovery/08-implementation-validation/migration-backfill-plan.md",
-      "sha256": "28507449107aa5ce302ffd74d06d4908b76698111844bbb62b26c4d08050234a",
+      "sha256": "44da4c80dd96634bd32a62da7c244ede1d14827949953cf2845455e4a3f40499",
       "kind": "migration_plan",
       "claim_scope": "workspace_status",
       "purpose": "Migration/backfill/cutover plan and evidence links",

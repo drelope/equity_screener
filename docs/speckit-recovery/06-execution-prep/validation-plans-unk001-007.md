@@ -87,3 +87,9 @@
 - No source/test/config modifications in recovery preparation.
 - No writes to shared databases; any DB-touching validation for UNK-005 must be isolated and non-persistent.
 - Record all outcomes in `decision-unknown-tracker.md` validation log with evidence paths.
+
+## Availability / conservative proxy policy (US1, 2026-11-18)
+
+For covered replay paths, a fact with unknown `available_at` or known-at timing is excluded or explicitly labeled as a conservative proxy. A proxy becomes approved only when all four items are recorded before it is used as acceptance evidence: data basis, approval owner, decision reference, and expiry/review date. An unrecorded proxy is not evidence of availability.
+
+This policy applies to RM-02 timing backfill, RM-03 dividend evidence, UNK-001 close basis, UNK-002 dividend amount basis, and UNK-003 survivor-vs-PIT comparison. It does not authorize consumer cutover or promotion claims.

@@ -48,13 +48,13 @@
 
 **Independent Test**: Replay the same historical date twice, including a security whose membership or filing availability changes after that date; the eligible inputs are identical and use no later information.
 
-- [ ] T009 [P] [US1] Verify explicit `as_of` handling for covered replay paths in `src/crispdm/pit.py` and `src/crispdm/feature_window.py` (FR-001, SC-001)
-- [ ] T010 [P] [US1] Verify membership interval structures in `docs/speckit-recovery/08-implementation-validation/sql-candidates/V0107_rm01_pit_membership.sql` (FR-002)
-- [ ] T011 [US1] Define approved delisting and reclassification backfill rules in `docs/speckit-recovery/08-implementation-validation/migration-backfill-plan.md` (FR-003)
-- [ ] T012 [P] [US1] Verify timing-column contract in `docs/speckit-recovery/08-implementation-validation/sql-candidates/V0108_rm02_pit_timing.sql` (FR-004)
-- [ ] T013 [US1] Record the availability/proxy policy for unknown timing in `docs/speckit-recovery/06-execution-prep/validation-plans-unk001-007.md` (FR-005, SC-002)
-- [ ] T014 [US1] Create the survivor-vs-PIT comparison artifact at `docs/speckit-recovery/08-implementation-validation/pit-delta-2026-11-18.md` (SC-002)
-- [ ] T015 [P] [US1] Run read-only backfill checks with `scripts/check_candidate_backfill_readiness.py` and save output under `docs/speckit-recovery/08-implementation-validation/sql-candidates/backfill/` (FR-002, FR-004, SC-002)
+- [X] T009 [P] [US1] Verify explicit `as_of` handling for covered replay paths in `src/crispdm/pit.py` and `src/crispdm/feature_window.py` (FR-001, SC-001)
+- [X] T010 [P] [US1] Verify membership interval structures in `docs/speckit-recovery/08-implementation-validation/sql-candidates/V0107_rm01_pit_membership.sql` (FR-002)
+- [X] T011 [US1] Define approved delisting and reclassification backfill rules in `docs/speckit-recovery/08-implementation-validation/migration-backfill-plan.md` (FR-003)
+- [X] T012 [P] [US1] Verify timing-column contract in `docs/speckit-recovery/08-implementation-validation/sql-candidates/V0108_rm02_pit_timing.sql` (FR-004)
+- [X] T013 [US1] Record the availability/proxy policy for unknown timing in `docs/speckit-recovery/06-execution-prep/validation-plans-unk001-007.md` (FR-005, SC-002)
+- [X] T014 [US1] Create the survivor-vs-PIT comparison artifact at `docs/speckit-recovery/08-implementation-validation/pit-delta-2026-11-18.md` (SC-002)
+- [X] T015 [P] [US1] Run read-only backfill checks with `scripts/check_candidate_backfill_readiness.py` and save output under `docs/speckit-recovery/08-implementation-validation/sql-candidates/backfill/` (FR-002, FR-004, SC-002)
 
 **Checkpoint**: PIT inputs, timing policy, and comparison evidence are independently reviewable.
 

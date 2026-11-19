@@ -152,3 +152,12 @@ sequence to repeat with approved data is in
 `sql-candidates/backfill/synthetic-cutover-dry-run.md`. This is rehearsal only:
 no source mapping, status taxonomy, feed precedence, dual-read, cutover, or
 promotion is established.
+
+### 7.7 Delisting and reclassification backfill rules (US1, 2026-11-18)
+
+- Populate `reference.securities.delisted_date` only from authoritative listing/exchange/filing evidence or an explicitly approved conservative proxy. Record source, run ID, and decision reference with each backfill.
+- Do not infer delisting from `active = FALSE`; current inactivity is not historical delisting evidence.
+- Reclassification and identity release/merge must preserve closed membership intervals or tombstones. Historical rows are never deleted for cleanup.
+- Membership intervals must be non-overlapping per security and reconciled before `reference.security_eligibility_asof` is treated as authoritative.
+- Unknown delisting dates remain NULL and are reported by the readiness checker; NULL does not mean still listed.
+- Until RM-01 membership backfill and survivor-vs-PIT comparison are approved, covered outputs retain survivor-biased, non-decision-grade labeling under EX-001/EX-004.
