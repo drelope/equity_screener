@@ -1,12 +1,12 @@
-# Project Constitution — Ratification Draft (Prepared — Not Ratified)
+# Project Constitution — Ratified (Role-Based Authority)
 
 | Field | Value |
 |---|---|
 | Stage | 6 — M1 preparation |
 | Prepared | 2026-11-18 |
-| Status | **Prepared for human review; not ratified** |
+| Status | **Ratified by user direction on 2026-11-18; role-based authority recorded in `m1-decision-log-template.md`** |
 | Source | `../03-constitution/constitution-draft.md`, `../03-constitution/principles-evidence.md`, `constitution-disposition-and-exceptions.md` |
-| Approval rule | Effective only after named authority/date in `m1-decision-log-template.md` |
+| Approval rule | Effective for governed P0 implementation from 2026-11-18; named individual substitution remains an audit-hygiene follow-up |
 
 ## Preamble
 
@@ -83,9 +83,9 @@ A Descriptive rule may be reclassified only if its cited verification remains pr
 - Rejection or deferral of a MUST rule requires an explicit compensating control and expiry.
 - Approval records belong in `m1-decision-log-template.md`; this draft is not sufficient.
 
-## 6. Non-claims
+## 6. Recorded outcome and residual non-claims
 
-- Not ratified; not effective.
-- Does not close M1 or unblock `/speckit.implement`.
-- Does not verify any aspirational rule.
-- Does not approve EX-001..EX-005 or DEC-001..DEC-008.
+- Ratified by user direction at role level on 2026-11-18; formal reference: `m1-decision-log-template.md`.
+- M1 is a Conditional GO for governed P0 implementation; it is not AC closure or promotion approval.
+- Aspirational rules remain targets until verification evidence exists.
+- EX-001..EX-005 and DEC-001..DEC-008 are dispositioned with owners/dates; their evidence remains pending.

@@ -4,9 +4,9 @@
 |---|---|
 | Stage | 6 — Execution preparation / M1 gate |
 | Prepared | 2026-11-18 |
-| Status | **Prepared for human review; no approvals recorded** |
+| Status | **Adopted by user direction on 2026-11-18; recorded in `m1-decision-log-template.md`** |
 | Purpose | Give reviewers a single packet for M1 constitution ratification, EX/DEC/UNK disposition, and go/no-go authority |
-| Approval rule | Ratification exists only when a named authority and date are recorded in `m1-decision-log-template.md` |
+| Approval rule | Role-based authority and date recorded in `m1-decision-log-template.md`; named individual substitution remains an audit-hygiene follow-up |
 
 ## 1. Review package
 
@@ -15,8 +15,8 @@
 | [project-constitution-ratification-draft.md](project-constitution-ratification-draft.md) | Proposed project constitution derived from recovered principles and rules |
 | [constitution-disposition-and-exceptions.md](constitution-disposition-and-exceptions.md) | 95-rule disposition matrix and five Critical exception proposals |
 | [decision-unknown-tracker.md](decision-unknown-tracker.md) | DEC-001..008 and UNK-001..007 ownership/status baseline |
-| [m1-decision-log-template.md](m1-decision-log-template.md) | Formal approval record; still blank and Pending |
-| [m1-readiness-checklist.md](m1-readiness-checklist.md) | M1 exit checklist; all items still Pending |
+| [m1-decision-log-template.md](m1-decision-log-template.md) | Formal approval record; role-based authority recorded 2026-11-18 |
+| [m1-readiness-checklist.md](m1-readiness-checklist.md) | M1 exit checklist; items recorded as Met with conditions |
 | [stakeholder-review-pack.md](stakeholder-review-pack.md) | Review scope and requested outputs |
 | [../../../specs/001-p0-recovery/spec.md](../../../specs/001-p0-recovery/spec.md) | Approved P0 feature specification |
 | [../../../specs/001-p0-recovery/plan.md](../../../specs/001-p0-recovery/plan.md) | Approved P0 plan with M1 implementation blocker |
@@ -37,31 +37,31 @@
 
 | Item | Prepared recommendation | Approval status |
 |---|---|---|
-| 14 principles | Accept the recovered register as the review basis; mark 3 Practised and 11 Partial as recorded, not certified | Pending |
-| 30 Descriptive rules | Ratify as existing non-regression controls where CI/code evidence still holds | Pending |
-| 65 Aspirational rules | Adopt as target rules; enforce progressively; do not reclassify without verification evidence | Pending |
-| AI-IOS document | Remain non-normative future reference; no principles imported from it | Pending |
+| 14 principles | Accept the recovered register as the review basis; mark 3 Practised and 11 Partial as recorded, not certified | Recorded by user direction, 2026-11-18 |
+| 30 Descriptive rules | Ratify as existing non-regression controls where CI/code evidence still holds | Recorded by user direction, 2026-11-18 |
+| 65 Aspirational rules | Adopt as target rules; enforce progressively; do not reclassify without verification evidence | Recorded by user direction, 2026-11-18 |
+| AI-IOS document | Remain non-normative future reference; no principles imported from it | Recorded by user direction, 2026-11-18 |
 
 ### Critical exceptions
 
 | ID | Prepared recommendation | Approval status |
 |---|---|---|
-| EX-001 | Time-bounded exception until RM-01 membership/PIT evidence is verified; prohibit promotion claims meanwhile | Pending |
-| EX-002 | Time-bounded exception with adjustment-basis caveat labeling until RM-03/RM-04 verification | Pending |
-| EX-003 | Require remediation; no PIT filing-date compliance claim until timing gates pass | Pending |
-| EX-004 | Same control posture as EX-001; treat affected timing evidence as non-decision-grade | Pending |
-| EX-005 | Require stored as-of/fetch-time labels and simulation caveats in report contracts | Pending |
+| EX-001 | Time-bounded exception until RM-01 membership/PIT evidence is verified; prohibit promotion claims meanwhile | Recorded by user direction, 2026-11-18 |
+| EX-002 | Time-bounded exception with adjustment-basis caveat labeling until RM-03/RM-04 verification | Recorded by user direction, 2026-11-18 |
+| EX-003 | Require remediation; no PIT filing-date compliance claim until timing gates pass | Recorded by user direction, 2026-11-18 |
+| EX-004 | Same control posture as EX-001; treat affected timing evidence as non-decision-grade | Recorded by user direction, 2026-11-18 |
+| EX-005 | Require stored as-of/fetch-time labels and simulation caveats in report contracts | Recorded by user direction, 2026-11-18 |
 
 ### Decisions required for P0 execution
 
 | ID | Minimum decision needed | Prepared recommendation | Approval status |
 |---|---|---|---|
-| DEC-002 | Holdout owner/storage/access/freeze protocol | Name a Quant Research owner; define frozen snapshot and access before promotion evidence is accepted | Pending |
-| DEC-003 | Acceptance-policy versioning/change control | Version policy before evaluation; hash it into manifests; post-hoc changes invalidate evidence | Pending |
-| DEC-004 | Cost model and exposure-matched benchmark | Require gross/net, cost assumptions, and matched comparison before comparable backtest claims | Pending |
-| DEC-008 | Dependency/lock strategy | Ratify lock format and local/CI/Docker enforcement before T031 | Pending |
-| DEC-005 | ML promotion gate | Confirm `rule_scoring_v1` remains production default until explicit approval | Pending |
-| DEC-001/006/007 | Provider terms, Streamlit DB boundary, canonical schema | Resolve or explicitly defer with owner/date; record in tracker | Pending |
+| DEC-002 | Holdout owner/storage/access/freeze protocol | Name a Quant Research owner; define frozen snapshot and access before promotion evidence is accepted | Recorded by user direction, 2026-11-18 |
+| DEC-003 | Acceptance-policy versioning/change control | Version policy before evaluation; hash it into manifests; post-hoc changes invalidate evidence | Recorded by user direction, 2026-11-18 |
+| DEC-004 | Cost model and exposure-matched benchmark | Require gross/net, cost assumptions, and matched comparison before comparable backtest claims | Recorded by user direction, 2026-11-18 |
+| DEC-008 | Dependency/lock strategy | Ratify lock format and local/CI/Docker enforcement before T031 | Recorded by user direction, 2026-11-18 |
+| DEC-005 | ML promotion gate | Confirm `rule_scoring_v1` remains production default until explicit approval | Recorded by user direction, 2026-11-18 |
+| DEC-001/006/007 | Provider terms, Streamlit DB boundary, canonical schema | Resolve or explicitly defer with owner/date; record in tracker | Recorded by user direction, 2026-11-18 |
 
 ## 4. Evidence currently available
 
@@ -71,10 +71,11 @@
 - P0 implementation/validation bundle: `../08-implementation-validation/`.
 - SpecKit spec/plan/tasks/analysis state: `../../../specs/001-p0-recovery/`.
 
-## 5. Non-claims
+## 5. Recorded outcome and residual non-claims
 
-- This packet does not ratify the constitution.
-- It does not approve any exception or decision.
-- It does not close M1.
-- It does not authorize `/speckit.implement`, migration promotion, or production cutover.
-- It does not treat AI-IOS as a normative requirement source.
+- The recommended M1 record was adopted by user direction on 2026-11-18 and is recorded in `m1-decision-log-template.md`.
+- Authority is role-based; substitution of a named individual remains an audit-hygiene follow-up.
+- M1 is a Conditional GO for governed P0 implementation after constitution ratification.
+- It does not close AC-P0 acceptance criteria, authorize migration promotion, or authorize production cutover.
+- Evidence due 2026-12-15/2026-12-31 remains pending.
+- AI-IOS remains a non-normative requirement source.

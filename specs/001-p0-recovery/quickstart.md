@@ -111,7 +111,7 @@ Expected: found bundle reads successfully; missing run exits 1; corrupted manife
 
 Stop and record a gate failure if:
 
-- M1 has not recorded the constitution disposition and no ratified project constitution exists; this blocks implementation before any code or data behavior change.
+- M1 disposition is missing from `docs/speckit-recovery/06-execution-prep/m1-decision-log-template.md` or the ratified constitution is absent from `.specify/memory/constitution.md`; this blocks implementation before any code or data behavior change.
 - Any checker that must fail while unapproved returns success.
 - Any write command is invoked without explicit acknowledgement flags.
 - Shared/production targets are used.

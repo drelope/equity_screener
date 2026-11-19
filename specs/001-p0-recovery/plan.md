@@ -4,7 +4,7 @@
 
 **Input**: Feature specification from `specs/001-p0-recovery/spec.md`
 
-**Status**: Approved at review-plan gate (2026-11-18) — tasks and analysis complete; implementation blocked until M1 ratification
+**Status**: Approved at review-plan gate (2026-11-18) — tasks and analysis complete; M1 ratified by user direction; implementation gate cleared
 
 ## Summary
 
@@ -46,9 +46,9 @@ The committed P0 work on `feature/speckit-recovery` provides scaffolding and evi
 
 ## Constitution Check
 
-**Gate status: BLOCKING IMPLEMENTATION UNTIL M1 RATIFICATION.**
+**Gate status: RATIFIED FOR GOVERNED IMPLEMENTATION (ROLE-BASED AUTHORITY).**
 
-`.specify/memory/constitution.md` is an unratified template. It contains placeholders rather than project principles, so no aspirational constitution rule can be enforced as an approved gate. M1 ratification remains a human action.
+`.specify/memory/constitution.md` was replaced with the ratified project constitution on 2026-11-18. Authority is recorded at role level in `docs/speckit-recovery/06-execution-prep/m1-decision-log-template.md`; named individual substitution is an audit-hygiene follow-up. Aspirational rules remain targets until verification evidence exists.
 
 | Principle area | Plan treatment | Evidence / residual gate |
 |---|---|---|
@@ -58,7 +58,7 @@ The committed P0 work on `feature/speckit-recovery` provides scaffolding and evi
 | Reproducibility | Lock drafts, manifest lock hashes, and CI gap reporter exist. | DEC-008 lock strategy and CI/Docker enforcement pending. |
 | No destructive evidence loss | Append-only stores, conflict refusal, and rollback rehearsals are used. | Retention/incident model pending; candidate promotion not approved. |
 
-No constitution violation is claimed because there is no ratified rule set. Draft planning and task generation are complete, but no implementation task may begin until M1 records the constitution disposition in `docs/speckit-recovery/06-execution-prep/m1-decision-log-template.md` and a ratified project constitution replaces the placeholder in `.specify/memory/constitution.md`. This is an implementation blocker, not a production-readiness label.
+No constitution violation is claimed. M1 disposition and EX/DEC/UNK outcomes are recorded in `docs/speckit-recovery/06-execution-prep/m1-decision-log-template.md`, and the ratified constitution is in `.specify/memory/constitution.md`. Governed implementation may begin; this is not production-readiness, AC closure, or promotion approval.
 
 ## Project Structure
 

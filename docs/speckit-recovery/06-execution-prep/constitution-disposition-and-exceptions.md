@@ -4,7 +4,7 @@
 |---|---|
 | Stage | 6 — Execution preparation (M1 draft) |
 | Date | 2026-11-15 |
-| Status | **Draft for stakeholder review; no approvals recorded** |
+| Status | **Draft source matrix; M1 dispositions recorded in `m1-decision-log-template.md` (2026-11-18)** |
 | Source | `docs/speckit-recovery/03-constitution/constitution-draft.md` (95 rules: 30 Descriptive, 65 Aspirational) |
 
 ## 1. Disposition instructions
