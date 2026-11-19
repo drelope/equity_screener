@@ -1,7 +1,7 @@
 {
   "schema": "p0_evidence_closeout/v1",
   "status": "draft_not_promotion_grade",
-  "generated_at_utc": "2026-11-18T17:00:00+00:00",
+  "generated_at_utc": "2026-11-18T17:30:00+00:00",
   "promotion_claim": false,
   "promotion_grade": false,
   "promotion_blockers": [
@@ -15,7 +15,7 @@
     {
       "id": "status",
       "path": "docs/speckit-recovery/08-implementation-validation/STATUS-2026-11-16.md",
-      "sha256": "9927438f184c7fd8e0aeaa5a734e2bd73f5edbbfe169dd7c2101be6960c47b21",
+      "sha256": "782463e90be126931682fafbe0bbac1808562879af51478268eafb0b22e191b3",
       "kind": "status_snapshot",
       "claim_scope": "workspace_status",
       "purpose": "Current workspace execution status and non-claims",
@@ -25,7 +25,7 @@
     {
       "id": "execution-log",
       "path": "docs/speckit-recovery/08-implementation-validation/execution-log.md",
-      "sha256": "0a878008ce98438ee5b4bb9dcc5f436e92fa2969f16c73cda49f0f5d062a8b9b",
+      "sha256": "7650c67bb99e9a57b4dcd060501753a9d2887d4530eb2303d3bc9a3f15da9dd3",
       "kind": "execution_log",
       "claim_scope": "execution_record",
       "purpose": "Command-level execution and validation record",
@@ -35,7 +35,7 @@
     {
       "id": "rtm",
       "path": "docs/speckit-recovery/08-implementation-validation/rtm-update-draft.md",
-      "sha256": "33cf944034019153b3177faf9535a0cf1cd8572deb086937c3a5cd68fd7311d6",
+      "sha256": "45a45b4b2fd06e2267f46706a5cc0457cc45a732aec37e6ce6fb603443c1b502",
       "kind": "rtm",
       "claim_scope": "execution_record",
       "purpose": "Requirement-to-evidence trace draft",
@@ -539,6 +539,16 @@
       "kind": "migration_plan",
       "claim_scope": "workspace_status",
       "purpose": "US6 governance verification",
+      "promotion_claim": false,
+      "status": "draft_not_promotion_grade"
+    },
+    {
+      "id": "p0-acceptance-tracker",
+      "path": "docs/speckit-recovery/08-implementation-validation/p0-acceptance-evidence-tracker.md",
+      "sha256": "abeecad7dfe7232cc1615d033d1d5b7897997aaac69431969029897a37fa1005",
+      "kind": "policy_draft",
+      "claim_scope": "draft_policy",
+      "purpose": "P0 acceptance evidence status and external gates",
       "promotion_claim": false,
       "status": "draft_not_promotion_grade"
     }
