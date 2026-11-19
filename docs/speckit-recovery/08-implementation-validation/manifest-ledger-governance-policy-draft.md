@@ -45,6 +45,19 @@ re-enable, post-incident review, and retained evidence. The break-glass role mus
 `dba_admin`, never an application writer/reader. None of this is implemented as a
 database role model yet.
 
+## Recorded M1 decisions (2026-11-18)
+
+M1 recorded DEC-002/003/005 outcomes with evidence due 2026-12-15. The following interim controls apply until evidence closes:
+
+- Acceptance policy must be versioned and post-hoc changes invalidate earlier evidence.
+- Frozen holdout ownership and access protocol must be named before promotion-grade evaluation.
+- `rule_scoring_v1` remains the production default until explicit ML promotion approval.
+- Purge, break-glass, and legal-hold actions remain export-then-drop with dual control and an appended event record.
+- The retention period remains unset pending legal/owner evidence; no retention job is authorized.
+- Role/grant candidates V0112/V0113 remain speculative until deployment role names and ownership are recorded and the database boundary tests pass.
+
+This section records governance disposition only. It is not retention implementation, role enforcement, or promotion approval.
+
 ## Approval Checklist
 
 1. Map policy roles to real deployment roles/owners and record the mapping.

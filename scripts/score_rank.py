@@ -13,6 +13,7 @@ from src.crispdm.feature_window import (
     scoring_features_sql,
 )
 from src.crispdm.features import db_value
+from src.crispdm.ledger_opt_in import persist_run_if_opted_in
 from src.crispdm.pit import normalize_as_of
 from src.crispdm.regime import MacroState, determine_market_regime
 from src.crispdm.regime_pipeline import apply_regime_layer, summarize
@@ -168,6 +169,14 @@ def main():
     # replayed over history; the nightly passes None and pivots on the newest row.
     as_of_arg = parse_as_of(sys.argv)
     as_of_arg_iso = normalize_as_of(as_of_arg)
+    args = type("LedgerArgs", (), {
+        "persist_ledger": "--persist-ledger" in sys.argv,
+        "ledger_dsn": next(
+            (sys.argv[i + 1] for i, a in enumerate(sys.argv) if a == "--ledger-dsn" and i + 1 < len(sys.argv)),
+            None,
+        ),
+        "i_understand_ledger_write": "--i-understand-ledger-write" in sys.argv,
+    })()
     prune_superseded, prune_reason = superseded_prune_decision(as_of_arg, sys.argv)
     if prune_reason:
         print(f"{as_of_arg}: {prune_reason}")
@@ -525,6 +534,23 @@ def main():
             / "manifest.json"
         )
         write_manifest_file(manifest, manifest_path)
+        ledger_result = persist_run_if_opted_in(
+            manifest=manifest,
+            outputs=[
+                {
+                    "output_kind": "score_rank_manifest",
+                    "storage_ref": str(manifest_path),
+                    "content_hash": manifest["hashes"]["manifest_core_hash"],
+                    "metadata": {"run_type": "score_rank"},
+                }
+            ],
+            dsn=getattr(args, "ledger_dsn", None),
+            enabled=getattr(args, "persist_ledger", False),
+            acknowledge=getattr(args, "i_understand_ledger_write", False),
+            recorded_by="scripts.score_rank",
+        )
+        if ledger_result is not None:
+            print(f"Ledger: {ledger_result['run_id']} persisted={ledger_result['inserted']}")
         print(f"\nRun id: {run_id}")
         print(f"Manifest: {manifest_path}")
     except Exception as exc:

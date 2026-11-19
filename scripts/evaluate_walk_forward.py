@@ -39,6 +39,7 @@ from sqlalchemy import text
 
 from src.crispdm.config import settings
 from src.crispdm.db import engine, read_df
+from src.crispdm.ledger_opt_in import persist_run_if_opted_in
 from src.crispdm.model import (
     FEATURES,
     MIN_PR_AUC_LIFT,
@@ -554,6 +555,9 @@ def main():
     parser.add_argument(
         "--out", type=Path, default=CHECKPOINT_PATH, help="Where to write the JSON checkpoint"
     )
+    parser.add_argument("--persist-ledger", action="store_true")
+    parser.add_argument("--ledger-dsn")
+    parser.add_argument("--i-understand-ledger-write", action="store_true")
     args = parser.parse_args()
 
     df = load_labeled_features()
@@ -709,6 +713,23 @@ def main():
         }
     except Exception as exc:
         print(f"Manifest write failed: {exc}")
+    ledger_result = persist_run_if_opted_in(
+        manifest=manifest,
+        outputs=[
+            {
+                "output_kind": "walk_forward_checkpoint",
+                "storage_ref": str(args.out),
+                "content_hash": manifest["hashes"]["manifest_core_hash"],
+                "metadata": {"readiness": checkpoint.get("readiness")},
+            }
+        ],
+        dsn=args.ledger_dsn,
+        enabled=args.persist_ledger,
+        acknowledge=args.i_understand_ledger_write,
+        recorded_by="scripts.evaluate_walk_forward",
+    )
+    if ledger_result is not None:
+        print(f"Ledger: {ledger_result['run_id']} persisted={ledger_result['inserted']}")
 
     persist(checkpoint)
     args.out.parent.mkdir(parents=True, exist_ok=True)

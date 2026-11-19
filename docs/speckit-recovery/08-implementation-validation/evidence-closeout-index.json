@@ -1,7 +1,7 @@
 {
   "schema": "p0_evidence_closeout/v1",
   "status": "draft_not_promotion_grade",
-  "generated_at_utc": "2026-11-18T12:00:00+00:00",
+  "generated_at_utc": "2026-11-18T13:00:00+00:00",
   "promotion_claim": false,
   "promotion_grade": false,
   "promotion_blockers": [
@@ -65,7 +65,7 @@
     {
       "id": "governance-policy-draft",
       "path": "docs/speckit-recovery/08-implementation-validation/manifest-ledger-governance-policy-draft.md",
-      "sha256": "1f0a93f5961f779f0566308399f7459c231adf1994f052ea5142a12492aaed8d",
+      "sha256": "12c1814c168f0e7ddc6a45ac683eb12f265c35c59ef3b8bee7e471746dc02f63",
       "kind": "governance_policy",
       "claim_scope": "draft_policy",
       "purpose": "Governance policy rationale and approval checklist",
@@ -399,6 +399,66 @@
       "kind": "governance_policy",
       "claim_scope": "draft_policy",
       "purpose": "Prepared project constitution draft; not ratified",
+      "promotion_claim": false,
+      "status": "draft_not_promotion_grade"
+    },
+    {
+      "id": "us1-verification",
+      "path": "docs/speckit-recovery/08-implementation-validation/us1-verification-2026-11-18.md",
+      "sha256": "76abab5f4f55e80c1335d801521cc300c3ec8f56deae15d1ac10f6f332f4f9e5",
+      "kind": "migration_plan",
+      "claim_scope": "workspace_status",
+      "purpose": "US1 PIT verification evidence",
+      "promotion_claim": false,
+      "status": "draft_not_promotion_grade"
+    },
+    {
+      "id": "pit-delta",
+      "path": "docs/speckit-recovery/08-implementation-validation/pit-delta-2026-11-18.md",
+      "sha256": "f883f80851080fdb33edf04e898afce57ab14a496d8d3ce08d9f7c3e87638729",
+      "kind": "migration_plan",
+      "claim_scope": "workspace_status",
+      "purpose": "Survivor-vs-PIT proxy comparison artifact",
+      "promotion_claim": false,
+      "status": "draft_not_promotion_grade"
+    },
+    {
+      "id": "us1-readiness",
+      "path": "docs/speckit-recovery/08-implementation-validation/sql-candidates/backfill/readiness-us1-2026-11-18.json",
+      "sha256": "031025f5a84f145c0d1adc18f8ef52749694586bd969ce7127a7a4c741d51242",
+      "kind": "backfill_readiness",
+      "claim_scope": "read_only_diagnostics",
+      "purpose": "US1 static readiness evidence",
+      "promotion_claim": false,
+      "status": "draft_not_promotion_grade"
+    },
+    {
+      "id": "us2-verification",
+      "path": "docs/speckit-recovery/08-implementation-validation/us2-verification-2026-11-18.md",
+      "sha256": "38bad6c3827080da47eba2df01b14a70938613ba760e034a262c5b2011148987",
+      "kind": "migration_plan",
+      "claim_scope": "workspace_status",
+      "purpose": "US2 evidence verification",
+      "promotion_claim": false,
+      "status": "draft_not_promotion_grade"
+    },
+    {
+      "id": "ledger-opt-in",
+      "path": "src/crispdm/ledger_opt_in.py",
+      "sha256": "e9fbe51018f0c29fa4d9d54f294297e4f1beac864f0e431e3f78710fa140ab5a",
+      "kind": "code_scaffolding",
+      "claim_scope": "draft_scaffolding",
+      "purpose": "Opt-in ledger persistence helper",
+      "promotion_claim": false,
+      "status": "draft_not_promotion_grade"
+    },
+    {
+      "id": "ledger-opt-in-tests",
+      "path": "tests/test_ledger_opt_in.py",
+      "sha256": "32fb75ab21907c8985e7e42f48e2dd4a9ce38b98bda66e07c572fe321da58e0e",
+      "kind": "ci_gate",
+      "claim_scope": "ci_gate",
+      "purpose": "Tests for opt-in ledger persistence helper",
       "promotion_claim": false,
       "status": "draft_not_promotion_grade"
     }

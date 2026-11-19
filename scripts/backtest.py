@@ -9,12 +9,14 @@ the metrics. The dashboard reads the newest complete run from that directory.
 
 from __future__ import annotations
 
+import argparse
 import json
 from pathlib import Path
 
 import pandas as pd
 
 from src.crispdm.backtest import run_from_warehouse
+from src.crispdm.ledger_opt_in import persist_run_if_opted_in
 from src.crispdm.pit import pit_manifest_metadata
 from src.crispdm.run_manifest import build_run_manifest, get_git_state, write_manifest_file
 
@@ -22,6 +24,11 @@ OUTPUT_DIR = Path(__file__).resolve().parents[1] / "artifacts" / "backtests"
 
 
 def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--persist-ledger", action="store_true")
+    parser.add_argument("--ledger-dsn")
+    parser.add_argument("--i-understand-ledger-write", action="store_true")
+    args = parser.parse_args()
     result = run_from_warehouse()
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     stamp = pd.Timestamp.now().strftime("%Y%m%d_%H%M%S")
@@ -78,6 +85,23 @@ def main() -> int:
     metrics_payload["promotion_evidence_status"] = "draft_scaffolding_only"
     metrics_path.write_text(json.dumps(metrics_payload, indent=2, sort_keys=True), encoding="utf-8")
     write_manifest_file(manifest, manifest_path)
+    ledger_result = persist_run_if_opted_in(
+        manifest=manifest,
+        outputs=[
+            {
+                "output_kind": "backtest_manifest",
+                "storage_ref": str(manifest_path),
+                "content_hash": manifest["hashes"]["manifest_core_hash"],
+                "metadata": {"run_type": "backtest"},
+            }
+        ],
+        dsn=args.ledger_dsn,
+        enabled=args.persist_ledger,
+        acknowledge=args.i_understand_ledger_write,
+        recorded_by="scripts.backtest",
+    )
+    if ledger_result is not None:
+        print(f"Ledger: {ledger_result['run_id']} persisted={ledger_result['inserted']}")
 
     print(
         f"periods: {len(result.periods)} (held {result.metrics['held_periods']}, "

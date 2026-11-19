@@ -66,13 +66,13 @@
 
 **Independent Test**: Produce a run, attempt a conflicting replacement, and confirm the original evidence remains unchanged while identical reruns are no-ops.
 
-- [ ] T016 [P] [US2] Verify manifest conflict and idempotency behavior in `src/crispdm/manifest_store.py` (FR-007, FR-008, FR-010, SC-003, SC-005)
-- [ ] T017 [P] [US2] Verify no-overwrite output storage in `src/crispdm/output_store.py` (FR-006, FR-009, FR-011, SC-004, SC-005)
-- [ ] T018 [US2] Wire opt-in ledger/output persistence into material runs after DEC-002/003/005 approval in `scripts/score_rank.py`, `scripts/backtest.py`, and `scripts/evaluate_walk_forward.py` (FR-008, FR-011)
-- [ ] T019 [US2] Rehearse append-only ledger DDL and rollback with `scripts/rehearse_p0_full.py` against `docs/speckit-recovery/08-implementation-validation/sql-candidates/V0110_rm04_run_manifest_ledger.sql` and `V0111_rm04_manifest_immutability.sql` (SC-004)
-- [ ] T020 [P] [US2] Review speculative grants and governance-event candidates in `docs/speckit-recovery/08-implementation-validation/sql-candidates/V0112_rm04_ledger_role_grants.sql` and `V0113_rm04_ledger_governance_events.sql` (FR-006, FR-022, SC-004)
-- [ ] T021 [US2] Complete retention and incident-response decisions in `docs/speckit-recovery/08-implementation-validation/manifest-ledger-governance-policy-draft.md` (FR-006, FR-022, FR-024)
-- [ ] T022 [US2] Archive run-keyed read and integrity evidence under `docs/speckit-recovery/08-implementation-validation/sql-candidates/backfill/` (FR-008, SC-003, SC-012)
+- [X] T016 [P] [US2] Verify manifest conflict and idempotency behavior in `src/crispdm/manifest_store.py` (FR-007, FR-008, FR-010, SC-003, SC-005)
+- [X] T017 [P] [US2] Verify no-overwrite output storage in `src/crispdm/output_store.py` (FR-006, FR-009, FR-011, SC-004, SC-005)
+- [X] T018 [US2] Wire opt-in ledger/output persistence into material runs after DEC-002/003/005 approval in `scripts/score_rank.py`, `scripts/backtest.py`, and `scripts/evaluate_walk_forward.py` (FR-008, FR-011)
+- [X] T019 [US2] Rehearse append-only ledger DDL and rollback with `scripts/rehearse_p0_full.py` against `docs/speckit-recovery/08-implementation-validation/sql-candidates/V0110_rm04_run_manifest_ledger.sql` and `V0111_rm04_manifest_immutability.sql` (SC-004)
+- [X] T020 [P] [US2] Review speculative grants and governance-event candidates in `docs/speckit-recovery/08-implementation-validation/sql-candidates/V0112_rm04_ledger_role_grants.sql` and `V0113_rm04_ledger_governance_events.sql` (FR-006, FR-022, SC-004)
+- [X] T021 [US2] Complete retention and incident-response decisions in `docs/speckit-recovery/08-implementation-validation/manifest-ledger-governance-policy-draft.md` (FR-006, FR-022, FR-024)
+- [X] T022 [US2] Archive run-keyed read and integrity evidence under `docs/speckit-recovery/08-implementation-validation/sql-candidates/backfill/` (FR-008, SC-003, SC-012)
 
 **Checkpoint**: Evidence immutability, retrieval, and governance preconditions are independently reviewable.
 
