@@ -19,6 +19,18 @@
 | DEC-007 | `sql/silver_schema.sql` disposition (archive non-runtime or adopt/document) and canonical schema declaration | Reduces schema ambiguity | `PE-21/23`, `ES-06`, `RK-12`, `TSK-006/007` | Data/Engineering Lead | 2026-12-15 | Approved outcome; evidence pending | `sql/schema.sql` is runtime canonical; mark silver schema non-runtime |
 | DEC-008 | Dependency/lock management approach (tooling, hash policy, CI/Docker/local install mode) | Needed for reproducible runtime | `NFR-REPRO-01/02`, `ES-09`, `RK-06`, `TSK-026` | Platform/DevOps Lead | 2026-12-15 | Ratified: exact pins plus lock-file SHA-256 (no per-package hashes) | Enforced in CI/Docker; manifest identity extended; clean-environment parity pending |
 
+## 1A. Critical exception register (EX-001..EX-005)
+
+M1 recorded the following time-bounded dispositions on 2026-11-18. Closure evidence remains due by 2026-12-31; no exception is closed.
+
+| ID | Requirement / risk | Disposition | Compensating control | Owner | Expiry / review | Authority / date | Status |
+|---|---|---|---|---|---|---|---|
+| EX-001 | FR-UNI-01, NFR-PIT-02, RK-01 | Time-bounded exception | Label historical outputs survivorship-biased; prohibit promotion claims; close via RM-01 PIT delta | Data/Quant Lead | 2026-12-31 | Governance Lead (role), 2026-11-18 | Open; time-bounded |
+| EX-002 | FR-DIV-07, RK-02 | Time-bounded exception | Adjustment-basis caveat labeling; close via RM-03/RM-04 evidence | Data Engineering + Quant | 2026-12-31 | Governance Lead (role), 2026-11-18 | Open; time-bounded |
+| EX-003 | NFR-PIT-01, RK-02 | Remediation required | No filing-time compliance claim until timing gates pass | Data Engineering Lead | 2026-12-31 | Governance Lead (role), 2026-11-18 | Open; remediation |
+| EX-004 | NFR-PIT-02, RK-01 | Time-bounded exception | Treat affected timing evidence as non-decision-grade | Data/QA Lead | 2026-12-31 | Governance Lead (role), 2026-11-18 | Open; time-bounded |
+| EX-005 | NFR-PIT-03/04/05, RK-09 | Time-bounded exception | Store/display as-of, fetch time, and simulation caveats | App/Data Lead | 2026-12-31 | Governance Lead (role), 2026-11-18 | Open; time-bounded |
+
 ## 2. Technical unknowns requiring targeted validation
 | ID | Unknown | Validation action | Evidence source / traceability | Proposed owner | Needed by | Status |
 |---|---|---|---|---|---|---|

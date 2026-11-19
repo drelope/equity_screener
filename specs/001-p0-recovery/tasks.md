@@ -135,11 +135,11 @@
 
 **Independent Test**: Review the governance register and verify every Critical gap has closure evidence or an owned, time-bounded exception with a compensating control.
 
-- [ ] T041 [P] [US6] Complete the critical exception register in `docs/speckit-recovery/06-execution-prep/decision-unknown-tracker.md` (FR-022, SC-010)
-- [ ] T042 [US6] Ratify M1 decisions in `docs/speckit-recovery/06-execution-prep/m1-decision-log-template.md` (FR-023, SC-010)
-- [ ] T043 [US6] Block promotion claims when required evidence is missing in `scripts/check_promotion_evidence.py` (FR-024, SC-011)
-- [ ] T044 [P] [US6] Verify preserved security and least-privilege controls in `tests/test_api.py` and `tests/test_ops_catalog.py` (FR-025)
-- [ ] T045 [US6] Update requirement-to-evidence traceability in `docs/speckit-recovery/08-implementation-validation/rtm-update-draft.md` (SC-012)
+- [X] T041 [P] [US6] Complete the critical exception register in `docs/speckit-recovery/06-execution-prep/decision-unknown-tracker.md` (FR-022, SC-010)
+- [X] T042 [US6] Ratify M1 decisions in `docs/speckit-recovery/06-execution-prep/m1-decision-log-template.md` (FR-023, SC-010)
+- [X] T043 [US6] Block promotion claims when required evidence is missing in `scripts/check_promotion_evidence.py` (FR-024, SC-011)
+- [X] T044 [P] [US6] Verify preserved security and least-privilege controls in `tests/test_api.py` and `tests/test_ops_catalog.py` (FR-025)
+- [X] T045 [US6] Update requirement-to-evidence traceability in `docs/speckit-recovery/08-implementation-validation/rtm-update-draft.md` (SC-012)
 
 **Checkpoint**: Governance gates are explicit and no critical gap is implicit.
 

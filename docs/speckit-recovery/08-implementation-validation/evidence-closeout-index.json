@@ -1,7 +1,7 @@
 {
   "schema": "p0_evidence_closeout/v1",
   "status": "draft_not_promotion_grade",
-  "generated_at_utc": "2026-11-18T15:00:00+00:00",
+  "generated_at_utc": "2026-11-18T16:00:00+00:00",
   "promotion_claim": false,
   "promotion_grade": false,
   "promotion_blockers": [
@@ -35,7 +35,7 @@
     {
       "id": "rtm",
       "path": "docs/speckit-recovery/08-implementation-validation/rtm-update-draft.md",
-      "sha256": "e654b0654e65cad5cff2f5ffb8e61dabb0a67cff3b3e841636addd3bfc61c350",
+      "sha256": "60a209c5f8b5ef16ff7a2e78c498ed9e61e56c268c3963776f7f6b47e0a46e52",
       "kind": "rtm",
       "claim_scope": "execution_record",
       "purpose": "Requirement-to-evidence trace draft",
@@ -529,6 +529,16 @@
       "kind": "policy_draft",
       "claim_scope": "draft_policy",
       "purpose": "UNK-004 UI verification checklist with static evidence",
+      "promotion_claim": false,
+      "status": "draft_not_promotion_grade"
+    },
+    {
+      "id": "us6-verification",
+      "path": "docs/speckit-recovery/08-implementation-validation/us6-verification-2026-11-18.md",
+      "sha256": "3c3cca10151fcdea3a138bd66acf8a37cf38cf9105a07707444a789ced8121c2",
+      "kind": "migration_plan",
+      "claim_scope": "workspace_status",
+      "purpose": "US6 governance verification",
       "promotion_claim": false,
       "status": "draft_not_promotion_grade"
     }
