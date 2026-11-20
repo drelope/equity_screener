@@ -12,7 +12,7 @@ M1 approval authority
 
 M1 approval record (supersedes commit 86f6a59; new commit, no history rewrite):
 - approver name [PENDING]
-- approval date [PENDING]
+- approval date: 2026-11-19 (owner-supplied; not effective until CI run URL and approved SHA are recorded)
 - repository: https://github.com/drelope/equity_screener
 - CI run URL [PENDING]
 - approved SHA [PENDING]

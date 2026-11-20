@@ -9,7 +9,7 @@
 
 > **Instructions:** Complete during/after stakeholder review. Attach or link evidence artifacts. Do not backfill approvals without authority/date.
 >
-> **Preparation basis:** Recommendations were prepared in `m1-ratification-packet-2026-11-18.md` and `project-constitution-ratification-draft.md`. The M1 approval record supersedes commit `86f6a59` by a new commit without history rewrite: approver name [PENDING], approval date [PENDING], repository: https://github.com/drelope/equity_screener, CI run URL [PENDING], approved SHA [PENDING]. These fields are not effective approval or CI evidence.
+> **Preparation basis:** Recommendations were prepared in `m1-ratification-packet-2026-11-18.md` and `project-constitution-ratification-draft.md`. The M1 approval record supersedes commit `86f6a59` by a new commit without history rewrite: approver name [PENDING], owner-supplied approval date 2026-11-19, repository: https://github.com/drelope/equity_screener, CI run URL [PENDING], approved SHA [PENDING]. These fields are not effective approval or CI evidence.
 
 ## 1. Review session record
 
@@ -78,7 +78,7 @@
 **M1 status:** Pending formal approval; merge and release blocked
 **Approval record:** supersedes `86f6a59` by new commit; no history rewrite
 **approver name:** [PENDING]
-**approval date:** [PENDING]
+**approval date:** 2026-11-19 (owner-supplied; not effective until CI run URL and approved SHA are recorded)
 **repository:** https://github.com/drelope/equity_screener
 **CI run URL:** [PENDING]
 **approved SHA:** [PENDING]
