@@ -4,12 +4,12 @@
 |---|---|
 | Stage | 6 — Execution preparation / M1 gate |
 | Date | 2026-11-15 (template created) |
-| Status | **Prepared for external approval; no M1 approval or CI evidence supplied** |
+| Status | **Owner-supplied inputs recorded; no effective M1 approval or CI status** |
 | Purpose | Record formal approvals, dispositions, and decision outcomes required for M1 exit |
 
 > **Instructions:** Complete during/after stakeholder review. Attach or link evidence artifacts. Do not backfill approvals without authority/date.
 >
-> **Preparation basis:** Recommendations were prepared in `m1-ratification-packet-2026-11-18.md` and `project-constitution-ratification-draft.md`. The named approver/CI evidence has been requested from the approver/team but not supplied. No approval, ratification, or CI status is recorded here.
+> **Preparation basis:** Recommendations were prepared in `m1-ratification-packet-2026-11-18.md` and `project-constitution-ratification-draft.md`. Owner-supplied inputs: approver `Andre`, date `11/19/2025`, and repository URL `https://github.com/drelope/equity_screener`. The supplied date predates the current workspace date `2026-11-19`, and the URL is a repository URL rather than a CI run URL. These inputs are recorded but not treated as effective approval or CI evidence.
 
 ## 1. Review session record
 
@@ -17,9 +17,9 @@
 |---|---|
 | Session date/time | Pending external review |
 | Facilitator | Pending |
-| Participants (name/role) | Pending |
+| Participants (name/role) | Owner-supplied approver name: Andre; formal review status Pending |
 | Artifacts reviewed | `stakeholder-review-pack.md`, `../05-speckit/executive-summary.md`, `constitution-disposition-and-exceptions.md`, `m2-specify-p0.md`, `m2-plan-p0.md`, `m2-tasks-p0.md`, others: |
-| Scope confirmed (yes/no + notes) | Pending external review |
+| Scope confirmed (yes/no + notes) | Pending formal confirmation; owner-supplied identity/URL recorded only |
 | Go/No-Go to proceed to M2 drafting (pending/yes/no) | Pending; no approval evidence supplied |
 
 ## 2. Constitution ratification
@@ -73,10 +73,12 @@
 | EX-001..EX-005 resolved or time-bounded with controls/expiry | Met | Time-bounded to 2026-12-31 with controls |
 | DEC-002/003/004/008 sufficient for M2 drafting | Met | Outcomes recorded; evidence due 2026-12-15 |
 | UNK-001..007 owners/dates/plans assigned | Met | Assigned in section 5 |
-| Approved to convert P0 M2 drafts to traced execution artifacts | Pending | No approval evidence supplied |
+| Approved to convert P0 M2 drafts to traced execution artifacts | Pending | Owner-supplied identity/date/URL recorded; no effective approval or CI run evidence |
 
-**M1 status:** Pending external approval; merge and release blocked
-**Authorized by / date:** Pending
+**M1 status:** Pending formal approval; merge and release blocked
+**Owner-supplied identity/date:** Andre / 11/19/2025 (not effective; date confirmation required)
+**Owner-supplied URL:** https://github.com/drelope/equity_screener (repository URL, not a CI run URL)
+**Authorized by / date:** Not recorded
 **Next review date:** Pending
 
 

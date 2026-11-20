@@ -34,10 +34,10 @@
 
 ## Required external evidence package
 
-1. Named individual substitution for role-based M1 authority.
+1. Confirm or correct the owner-supplied approver/date (`Andre` / `11/19/2025`) and record effective M1 approval only after confirmation.
 2. DEC-001..008 and UNK-001..007 closure evidence or approved exceptions.
 3. Interactive Reports Center verification (`unk004-ui-verification-checklist.md`).
-4. External CI run URL/log and container build proof.
+4. External CI run URL/log and container build proof; the supplied repository URL is not a CI run URL.
 5. Controlled PIT recompute, survivor-vs-PIT delta, and approved basis decisions.
 6. Frozen holdout, acceptance-policy version, cost model, exposure-matched benchmark, and net-return evidence.
 7. Final AC review with named approver and decision date.
@@ -46,12 +46,20 @@
 
 | Gate | Check | Result | Consequence |
 |---|---|---|---|
-| Named M1 approver | Search M1 log and git identity | M1 log records role-based authority only; git identity is `drelo <drelo@localhost>` and is not an authoritative approver record | Named approver substitution remains externally blocked; do not infer approval from git config |
-| External CI | `git remote -v` and `gh` availability | No git remote configured; `gh` is not installed | No external CI URL/log can be retrieved from this workspace; AC-P0-11 remains partial |
+| Named M1 approver | Owner-supplied input | Owner supplied `Andre` with date `11/19/2025`; date predates current workspace date `2026-11-19`, so confirmation is required | Not effective approval; do not mark M1 complete |
+| External CI | Owner-supplied URL and local tooling check | Owner supplied `https://github.com/drelope/equity_screener` (repository URL, not a CI run URL); no git remote configured; `gh` is not installed | No external CI run URL/log; AC-P0-09/AC-P0-11 remain partial |
 | Branch publication | `git branch -vv` | `feature/speckit-recovery` is local-only; no upstream | Branch must be pushed to a remote with CI before an external run can exist |
+
+## Owner-supplied inputs (not effective)
+
+| Input | Supplied value | Caveat |
+|---|---|---|
+| Approver | Andre | Owner-supplied; no effective approval recorded |
+| Date | 11/19/2025 | Predates current workspace date 2026-11-19; confirmation required |
+| URL | https://github.com/drelope/equity_screener | Repository URL, not a CI run URL |
 
 ## Non-claims
 
-- This tracker does not close any AC-P0 criterion.
+- This tracker does not close any AC-P0 criterion or record effective M1 approval/CI status.
 - It does not authorize migration promotion, production cutover, or performance claims.
 - It does not convert local scaffolding into external acceptance evidence.

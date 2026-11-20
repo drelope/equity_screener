@@ -1,7 +1,7 @@
 {
   "schema": "p0_evidence_closeout/v1",
   "status": "draft_not_promotion_grade",
-  "generated_at_utc": "2026-11-18T19:00:00+00:00",
+  "generated_at_utc": "2026-11-19T00:00:00+00:00",
   "promotion_claim": false,
   "promotion_grade": false,
   "promotion_blockers": [
@@ -25,7 +25,7 @@
     {
       "id": "execution-log",
       "path": "docs/speckit-recovery/08-implementation-validation/execution-log.md",
-      "sha256": "c3577febd0c3d1e1792d4531ac19eaeed36b7f8e30d3ea72693f9fb6657b21c5",
+      "sha256": "529860f1c8ad8d67b3f785fc01233fe90fa042002e48510ef63213528deef4db",
       "kind": "execution_log",
       "claim_scope": "execution_record",
       "purpose": "Command-level execution and validation record",
@@ -545,7 +545,7 @@
     {
       "id": "p0-acceptance-tracker",
       "path": "docs/speckit-recovery/08-implementation-validation/p0-acceptance-evidence-tracker.md",
-      "sha256": "a545446833949a015088f5c7649f52c9a56ccc03e7ce0927132e180f12e6cc87",
+      "sha256": "e5d85369b45d9f5b9ffc9bfe43ef4f059cffcf52d3d78440dd3f3625cab73388",
       "kind": "policy_draft",
       "claim_scope": "draft_policy",
       "purpose": "P0 acceptance evidence status and external gates",
@@ -575,7 +575,7 @@
     {
       "id": "governance-draft",
       "path": "GOVERNANCE.md",
-      "sha256": "afe3a179709c50ced4cb643e55ec8ee49732c9dad77b5b64d438fb1c239fcc7a",
+      "sha256": "72088b978ffac83e2780c3460a59d327933c484af47785f8989f74c882b816b4",
       "kind": "governance_policy",
       "claim_scope": "draft_policy",
       "purpose": "Draft governance structure with owner placeholders",
