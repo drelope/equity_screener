@@ -24,7 +24,7 @@
 
 ## 2. Constitution ratification
 
-| Item | Decision (ratified/modified/deferred/rejected) | Authority | Date | Evidence/notes |
+| Item | Decision (approve/modify/defer/reject) | Authority | Date | Evidence/notes |
 |---|---|---|---|---|
 | 14 principles (PE-01..30 basis) | Pending review: 3 Practised, 11 Partial recorded as evidence snapshot | Pending | Pending | No approval recorded |
 | 95-rule disposition batch (see `constitution-disposition-and-exceptions.md`) | Pending review: 30 Descriptive, 65 Aspirational proposed | Pending | Pending | No approval recorded |

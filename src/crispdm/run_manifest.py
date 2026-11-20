@@ -27,7 +27,7 @@ LOCK_STRATEGY_VERSION = "1.0.0"
 
 
 def get_dependency_lock_hashes(root: str | Path | None = None) -> dict[str, str | None]:
-    """Return ratified dependency identity for known lock artifacts.
+    """Return dependency identity for known lock artifacts.
 
     Missing files are reported as ``None`` so manifests can record partial state.
     With ``root`` provided, only that path is searched; otherwise cwd and the

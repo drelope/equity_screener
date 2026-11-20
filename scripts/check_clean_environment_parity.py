@@ -1,4 +1,4 @@
-"""Verify that both ratified lock files produce stable, matching identity metadata."""
+"""Verify that both exact-pin lock files produce stable, matching identity metadata."""
 
 from __future__ import annotations
 

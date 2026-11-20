@@ -1,21 +1,21 @@
 {
   "schema": "p0_evidence_closeout/v1",
   "status": "draft_not_promotion_grade",
-  "generated_at_utc": "2026-11-18T18:45:00+00:00",
+  "generated_at_utc": "2026-11-18T19:00:00+00:00",
   "promotion_claim": false,
   "promotion_grade": false,
   "promotion_blockers": [
     "M1/EX/DEC/UNK approvals pending",
     "candidate migrations not promoted to sql/migrations",
     "holdout/cost/benchmark/promotion evidence incomplete",
-    "DEC-008 lock strategy not ratified",
+    "DEC-008 lock strategy approval pending",
     "no owner/DBA sign-off for shared deployment"
   ],
   "artifacts": [
     {
       "id": "status",
       "path": "docs/speckit-recovery/08-implementation-validation/STATUS-2026-11-16.md",
-      "sha256": "0a70f7e9c0fd36df4332637cdebbedce24b3c5b7391b6efe7a6b8533fe3ca8f5",
+      "sha256": "2823353501d2682a913fc40677c984c55aa67bf7abbd2e742feec6443a0525e4",
       "kind": "status_snapshot",
       "claim_scope": "workspace_status",
       "purpose": "Current workspace execution status and non-claims",
@@ -25,7 +25,7 @@
     {
       "id": "execution-log",
       "path": "docs/speckit-recovery/08-implementation-validation/execution-log.md",
-      "sha256": "ab415294b65d6d2fc5526ffb39bcdf695492ff02b0c8699f1e7975ab19999517",
+      "sha256": "c3577febd0c3d1e1792d4531ac19eaeed36b7f8e30d3ea72693f9fb6657b21c5",
       "kind": "execution_log",
       "claim_scope": "execution_record",
       "purpose": "Command-level execution and validation record",
@@ -35,7 +35,7 @@
     {
       "id": "rtm",
       "path": "docs/speckit-recovery/08-implementation-validation/rtm-update-draft.md",
-      "sha256": "fa3d6f1da23c62538399787c2848a0384bb9af3fb2dec763dfcf46cf858244c5",
+      "sha256": "86cd4cd878b62e01b4d656ee4804eec213b57eec95be182bb7c209f78cfc6273",
       "kind": "rtm",
       "claim_scope": "execution_record",
       "purpose": "Requirement-to-evidence trace draft",
@@ -305,7 +305,7 @@
     {
       "id": "evidence-gate",
       "path": "scripts/check_evidence_closeout.py",
-      "sha256": "6f125975189bb9825c478f853bc7df0ac1dd581c4a562753f4547bc002c432cb",
+      "sha256": "c98371428b319249bacff143f400f744b04ac875a874e056fee9e6aabf3893a6",
       "kind": "ci_gate",
       "claim_scope": "ci_gate",
       "purpose": "Non-promotion evidence closeout checker",
@@ -325,7 +325,7 @@
     {
       "id": "reproducibility-enforcement-checker",
       "path": "scripts/check_reproducibility_enforcement.py",
-      "sha256": "388511d8fc3e22d5c3ce60fa896ff018efaf2f26fef919305f8b0492828389bc",
+      "sha256": "3dd0cd7464f288f7e60463c450cd184ff66dacb98913ab26bf0dee4ac70c0a91",
       "kind": "ci_gate",
       "claim_scope": "ci_gate",
       "purpose": "RM-06 draft lock-enforcement gap reporter",
@@ -495,7 +495,7 @@
     {
       "id": "clean-env-parity",
       "path": "scripts/check_clean_environment_parity.py",
-      "sha256": "950e2c96f6765810ddb36586ff598dee020a03c4887561ebcd060862504beaa2",
+      "sha256": "11a102f6584a83450c635d6a2f66a595546b42ed4ab969b63ee339042d75b860",
       "kind": "ci_gate",
       "claim_scope": "ci_gate",
       "purpose": "Clean-environment lock parity checker",
@@ -545,10 +545,50 @@
     {
       "id": "p0-acceptance-tracker",
       "path": "docs/speckit-recovery/08-implementation-validation/p0-acceptance-evidence-tracker.md",
-      "sha256": "46620dc724930c689200abe743efef47a6f390261b6cfbebb12318575b9e93d1",
+      "sha256": "a545446833949a015088f5c7649f52c9a56ccc03e7ce0927132e180f12e6cc87",
       "kind": "policy_draft",
       "claim_scope": "draft_policy",
       "purpose": "P0 acceptance evidence status and external gates",
+      "promotion_claim": false,
+      "status": "draft_not_promotion_grade"
+    },
+    {
+      "id": "m1-corrections-audit",
+      "path": "docs/M1_CORRECTIONS_AUDIT.md",
+      "sha256": "cb8f7938b9961e96b54643cd12a70f505f7ab1cde0d58040ed48ca6b35352967",
+      "kind": "governance_policy",
+      "claim_scope": "draft_policy",
+      "purpose": "M1 correction audit and before/after record",
+      "promotion_claim": false,
+      "status": "draft_not_promotion_grade"
+    },
+    {
+      "id": "m1-claim-scan",
+      "path": "docs/M1_CLAIM_SCAN_REPORT.md",
+      "sha256": "f44a04b55e867e8da4ee0bbee4bc606afca60adab557f2cf009df7c8fabb3288",
+      "kind": "governance_policy",
+      "claim_scope": "draft_policy",
+      "purpose": "Full leftover-claim scan report",
+      "promotion_claim": false,
+      "status": "draft_not_promotion_grade"
+    },
+    {
+      "id": "governance-draft",
+      "path": "GOVERNANCE.md",
+      "sha256": "afe3a179709c50ced4cb643e55ec8ee49732c9dad77b5b64d438fb1c239fcc7a",
+      "kind": "governance_policy",
+      "claim_scope": "draft_policy",
+      "purpose": "Draft governance structure with owner placeholders",
+      "promotion_claim": false,
+      "status": "draft_not_promotion_grade"
+    },
+    {
+      "id": "m1-review-checklist",
+      "path": "docs/M1_REVIEW_CHECKLIST.md",
+      "sha256": "4e0064c30b0f4f7a174634de6ba08e6a28ee9ddece1921cec72e7d8930d277f2",
+      "kind": "governance_policy",
+      "claim_scope": "draft_policy",
+      "purpose": "Draft time-separated M1 self-review checklist",
       "promotion_claim": false,
       "status": "draft_not_promotion_grade"
     }

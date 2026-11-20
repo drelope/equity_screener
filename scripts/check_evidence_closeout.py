@@ -204,7 +204,7 @@ def check_live_draft_state(root: Path) -> list[str]:
     if "approval pending" not in text:
         errs.append("reproducibility policy does not mark DEC-008 approval as pending")
     if "exact pins plus lock-file SHA-256" not in text:
-        errs.append("reproducibility policy lost the ratified lock strategy")
+        errs.append("reproducibility policy lost the proposed lock strategy")
     return errs
 
 

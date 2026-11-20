@@ -1,6 +1,6 @@
 """Report RM-06 lock-enforcement status without claiming clean-environment parity.
 
-The checker is read-only. It inspects CI, Docker, manifest source, and the ratified
+The checker is read-only. It inspects CI, Docker, manifest source, and the proposed
 DEC-008 policy. Exit 0 means local enforcement checks pass; exit 1 means an
 artifact is missing/unreadable, a gap remains, or ``--require-enforced`` is
 requested before parity evidence exists. Exit 2 is usage error.
@@ -93,7 +93,7 @@ def check_policy(text: str) -> list[str]:
     if "approval pending" not in normalized:
         gaps.append("reproducibility policy does not mark DEC-008 approval as pending")
     if "exact pins plus lock-file SHA-256" not in normalized:
-        gaps.append("reproducibility policy does not record the ratified lock strategy")
+        gaps.append("reproducibility policy does not record the proposed lock strategy")
     return gaps
 
 
