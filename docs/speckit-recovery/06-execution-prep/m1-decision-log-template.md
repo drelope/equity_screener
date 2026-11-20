@@ -9,7 +9,7 @@
 
 > **Instructions:** Complete during/after stakeholder review. Attach or link evidence artifacts. Do not backfill approvals without authority/date.
 >
-> **Preparation basis:** Recommendations were prepared in `m1-ratification-packet-2026-11-18.md` and `project-constitution-ratification-draft.md`. Owner-supplied inputs: approver `Andre`, date `11/19/2025`, and repository URL `https://github.com/drelope/equity_screener`. The supplied date predates the current workspace date `2026-11-19`, and the URL is a repository URL rather than a CI run URL. These inputs are recorded but not treated as effective approval or CI evidence.
+> **Preparation basis:** Recommendations were prepared in `m1-ratification-packet-2026-11-18.md` and `project-constitution-ratification-draft.md`. The M1 approval record supersedes commit `86f6a59` by a new commit without history rewrite: approver name [PENDING], approval date [PENDING], repository: https://github.com/drelope/equity_screener, CI run URL [PENDING], approved SHA [PENDING]. These fields are not effective approval or CI evidence.
 
 ## 1. Review session record
 
@@ -17,7 +17,7 @@
 |---|---|
 | Session date/time | Pending external review |
 | Facilitator | Pending |
-| Participants (name/role) | Owner-supplied approver name: Andre; formal review status Pending |
+| Participants (name/role) | [PENDING]; formal review status Pending |
 | Artifacts reviewed | `stakeholder-review-pack.md`, `../05-speckit/executive-summary.md`, `constitution-disposition-and-exceptions.md`, `m2-specify-p0.md`, `m2-plan-p0.md`, `m2-tasks-p0.md`, others: |
 | Scope confirmed (yes/no + notes) | Pending formal confirmation; owner-supplied identity/URL recorded only |
 | Go/No-Go to proceed to M2 drafting (pending/yes/no) | Pending; no approval evidence supplied |
@@ -76,8 +76,12 @@
 | Approved to convert P0 M2 drafts to traced execution artifacts | Pending | Owner-supplied identity/date/URL recorded; no effective approval or CI run evidence |
 
 **M1 status:** Pending formal approval; merge and release blocked
-**Owner-supplied identity/date:** Andre / 11/19/2025 (not effective; date confirmation required)
-**Owner-supplied URL:** https://github.com/drelope/equity_screener (repository URL, not a CI run URL)
+**Approval record:** supersedes `86f6a59` by new commit; no history rewrite
+**approver name:** [PENDING]
+**approval date:** [PENDING]
+**repository:** https://github.com/drelope/equity_screener
+**CI run URL:** [PENDING]
+**approved SHA:** [PENDING]
 **Authorized by / date:** Not recorded
 **Next review date:** Pending
 

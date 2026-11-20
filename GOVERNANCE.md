@@ -10,8 +10,10 @@ M1 approval authority
 - Agents and git identities cannot approve
 - Approval record location: [TO BE DEFINED]
 
-Owner-supplied inputs (not effective):
-- Approver name supplied: Andre
-- Date supplied: 11/19/2025 (year predates the current workspace date 2026-11-19; confirmation required)
-- URL supplied: https://github.com/drelope/equity_screener (repository URL, not a CI run URL)
-- Status: no effective approval or CI status recorded; merge and release remain blocked
+M1 approval record (supersedes commit 86f6a59; new commit, no history rewrite):
+- approver name [PENDING]
+- approval date [PENDING]
+- repository: https://github.com/drelope/equity_screener
+- CI run URL [PENDING]
+- approved SHA [PENDING]
+- Status: M1 approval, CI status, merge, release, push, and tag are BLOCKED
