@@ -1,10 +1,10 @@
-# Project Constitution — Ratified (Role-Based Authority)
+# Project Constitution — Ratification Draft
 
 | Field | Value |
 |---|---|
 | Stage | 6 — M1 preparation |
 | Prepared | 2026-11-18 |
-| Status | **Ratified by user direction on 2026-11-18; role-based authority recorded in `m1-decision-log-template.md`** |
+| Status | **Prepared for external approval; no approval evidence supplied** |
 | Source | `../03-constitution/constitution-draft.md`, `../03-constitution/principles-evidence.md`, `constitution-disposition-and-exceptions.md` |
 | Approval rule | Effective for governed P0 implementation from 2026-11-18; named individual substitution remains an audit-hygiene follow-up |
 
@@ -85,7 +85,7 @@ A Descriptive rule may be reclassified only if its cited verification remains pr
 
 ## 6. Recorded outcome and residual non-claims
 
-- Ratified by user direction at role level on 2026-11-18; formal reference: `m1-decision-log-template.md`.
-- M1 is a Conditional GO for governed P0 implementation; it is not AC closure or promotion approval.
+- Prepared as a recommendation in `m1-decision-log-template.md`; no approval evidence supplied.
+- M1 approval is pending; merge, release, promotion, and cutover remain blocked.
 - Aspirational rules remain targets until verification evidence exists.
 - EX-001..EX-005 and DEC-001..DEC-008 are dispositioned with owners/dates; their evidence remains pending.

@@ -4,7 +4,7 @@
 
 **Created**: 2026-11-16
 
-**Status**: Approved for implementation — review-spec and review-plan gates approved; M1 ratified by user direction (2026-11-18)
+**Status**: Approved at review-spec/review-plan; local implementation validation complete; M1/CI evidence pending; merge and release blocked
 
 **Input**: Recover the P0 foundations of the equity/dividend research platform so historical results are point-in-time correct, decision evidence is immutable and run-addressable, evaluation inputs are decision-grade, runtime is reproducible, and blocking verification gates prevent silent regressions.
 

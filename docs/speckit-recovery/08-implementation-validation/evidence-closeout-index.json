@@ -1,7 +1,7 @@
 {
   "schema": "p0_evidence_closeout/v1",
   "status": "draft_not_promotion_grade",
-  "generated_at_utc": "2026-11-18T17:30:00+00:00",
+  "generated_at_utc": "2026-11-18T18:45:00+00:00",
   "promotion_claim": false,
   "promotion_grade": false,
   "promotion_blockers": [
@@ -15,7 +15,7 @@
     {
       "id": "status",
       "path": "docs/speckit-recovery/08-implementation-validation/STATUS-2026-11-16.md",
-      "sha256": "782463e90be126931682fafbe0bbac1808562879af51478268eafb0b22e191b3",
+      "sha256": "0a70f7e9c0fd36df4332637cdebbedce24b3c5b7391b6efe7a6b8533fe3ca8f5",
       "kind": "status_snapshot",
       "claim_scope": "workspace_status",
       "purpose": "Current workspace execution status and non-claims",
@@ -25,7 +25,7 @@
     {
       "id": "execution-log",
       "path": "docs/speckit-recovery/08-implementation-validation/execution-log.md",
-      "sha256": "7650c67bb99e9a57b4dcd060501753a9d2887d4530eb2303d3bc9a3f15da9dd3",
+      "sha256": "ab415294b65d6d2fc5526ffb39bcdf695492ff02b0c8699f1e7975ab19999517",
       "kind": "execution_log",
       "claim_scope": "execution_record",
       "purpose": "Command-level execution and validation record",
@@ -35,7 +35,7 @@
     {
       "id": "rtm",
       "path": "docs/speckit-recovery/08-implementation-validation/rtm-update-draft.md",
-      "sha256": "45a45b4b2fd06e2267f46706a5cc0457cc45a732aec37e6ce6fb603443c1b502",
+      "sha256": "fa3d6f1da23c62538399787c2848a0384bb9af3fb2dec763dfcf46cf858244c5",
       "kind": "rtm",
       "claim_scope": "execution_record",
       "purpose": "Requirement-to-evidence trace draft",
@@ -105,7 +105,7 @@
     {
       "id": "reproducibility-policy",
       "path": "docs/speckit-recovery/08-implementation-validation/reproducibility-lock-policy-draft.md",
-      "sha256": "56ee510bc7f202d9d6bf8d9fe77c9d5337cf51290a7f340fa70a05d990b758b1",
+      "sha256": "b25fc0925619bed5fe74c2ccb64a51a4ea5102218b3e76885721be698324f5e6",
       "kind": "reproducibility_policy",
       "claim_scope": "draft_policy",
       "purpose": "Draft lock/runtime policy with DEC-008 gaps",
@@ -305,7 +305,7 @@
     {
       "id": "evidence-gate",
       "path": "scripts/check_evidence_closeout.py",
-      "sha256": "8682fecabc6ac38ad689ebe29f7786020abaa826066f982095b3fe7c09777ccf",
+      "sha256": "6f125975189bb9825c478f853bc7df0ac1dd581c4a562753f4547bc002c432cb",
       "kind": "ci_gate",
       "claim_scope": "ci_gate",
       "purpose": "Non-promotion evidence closeout checker",
@@ -325,7 +325,7 @@
     {
       "id": "reproducibility-enforcement-checker",
       "path": "scripts/check_reproducibility_enforcement.py",
-      "sha256": "ed074397a0e97ba2bd6f3d72a3d10392ab13d602f3a5a846c131e1f84769a7d1",
+      "sha256": "388511d8fc3e22d5c3ce60fa896ff018efaf2f26fef919305f8b0492828389bc",
       "kind": "ci_gate",
       "claim_scope": "ci_gate",
       "purpose": "RM-06 draft lock-enforcement gap reporter",
@@ -385,7 +385,7 @@
     {
       "id": "m1-ratification-packet",
       "path": "docs/speckit-recovery/06-execution-prep/m1-ratification-packet-2026-11-18.md",
-      "sha256": "fae03e2c70982ede6ce3457440d3ea1058e2917244c50c6b8ea714d2ca9b5166",
+      "sha256": "90bf234a1a33476c4258a4ed0831cac8dd9d36075ea5afba879a7e0f73008845",
       "kind": "governance_policy",
       "claim_scope": "draft_policy",
       "purpose": "Prepared M1 ratification packet; not approved",
@@ -395,7 +395,7 @@
     {
       "id": "project-constitution-ratification-draft",
       "path": "docs/speckit-recovery/06-execution-prep/project-constitution-ratification-draft.md",
-      "sha256": "26c779529cdebf18cb4525666180de8df8da9f38d299a8577cbb309fae4e078a",
+      "sha256": "6b035fcf4966503615294f92b6aef15ff8b3ed9961742df13153da83b1b74707",
       "kind": "governance_policy",
       "claim_scope": "draft_policy",
       "purpose": "Prepared project constitution draft; not ratified",
@@ -485,7 +485,7 @@
     {
       "id": "us4-verification",
       "path": "docs/speckit-recovery/08-implementation-validation/us4-verification-2026-11-18.md",
-      "sha256": "6776326e864981df84d745d33687ee1e80dcc481f7c62d0e374cbd5d9a5c264b",
+      "sha256": "15ad243ba12a8d18f6e3cbb3057372c4d3fba03c0ac5b8e887d444a6d050abaa",
       "kind": "migration_plan",
       "claim_scope": "workspace_status",
       "purpose": "US4 reproducibility verification",
@@ -535,7 +535,7 @@
     {
       "id": "us6-verification",
       "path": "docs/speckit-recovery/08-implementation-validation/us6-verification-2026-11-18.md",
-      "sha256": "3c3cca10151fcdea3a138bd66acf8a37cf38cf9105a07707444a789ced8121c2",
+      "sha256": "afb7b6764dfae2e0418f5fe3576335394f35c654439965ad5d06708c463bc9be",
       "kind": "migration_plan",
       "claim_scope": "workspace_status",
       "purpose": "US6 governance verification",
@@ -545,7 +545,7 @@
     {
       "id": "p0-acceptance-tracker",
       "path": "docs/speckit-recovery/08-implementation-validation/p0-acceptance-evidence-tracker.md",
-      "sha256": "abeecad7dfe7232cc1615d033d1d5b7897997aaac69431969029897a37fa1005",
+      "sha256": "46620dc724930c689200abe743efef47a6f390261b6cfbebb12318575b9e93d1",
       "kind": "policy_draft",
       "claim_scope": "draft_policy",
       "purpose": "P0 acceptance evidence status and external gates",

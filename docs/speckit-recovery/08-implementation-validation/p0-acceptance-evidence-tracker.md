@@ -42,6 +42,14 @@
 6. Frozen holdout, acceptance-policy version, cost model, exposure-matched benchmark, and net-return evidence.
 7. Final AC review with named approver and decision date.
 
+## External-evidence availability check (2026-11-18)
+
+| Gate | Check | Result | Consequence |
+|---|---|---|---|
+| Named M1 approver | Search M1 log and git identity | M1 log records role-based authority only; git identity is `drelo <drelo@localhost>` and is not an authoritative approver record | Named approver substitution remains externally blocked; do not infer approval from git config |
+| External CI | `git remote -v` and `gh` availability | No git remote configured; `gh` is not installed | No external CI URL/log can be retrieved from this workspace; AC-P0-11 remains partial |
+| Branch publication | `git branch -vv` | `feature/speckit-recovery` is local-only; no upstream | Branch must be pushed to a remote with CI before an external run can exist |
+
 ## Non-claims
 
 - This tracker does not close any AC-P0 criterion.

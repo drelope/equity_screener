@@ -3,18 +3,18 @@
 | Field | Value |
 |---|---|
 | Date | 2026-11-16 |
-| Status | **Ratified 2026-11-18** — exact pins plus lock-file SHA-256 (`DEC-008`) |
+| Status | **Draft; local enforcement implemented, DEC-008 approval pending** — exact pins plus lock-file SHA-256 |
 | Scope | Dependency/runtime lock artifacts, CI hooks, manifest linkage |
 
 ## Current artifacts
 - `requirements.txt`, `requirements-dev.txt`: human-maintained dependency intent (current install inputs; dev pins `pytest`, `ruff`, `pip-audit`).
-- `requirements.lock.txt`: ratified exact-pin runtime lock; identity is the file SHA-256 plus exact package pins. No per-package hashes are used.
-- `requirements-dev.lock.txt`: ratified exact-pin development/CI lock; identity is the file SHA-256.
+- `requirements.lock.txt`: exact-pin runtime lock; identity is the file SHA-256 plus exact package pins. No per-package hashes are used. Formal approval is pending.
+- `requirements-dev.lock.txt`: exact-pin development/CI lock; identity is the file SHA-256. Formal approval is pending.
 - `scripts/check_reproducibility_locks.py`: validates lock file presence and pinned-entry parseability (scaffolding check).
 - `.github/workflows/ci.yml`: added non-blocking `reproducibility` job to run lock check and dry-run lock resolution.
 
 ## Known gaps / decisions required (DEC-008)
-- Ratified format: plain pinned requirements files with SHA-256 identity and separate runtime/dev locks.
+- Proposed/local format: plain pinned requirements files with SHA-256 identity and separate runtime/dev locks; approval pending.
 - Hash policy: no per-package hashes; verify lock file SHA-256 and record it in manifests.
 - Enforce locked installs in CI and Docker; local/dev workflow must use the same lock files.
 - Capture lock hashes, strategy version, Python version, OS, and machine identity in run manifests.

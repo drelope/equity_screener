@@ -12,7 +12,7 @@
 
 ## T042 — M1 decisions
 
-`docs/speckit-recovery/06-execution-prep/m1-decision-log-template.md` records M1 Conditional GO, 14-principle and 95-rule disposition, EX/DEC/UNK outcomes, named role owners, and due dates. Authority is role-based; named individual substitution remains an audit-hygiene follow-up.
+`docs/speckit-recovery/06-execution-prep/m1-decision-log-template.md` contains prepared M1 recommendations: 14-principle and 95-rule disposition, EX/DEC/UNK proposals, proposed owners, and proposed due dates. Approval is pending; no named approver or CI evidence has been supplied.
 
 ## T043 — Promotion blocking
 

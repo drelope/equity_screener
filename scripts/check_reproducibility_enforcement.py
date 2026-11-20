@@ -90,8 +90,8 @@ def check_manifest_capture(text: str) -> list[str]:
 def check_policy(text: str) -> list[str]:
     normalized = text.replace("**", "").replace("`", "")
     gaps: list[str] = []
-    if "Ratified 2026-11-18" not in normalized:
-        gaps.append("reproducibility policy does not record DEC-008 ratification")
+    if "approval pending" not in normalized:
+        gaps.append("reproducibility policy does not mark DEC-008 approval as pending")
     if "exact pins plus lock-file SHA-256" not in normalized:
         gaps.append("reproducibility policy does not record the ratified lock strategy")
     return gaps

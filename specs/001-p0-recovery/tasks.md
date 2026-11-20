@@ -22,7 +22,7 @@
 
 - [X] T001 Verify active feature state in `.specify/feature.json` and branch state in `specs/001-p0-recovery/plan.md` (SC-012)
 - [X] T002 [P] Confirm approved spec status in `specs/001-p0-recovery/spec.md` and plan status in `specs/001-p0-recovery/plan.md` (SC-012)
-- [X] T003 [P] M1 constitution disposition recorded in `docs/speckit-recovery/06-execution-prep/m1-decision-log-template.md` and ratified constitution in `.specify/memory/constitution.md`; named individual substitution is an audit-hygiene follow-up (FR-023, SC-010)
+- [ ] T003 [P] Obtain external M1 approval for the prepared constitution in `.specify/memory/constitution.md` and record named authority/date in `docs/speckit-recovery/06-execution-prep/m1-decision-log-template.md`; merge/release blocked until supplied (FR-023, SC-010)
 
 **Checkpoint**: Feature state, approvals, and governance caveats are visible.
 
@@ -102,9 +102,9 @@
 
 **Independent Test**: Prepare two clean environments from the same approved dependency description, compare recorded dependency identity, and run the blocking suite with injected regressions.
 
-- [X] T030 [US4] Ratify the lock strategy and record DEC-008 in `docs/speckit-recovery/06-execution-prep/decision-unknown-tracker.md` (FR-017)
+- [ ] T030 [US4] Obtain external DEC-008 approval for the locally enforced lock strategy and record it in `docs/speckit-recovery/06-execution-prep/decision-unknown-tracker.md` (FR-017)
 - [X] T031 [US4] Enforce approved locked installs in `.github/workflows/ci.yml` and `Dockerfile` (FR-017)
-- [X] T032 [P] [US4] Extend dependency identity capture in `src/crispdm/run_manifest.py` with ratified lock version and platform identity (FR-018)
+- [X] T032 [P] [US4] Extend dependency identity capture in `src/crispdm/run_manifest.py` with lock strategy version and platform identity (FR-018)
 - [X] T033 [US4] Add blocking gates for leakage, determinism, artifact contracts, and advertised dry-run commands in `.github/workflows/ci.yml` (FR-019, SC-008)
 - [X] T034 [P] [US4] Verify draft reproducibility gap reporting with `scripts/check_reproducibility_enforcement.py` (FR-017, FR-019, SC-007, SC-008)
 - [X] T035 [US4] Run clean-environment parity validation from `specs/001-p0-recovery/quickstart.md` (SC-007)
@@ -136,7 +136,7 @@
 **Independent Test**: Review the governance register and verify every Critical gap has closure evidence or an owned, time-bounded exception with a compensating control.
 
 - [X] T041 [P] [US6] Complete the critical exception register in `docs/speckit-recovery/06-execution-prep/decision-unknown-tracker.md` (FR-022, SC-010)
-- [X] T042 [US6] Ratify M1 decisions in `docs/speckit-recovery/06-execution-prep/m1-decision-log-template.md` (FR-023, SC-010)
+- [ ] T042 [US6] Obtain external ratification of M1 decisions in `docs/speckit-recovery/06-execution-prep/m1-decision-log-template.md`; no approval evidence supplied (FR-023, SC-010)
 - [X] T043 [US6] Block promotion claims when required evidence is missing in `scripts/check_promotion_evidence.py` (FR-024, SC-011)
 - [X] T044 [P] [US6] Verify preserved security and least-privilege controls in `tests/test_api.py` and `tests/test_ops_catalog.py` (FR-025)
 - [X] T045 [US6] Update requirement-to-evidence traceability in `docs/speckit-recovery/08-implementation-validation/rtm-update-draft.md` (SC-012)

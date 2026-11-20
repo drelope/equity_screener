@@ -8,7 +8,7 @@
 
 ## T030 — DEC-008 ratification
 
-`decision-unknown-tracker.md` records DEC-008 as ratified: exact pins plus lock-file SHA-256, with separate runtime/dev locks. Per-package hashes are not used because the ratified lock files contain exact pins but no hash column.
+`decision-unknown-tracker.md` records a proposed/local DEC-008 strategy: exact pins plus lock-file SHA-256, with separate runtime/dev locks. Formal approval is pending; per-package hashes are not used because the lock files contain exact pins but no hash column.
 
 ## T031 — Locked installs
 
@@ -26,7 +26,7 @@ A `p0-regression-gates` CI job runs PIT/determinism guards, artifact-contract/pr
 
 ## T034 — Enforcement reporting
 
-`scripts/check_reproducibility_enforcement.py` now reports `pass_local_enforcement` when the ratified CI/Docker/manifest/policy checks pass. `--require-enforced` still fails until clean-environment parity evidence is recorded.
+`scripts/check_reproducibility_enforcement.py` now reports `pass_local_enforcement` when the local CI/Docker/manifest/policy checks pass. `--require-enforced` still fails until clean-environment parity evidence is recorded.
 
 ## T035 — Clean-environment parity
 

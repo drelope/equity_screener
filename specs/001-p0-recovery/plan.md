@@ -4,7 +4,7 @@
 
 **Input**: Feature specification from `specs/001-p0-recovery/spec.md`
 
-**Status**: Approved at review-plan gate (2026-11-18) — tasks and analysis complete; M1 ratified by user direction; implementation gate cleared
+**Status**: Approved at review-plan gate (2026-11-18) — local implementation validation complete except approval-gated tasks; M1/CI evidence pending; merge and release blocked
 
 ## Summary
 
@@ -46,9 +46,9 @@ The committed P0 work on `feature/speckit-recovery` provides scaffolding and evi
 
 ## Constitution Check
 
-**Gate status: RATIFIED FOR GOVERNED IMPLEMENTATION (ROLE-BASED AUTHORITY).**
+**Gate status: PENDING EXTERNAL M1 APPROVAL; LOCAL IMPLEMENTATION VALIDATION ONLY.**
 
-`.specify/memory/constitution.md` was replaced with the ratified project constitution on 2026-11-18. Authority is recorded at role level in `docs/speckit-recovery/06-execution-prep/m1-decision-log-template.md`; named individual substitution is an audit-hygiene follow-up. Aspirational rules remain targets until verification evidence exists.
+`.specify/memory/constitution.md` contains the prepared project constitution draft. M1 approval has been requested but not supplied; no external approval or CI status is recorded. Aspirational rules remain targets until verification evidence exists.
 
 | Principle area | Plan treatment | Evidence / residual gate |
 |---|---|---|
@@ -58,7 +58,7 @@ The committed P0 work on `feature/speckit-recovery` provides scaffolding and evi
 | Reproducibility | Lock drafts, manifest lock hashes, and CI gap reporter exist. | DEC-008 lock strategy and CI/Docker enforcement pending. |
 | No destructive evidence loss | Append-only stores, conflict refusal, and rollback rehearsals are used. | Retention/incident model pending; candidate promotion not approved. |
 
-No constitution violation is claimed. M1 disposition and EX/DEC/UNK outcomes are recorded in `docs/speckit-recovery/06-execution-prep/m1-decision-log-template.md`, and the ratified constitution is in `.specify/memory/constitution.md`. Governed implementation may begin; this is not production-readiness, AC closure, or promotion approval.
+No constitution violation is claimed. M1 disposition and EX/DEC/UNK recommendations are prepared in `docs/speckit-recovery/06-execution-prep/m1-decision-log-template.md`, and the draft constitution is in `.specify/memory/constitution.md`. Local implementation validation is complete; merge, release, promotion, and cutover remain blocked until external approval evidence is supplied.
 
 ## Project Structure
 
@@ -124,4 +124,4 @@ docs/speckit-recovery/09-future-vision/
 
 ## Complexity Tracking
 
-No new structural complexity is introduced by this plan. The unratified constitution is recorded above as a governance gate, not as a design violation requiring a complexity exception.
+No new structural complexity is introduced by this plan. The pending M1 ratification is recorded above as a governance gate, not as a design violation requiring a complexity exception.

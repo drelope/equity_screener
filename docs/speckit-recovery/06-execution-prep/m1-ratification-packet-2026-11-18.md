@@ -4,9 +4,9 @@
 |---|---|
 | Stage | 6 — Execution preparation / M1 gate |
 | Prepared | 2026-11-18 |
-| Status | **Adopted by user direction on 2026-11-18; recorded in `m1-decision-log-template.md`** |
+| Status | **Prepared for external approval; no M1/CI evidence supplied** |
 | Purpose | Give reviewers a single packet for M1 constitution ratification, EX/DEC/UNK disposition, and go/no-go authority |
-| Approval rule | Role-based authority and date recorded in `m1-decision-log-template.md`; named individual substitution remains an audit-hygiene follow-up |
+| Approval rule | No approval recorded. Named approver/date and external CI evidence requested from approver/team but not supplied. |
 
 ## 1. Review package
 
@@ -15,8 +15,8 @@
 | [project-constitution-ratification-draft.md](project-constitution-ratification-draft.md) | Proposed project constitution derived from recovered principles and rules |
 | [constitution-disposition-and-exceptions.md](constitution-disposition-and-exceptions.md) | 95-rule disposition matrix and five Critical exception proposals |
 | [decision-unknown-tracker.md](decision-unknown-tracker.md) | DEC-001..008 and UNK-001..007 ownership/status baseline |
-| [m1-decision-log-template.md](m1-decision-log-template.md) | Formal approval record; role-based authority recorded 2026-11-18 |
-| [m1-readiness-checklist.md](m1-readiness-checklist.md) | M1 exit checklist; items recorded as Met with conditions |
+| [m1-decision-log-template.md](m1-decision-log-template.md) | Prepared approval record; all fields Pending |
+| [m1-readiness-checklist.md](m1-readiness-checklist.md) | M1 exit checklist; all items Pending |
 | [stakeholder-review-pack.md](stakeholder-review-pack.md) | Review scope and requested outputs |
 | [../../../specs/001-p0-recovery/spec.md](../../../specs/001-p0-recovery/spec.md) | Approved P0 feature specification |
 | [../../../specs/001-p0-recovery/plan.md](../../../specs/001-p0-recovery/plan.md) | Approved P0 plan with M1 implementation blocker |
@@ -29,7 +29,7 @@
 4. Decide DEC-001..DEC-008; at minimum DEC-002/003/004/008 must be sufficient for P0 execution.
 5. Assign owners, due dates, and approved plans for UNK-001..UNK-007.
 6. Record the M1 go/no-go, authority, date, and evidence links in `m1-decision-log-template.md`.
-7. Only after step 6, replace `.specify/memory/constitution.md` with the ratified constitution and clear task T003.
+7. Only after step 6 and recorded external approval may task T003 be cleared; do not treat the current draft constitution as ratified.
 
 ## 3. Proposed disposition summary
 
@@ -73,9 +73,9 @@
 
 ## 5. Recorded outcome and residual non-claims
 
-- The recommended M1 record was adopted by user direction on 2026-11-18 and is recorded in `m1-decision-log-template.md`.
-- Authority is role-based; substitution of a named individual remains an audit-hygiene follow-up.
-- M1 is a Conditional GO for governed P0 implementation after constitution ratification.
+- Recommendations are prepared in `m1-decision-log-template.md`; the named approver/date and external CI evidence have been requested but not supplied.
+- No M1 approval, ratification, or CI status is recorded.
+- No GO is recorded; merge, release, promotion, and cutover remain blocked.
 - It does not close AC-P0 acceptance criteria, authorize migration promotion, or authorize production cutover.
 - Evidence due 2026-12-15/2026-12-31 remains pending.
 - AI-IOS remains a non-normative requirement source.
