@@ -1,4 +1,4 @@
-FROM python:3.12-slim
+FROM python:3.15-slim
 
 # Runtime never needs root: the API, the UI and the worker are plain Python
 # processes. Create an unprivileged account and drop to it, so a compromise in
