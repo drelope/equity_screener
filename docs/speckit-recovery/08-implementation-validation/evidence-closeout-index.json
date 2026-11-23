@@ -1,7 +1,7 @@
 {
   "schema": "p0_evidence_closeout/v1",
   "status": "draft_not_promotion_grade",
-  "generated_at_utc": "2026-11-19T01:00:00+00:00",
+  "generated_at_utc": "2026-11-19T01:15:00+00:00",
   "promotion_claim": false,
   "promotion_grade": false,
   "promotion_blockers": [
@@ -589,6 +589,16 @@
       "kind": "governance_policy",
       "claim_scope": "draft_policy",
       "purpose": "Draft time-separated M1 self-review checklist",
+      "promotion_claim": false,
+      "status": "draft_not_promotion_grade"
+    },
+    {
+      "id": "m1-external-steps",
+      "path": "docs/M1_EXTERNAL_EVIDENCE_STEPS.md",
+      "sha256": "b3b66c1f041beb300c71e051935d47bea04c583c651b7305cfd73baf33cea1dc",
+      "kind": "governance_policy",
+      "claim_scope": "draft_policy",
+      "purpose": "Pending M1 external evidence steps and gate invariants",
       "promotion_claim": false,
       "status": "draft_not_promotion_grade"
     }
