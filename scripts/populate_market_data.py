@@ -33,7 +33,7 @@ Options:
 import argparse
 import sys
 import time
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from pathlib import Path
 
 import pandas as pd
@@ -46,6 +46,8 @@ if __package__ in (None, ""):
 from src.crispdm.config import settings
 from src.crispdm.db import engine
 from src.crispdm.openbb_client import historical_prices
+from src.crispdm.pit import pit_manifest_metadata
+from src.crispdm.run_manifest import build_run_manifest, get_git_state, write_manifest_file
 from src.crispdm.stage import stage_exit_code
 
 PROVIDER = "OPENBB"
@@ -371,6 +373,53 @@ def main():
         return 1
     if code:
         return code
+    try:
+        git_state = get_git_state(Path(__file__).resolve().parents[1])
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        manifest = build_run_manifest(
+            run_type="populate_market_data",
+            code_sha=git_state.get("sha"),
+            code_dirty=git_state.get("dirty"),
+            parameters={
+                "tickers": tickers,
+                "dividend_only": not args.all,
+                "limit": args.limit,
+                "start_date": str(args.start_date) if args.start_date else None,
+                "end_date": str(args.end_date) if args.end_date else None,
+                "include_historical": args.include_historical,
+                "historical_only": args.historical_only,
+            },
+            inputs={
+                "source": "openbb_historical_prices",
+                "table": "raw.market_data",
+                "pit": pit_manifest_metadata(
+                    as_of=str(args.end_date) if args.end_date else None,
+                    universe_mode="reference_securities_active_or_historical_selection_draft",
+                    feature_timing_mode="market_observation_dates_draft",
+                    notes="Draft PIT metadata: market data ingested by observation date; adjustment/basis and PIT universe eligibility not fully implemented/verified.",
+                ),
+            },
+            outputs={
+                "rows_written": written,
+                "no_price_data": empty,
+                "errors": errors,
+                "not_carried_by_provider": no_data,
+                "targets": targets,
+            },
+            environment={"script": "scripts.populate_market_data"},
+            status="completed",
+        )
+        manifest_path = (
+            Path(__file__).resolve().parents[1]
+            / "artifacts"
+            / "runs"
+            / f"populate_market_data_{stamp}"
+            / "manifest.json"
+        )
+        write_manifest_file(manifest, manifest_path)
+        print(f"Manifest: {manifest_path}")
+    except Exception as exc:
+        print(f"Manifest write failed: {exc}")
     print("\nMarket data population complete!")
     return 0
 

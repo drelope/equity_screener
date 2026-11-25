@@ -36,6 +36,11 @@ artifacts/
 # Local agent tooling (installed per-machine, not shared)
 .agents/
 .claude/
+.opencode/
+.specify/
+Modelfile
+SpecKit_ReverseEngineer.json
+SpecKit_Staged_Prompts.json
 
 # Accidental command-output junk (PowerShell redirect artifact)
 t -ErrorAction SilentlyContinue | Select-Object Name,Source

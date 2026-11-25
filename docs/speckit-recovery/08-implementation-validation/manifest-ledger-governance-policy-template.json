@@ -1,0 +1,135 @@
+{
+  "schema": "manifest_ledger_governance/v1",
+  "status": "draft_not_approved",
+  "policy_version": "0.1-draft",
+  "ledger_tables": [
+    "audit.run_manifests",
+    "audit.run_outputs"
+  ],
+  "public_privileges": [],
+  "roles": {
+    "manifest_writer": {
+      "description": "Pipeline processes that append manifests and output refs.",
+      "grants": [
+        {
+          "table": "audit.run_manifests",
+          "privileges": [
+            "INSERT"
+          ]
+        },
+        {
+          "table": "audit.run_outputs",
+          "privileges": [
+            "INSERT"
+          ]
+        },
+        {
+          "table": "audit.run_outputs_output_id_seq",
+          "privileges": [
+            "USAGE"
+          ]
+        }
+      ],
+      "forbidden": [
+        "UPDATE",
+        "DELETE",
+        "TRUNCATE"
+      ]
+    },
+    "manifest_reader": {
+      "description": "Read-only consumers of run manifests and output refs.",
+      "grants": [
+        {
+          "table": "audit.run_manifests",
+          "privileges": [
+            "SELECT"
+          ]
+        },
+        {
+          "table": "audit.run_outputs",
+          "privileges": [
+            "SELECT"
+          ]
+        }
+      ],
+      "forbidden": [
+        "INSERT",
+        "UPDATE",
+        "DELETE",
+        "TRUNCATE"
+      ]
+    },
+    "ledger_auditor": {
+      "description": "Audit/compliance role with read access to ledger and migration history.",
+      "grants": [
+        {
+          "table": "audit.run_manifests",
+          "privileges": [
+            "SELECT"
+          ]
+        },
+        {
+          "table": "audit.run_outputs",
+          "privileges": [
+            "SELECT"
+          ]
+        },
+        {
+          "table": "public.schema_migrations",
+          "privileges": [
+            "SELECT"
+          ]
+        }
+      ],
+      "forbidden": [
+        "INSERT",
+        "UPDATE",
+        "DELETE",
+        "TRUNCATE"
+      ]
+    },
+    "dba_admin": {
+      "description": "Object owner/DBA. Not an application writer; break-glass operations require dual control.",
+      "grants": [],
+      "owner_operations": [
+        "ALTER",
+        "DROP",
+        "DISABLE_TRIGGER",
+        "REASSIGN_OWNER"
+      ],
+      "forbidden": [
+        "ROUTINE_UPDATE",
+        "ROUTINE_DELETE"
+      ]
+    }
+  },
+  "retention": {
+    "minimum_days": null,
+    "legal_hold": true,
+    "purge_requires_approval": true,
+    "purge_requires_export": true,
+    "purge_requires_dual_control": true,
+    "purge_mode": "approved_export_then_drop",
+    "notes": "Set minimum_days after DEC/legal review; null means the draft has no approved retention period."
+  },
+  "incident_response": {
+    "break_glass_role": "dba_admin",
+    "dual_control": true,
+    "requires_incident_ticket": true,
+    "requires_export_before_mutation": true,
+    "post_incident_review": true,
+    "preferred_remediation": "Append a correction/incident record; do not mutate existing ledger rows.",
+    "break_glass_allowed_operations": [
+      "DISABLE_TRIGGER",
+      "DELETE_ROW"
+    ],
+    "re_enable_trigger_required": true,
+    "evidence_retention_required": true
+  },
+  "approvals": {
+    "M1": null,
+    "DEC-002": null,
+    "DEC-003": null,
+    "DEC-005": null
+  }
+}

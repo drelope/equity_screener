@@ -17,3 +17,4 @@ ignore = ["E501", "S608"]
 
 [lint.per-file-ignores]
 "tests/*" = ["S101", "S105"]
+".specify/scripts/python/common.py" = ["S603"]

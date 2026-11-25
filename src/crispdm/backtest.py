@@ -19,6 +19,10 @@ import pandas as pd
 
 from src.crispdm import portfolio as pf
 from src.crispdm.db import read_df
+from src.crispdm.promotion_contract import (
+    draft_benchmark_contract,
+    draft_cost_model_contract,
+)
 
 PERIODS_PER_YEAR = 12
 #: Names the rules in src/crispdm/portfolio.py (clean_prices). Recorded per run.
@@ -173,6 +177,8 @@ def run_walk_forward(
     metrics["periods"] = int(len(periods))
     metrics["held_periods"] = int(len(held_periods))
     metrics["cash_periods"] = int(len(periods) - len(held_periods))
+    metrics["cost_model_contract"] = draft_cost_model_contract()
+    metrics["exposure_matched_benchmark_contract"] = draft_benchmark_contract()
     if len(held_periods):
         metrics["average_one_way_turnover_annual"] = float(
             held_periods["turnover"].mean() * PERIODS_PER_YEAR

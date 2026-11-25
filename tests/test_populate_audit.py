@@ -98,8 +98,9 @@ def test_data_quality_consistency_normalises_security_type():
 
 def test_data_quality_no_data_means_no_source_at_all():
     """Re-score the newest snapshot with the whole-universe formula, then pin
-    the invariant that 'no data' means a truly sourceless security: neither
-    raw.companyfacts nor raw.ticker_profile."""
+    the invariant that 'no data' means a truly sourceless active security:
+    neither raw.companyfacts nor raw.ticker_profile. Deactivated securities are
+    out of scope because the loader only scores the active universe."""
     pytest.importorskip("sqlalchemy")
     engine = _live_connection()
     if engine is None:
@@ -120,6 +121,7 @@ def test_data_quality_no_data_means_no_source_at_all():
                 LEFT JOIN raw.companyfacts cf ON cf.cik = s.cik
                 LEFT JOIN raw.ticker_profile tp ON tp.security_id = dq.security_id
                 WHERE dq.as_of_date = :as_of AND dq.status = 'no data'
+                  AND s.active = TRUE
                   AND (cf.cik IS NOT NULL OR tp.security_id IS NOT NULL OR s.security_id IS NULL)
                 """),
             {"as_of": latest},

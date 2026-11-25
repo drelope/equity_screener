@@ -43,6 +43,20 @@ def carry_forward_days() -> int:
     return settings.feature_carry_forward_days
 
 
+def feature_window_pit_metadata(
+    as_of=None, *, include_historical: bool = False, carry_days: int | None = None
+):
+    """Draft PIT metadata for consumers of this window (RM-01/RM-02 integration)."""
+    from .pit import feature_window_pit_context
+
+    resolved_carry = carry_forward_days() if carry_days is None else int(carry_days)
+    return feature_window_pit_context(
+        as_of=as_of,
+        carry_days=resolved_carry,
+        include_historical=include_historical,
+    )
+
+
 def _latest_row(sec_alias: str) -> str:
     """The per-security row lookup: newest feature row inside the window.
 

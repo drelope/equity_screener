@@ -9,7 +9,9 @@ on the position book and the risk monitor cannot disagree.
 
 from __future__ import annotations
 
+import hashlib
 import json
+from datetime import datetime, timezone
 from pathlib import Path
 
 import numpy as np
@@ -21,6 +23,7 @@ import streamlit as st
 from app import nav, ui
 from app.views import security
 from src.crispdm import portfolio as pf
+from src.crispdm.output_store import store_output
 
 PAGE_TITLE = "Analyst dashboard"
 PAGE_PATH = "dashboard"
@@ -186,7 +189,9 @@ def _context_metrics(context: dict, ticker: str) -> None:
     with st.container(horizontal=True):
         st.metric("Composite score", f"{row['composite_score']:.3f}", border=True)
         st.metric("Universe rank", f"{rank} / {len(universe)}", border=True)
-        st.metric("Sector rank", f"{sector_rank} / {len(peers)}", help=str(row["sector"]), border=True)
+        st.metric(
+            "Sector rank", f"{sector_rank} / {len(peers)}", help=str(row["sector"]), border=True
+        )
         st.metric(
             "Sector weight in book",
             _pct(sector_book["weight"].sum()),
@@ -826,7 +831,22 @@ def _reports(context: dict) -> dict[str, str]:
     table = context["table"]
     risk = context["risk"]
     performance = context["performance"]
-    recent = path.index[-1]
+    recent = pd.Timestamp(path.index[-1]).normalize()
+    formed = pd.Timestamp(context.get("formed", recent)).normalize()
+    latest = pd.Timestamp(context.get("latest", recent)).normalize()
+    generated_at = datetime.now(timezone.utc).replace(microsecond=0)
+    run_ref_basis = (
+        f"{recent.date()}|{formed.date()}|{latest.date()}|{len(path)}|{len(table)}|"
+        f"{float(path['nav'].iloc[-1]):.6f}"
+    )
+    run_ref = hashlib.sha256(run_ref_basis.encode("utf-8")).hexdigest()[:16]
+    meta = "\n".join(
+        [
+            "",
+            "---",
+            f"**Provenance:** resolved_as_of `{recent.date()}` · generated_at_utc `{generated_at.isoformat()}` · formed `{formed.date()}` · latest_context `{latest.date()}` · run_ref `{run_ref}` · storage `transient (in-memory draft)` · historical_selection `not available`",
+        ]
+    )
     top = table.nlargest(3, "pnl")
     bottom = table.nsmallest(3, "pnl")
     caveat = (
@@ -855,6 +875,7 @@ def _reports(context: dict) -> dict[str, str]:
                 ["Ticker", "Side", "P&L"],
                 [[row.ticker, row.side, _signed_money(row.pnl)] for row in bottom.itertuples()],
             ),
+            meta,
         ]
     )
     performance_report = "\n".join(
@@ -876,6 +897,7 @@ def _reports(context: dict) -> dict[str, str]:
                     ["Omega", _ratio(performance.get("omega"))],
                 ],
             ),
+            meta,
         ]
     )
     components = (
@@ -902,20 +924,31 @@ def _reports(context: dict) -> dict[str, str]:
                     for row in components.itertuples()
                 ],
             ),
+            meta,
         ]
     )
     analyses = context["analyses"]
     if analyses.empty:
-        ic_memo = (
-            f"# IC memo - {recent:%Y-%m-%d}\n\n"
-            f"{caveat}\n\n"
-            "No Final investment-analysis worksheet exists for the coverage universe. "
-            "Open the worksheet from a covered name before drafting an IC memo."
+        ic_memo = "\n".join(
+            [
+                f"# IC memo - {recent:%Y-%m-%d}",
+                "",
+                caveat,
+                "",
+                "No Final investment-analysis worksheet exists for the coverage universe. "
+                "Open the worksheet from a covered name before drafting an IC memo.",
+                meta,
+            ]
         )
-        research_note = (
-            f"# Research note - {recent:%Y-%m-%d}\n\n"
-            f"{caveat}\n\n"
-            "No saved research note exists in the coverage universe."
+        research_note = "\n".join(
+            [
+                f"# Research note - {recent:%Y-%m-%d}",
+                "",
+                caveat,
+                "",
+                "No saved research note exists in the coverage universe.",
+                meta,
+            ]
         )
     else:
         final = analyses[analyses["status"] == "Final"]
@@ -940,26 +973,28 @@ def _reports(context: dict) -> dict[str, str]:
                 )
                 if not final.empty
                 else "No Final worksheet yet.",
+                meta,
             ]
         )
-        latest = analyses.iloc[0]
+        latest_ws = analyses.iloc[0]
         research_note = "\n".join(
             [
                 f"# Research note - {recent:%Y-%m-%d}",
                 "",
                 caveat,
                 "",
-                f"Latest worksheet: **{latest['ticker']}**, status **{latest['status']}**.",
+                f"Latest worksheet: **{latest_ws['ticker']}**, status **{latest_ws['status']}**.",
                 "Recommendation: "
                 + (
                     "not set"
-                    if pd.isna(latest["recommendation"])
-                    else str(latest["recommendation"])
+                    if pd.isna(latest_ws["recommendation"])
+                    else str(latest_ws["recommendation"])
                 )
                 + ".",
                 "Confidence: "
-                + ("not set" if pd.isna(latest["confidence"]) else str(latest["confidence"]))
+                + ("not set" if pd.isna(latest_ws["confidence"]) else str(latest_ws["confidence"]))
                 + ".",
+                meta,
             ]
         )
     return {
@@ -971,17 +1006,125 @@ def _reports(context: dict) -> dict[str, str]:
     }
 
 
+def _historical_as_of_options(context: dict) -> list[str]:
+    dates = context.get("dates")
+    if dates is None:
+        return []
+    return sorted({pd.Timestamp(value).date().isoformat() for value in list(dates)}, reverse=True)
+
+
+def _report_as_of_choice(context: dict, selection: str | None) -> tuple[str | None, str | None]:
+    resolved = pd.Timestamp(context["path"].index[-1]).date().isoformat()
+    if selection in (None, "Latest available", resolved):
+        return resolved, None
+    return (
+        resolved,
+        f"Historical report generation is unavailable; selected {selection} was not used.",
+    )
+
+
+def _report_run_id(report: str) -> str:
+    marker = "run_ref `"
+    if marker in report:
+        parts = report.split(marker, 1)[1].split("`", 1)
+        if parts and parts[0]:
+            return parts[0]
+    return hashlib.sha256(report.encode("utf-8")).hexdigest()[:16]
+
+
+def _report_download_filename(choice: str, resolved_as_of: str, generated_at: str) -> str:
+    file_ts = generated_at.replace("-", "").replace(":", "")
+    return f"{choice.lower().replace(' ', '-')}-{resolved_as_of}-{file_ts}.md"
+
+
+def _persist_report_payload(
+    report: str,
+    *,
+    choice: str,
+    resolved_as_of: str,
+    generated_at: str,
+    root: str | Path,
+    write: bool = False,
+) -> dict:
+    payload = {
+        "report_type": choice,
+        "run_id": _report_run_id(report),
+        "resolved_as_of": resolved_as_of,
+        "generated_at_utc": generated_at,
+        "storage": "run_keyed_draft" if write else "transient_draft",
+        "historical_selection": "not available",
+        "content": report,
+    }
+    return store_output(
+        payload,
+        root=root,
+        run_id=payload["run_id"],
+        output_kind="report",
+        entity_type="report",
+        entity_id=choice.lower().replace(" ", "-"),
+        write=write,
+    )
+
+
 def _reports_tab(context: dict) -> None:
+    resolved_as_of, unavailable = _report_as_of_choice(
+        context, st.session_state.get("dashboard_report_as_of")
+    )
+    st.selectbox(
+        "Report as-of",
+        ["Latest available", *_historical_as_of_options(context)],
+        key="dashboard_report_as_of",
+        help="Historical as-of generation is currently unavailable and fails closed.",
+    )
+    if unavailable:
+        st.warning(unavailable)
+        st.caption(
+            "No historical report was generated. The current-context report is not a substitute."
+        )
+        return
     reports = _reports(context)
     choice = st.selectbox("Report", list(reports), key="dashboard_report_choice")
     report = reports[choice]
+    # Parse provenance from generated report metadata for consistent UI display
+    resolved_as_of = pd.Timestamp(context["path"].index[-1]).date().isoformat()
+    generated_marker = "generated_at_utc `"
+    generated_at = None
+    if generated_marker in report:
+        try:
+            generated_at = report.split(generated_marker, 1)[1].split("`", 1)[0]
+        except Exception:
+            generated_at = None
+    if generated_at is None:
+        generated_at = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+    st.caption(
+        f"Resolved as-of: `{resolved_as_of}` · Generated (UTC): `{generated_at}` · "
+        "Provenance: deterministic current-context draft · Historical selection: not available "
+        "(transient unless explicitly persisted)"
+    )
     st.download_button(
         "Download markdown",
         report.encode("utf-8"),
-        file_name=f"{choice.lower().replace(' ', '-')}-{context['latest']:%Y-%m-%d}.md",
+        file_name=_report_download_filename(choice, resolved_as_of, generated_at),
         mime="text/markdown",
         key="dashboard_report_download",
     )
+    persist = st.checkbox(
+        "Persist this report as a run-keyed draft", key="dashboard_persist_report"
+    )
+    if persist:
+        if st.button("Persist report", key="dashboard_persist_report_button"):
+            ref = _persist_report_payload(
+                report,
+                choice=choice,
+                resolved_as_of=resolved_as_of,
+                generated_at=generated_at,
+                root=Path(__file__).resolve().parents[2] / "artifacts" / "run_outputs",
+                write=True,
+            )
+            st.code(
+                f"storage_ref={ref['storage_ref']} content_hash={ref['content_hash'][:12]}",
+                language="text",
+            )
     with st.container(border=True):
         st.markdown(report)
     st.caption(

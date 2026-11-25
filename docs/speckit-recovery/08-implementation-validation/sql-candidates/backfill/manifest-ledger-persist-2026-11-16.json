@@ -1,0 +1,15 @@
+{
+  "dry_run": false,
+  "manifest_hash": "79d68817cec9100a53d4077c155517778b32a58e45306a9494823498204f9775",
+  "manifest_inserted": true,
+  "mode": "persist",
+  "outputs_inserted": 1,
+  "outputs_requested": 1,
+  "read_only": false,
+  "run_id": "rehearsal-run-1",
+  "target": {
+    "database": "rehearsal",
+    "driver": "postgresql+psycopg",
+    "host": "127.0.0.1"
+  }
+}

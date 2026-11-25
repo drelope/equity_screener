@@ -26,14 +26,18 @@ together cover every observation date exactly once.
 import argparse
 import sys
 import time
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 from src.crispdm.returns import (
+    FORWARD_WINDOW_DAYS,
     build_forward_returns,
+    build_forward_returns_pit_metadata,
     observation_date_range,
     observation_density,
     persist_forward_returns,
 )
+from src.crispdm.run_manifest import build_run_manifest, get_git_state, write_manifest_file
 
 #: The most output rows one window may hold. The frame is a handful of columns
 #: per row, so this is a few hundred megabytes at most: enough to keep the build
@@ -122,6 +126,40 @@ def main():
             flush=True,
         )
     print("Forward return rows:", total)
+    try:
+        git_state = get_git_state(Path(__file__).resolve().parents[1])
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        manifest = build_run_manifest(
+            run_type="build_forward_returns",
+            code_sha=git_state.get("sha"),
+            code_dirty=git_state.get("dirty"),
+            parameters={"window_days": args.window_days, "days": args.days},
+            inputs={
+                "price_table": "raw.market_data",
+                "pit": build_forward_returns_pit_metadata(
+                    as_of=str(last) if last else None,
+                    window_days=args.window_days or FORWARD_WINDOW_DAYS,
+                ),
+            },
+            outputs={
+                "forward_return_rows_written": total,
+                "resolved_range": [str(first), str(last)],
+            },
+            resolved_as_of=str(last) if last else None,
+            environment={"script": "scripts.build_forward_returns"},
+            status="completed",
+        )
+        manifest_path = (
+            Path(__file__).resolve().parents[1]
+            / "artifacts"
+            / "runs"
+            / f"build_forward_returns_{stamp}"
+            / "manifest.json"
+        )
+        write_manifest_file(manifest, manifest_path)
+        print(f"Manifest: {manifest_path}")
+    except Exception as exc:
+        print(f"Manifest write failed: {exc}")
     return 0
 
 

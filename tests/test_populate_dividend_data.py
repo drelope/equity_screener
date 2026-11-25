@@ -938,3 +938,120 @@ def test_the_dividend_upsert_executes_against_postgres_and_updates_is_special():
     finally:
         trans.rollback()
         conn.close()
+
+
+def test_dedupe_dividend_rows_prefers_completeness_then_latest_retrieved_at():
+    from datetime import datetime, timezone
+
+    earlier = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    later = datetime(2026, 1, 2, tzinfo=timezone.utc)
+    key = ("sec-1", date(2025, 3, 31), "OPENBB")
+    rows = [
+        {
+            "sec_id": key[0],
+            "ex_date": key[1],
+            "provider": key[2],
+            "decl_date": None,
+            "rec_date": None,
+            "pay_date": date(2025, 4, 15),
+            "amount": 1.0,
+            "adjusted_amount": None,
+            "frequency": "Quarterly",
+            "currency": "USD",
+            "feed": "yfinance",
+            "amount_feed": "yfinance",
+            "concept": "",
+            "retrieved_at": later,
+            "is_special": False,
+        },
+        {
+            "sec_id": key[0],
+            "ex_date": key[1],
+            "provider": key[2],
+            "decl_date": date(2025, 3, 1),
+            "rec_date": date(2025, 4, 1),
+            "pay_date": date(2025, 4, 15),
+            "amount": 1.0,
+            "adjusted_amount": 1.0,
+            "frequency": "Quarterly",
+            "currency": "USD",
+            "feed": "fmp",
+            "amount_feed": "fmp",
+            "concept": "",
+            "retrieved_at": earlier,
+            "is_special": False,
+        },
+        {
+            "sec_id": "sec-2",
+            "ex_date": date(2025, 6, 30),
+            "provider": "SEC_XBRL",
+            "decl_date": None,
+            "rec_date": None,
+            "pay_date": date(2025, 7, 15),
+            "amount": 0.5,
+            "adjusted_amount": None,
+            "frequency": "Quarterly",
+            "currency": "USD",
+            "feed": None,
+            "amount_feed": None,
+            "concept": "x",
+            "retrieved_at": earlier,
+            "is_special": False,
+        },
+    ]
+
+    deduped = dividend_data.dedupe_dividend_rows(rows)
+
+    assert len(deduped) == 2
+    assert deduped[0]["feed"] == "fmp"
+    assert deduped[0]["decl_date"] == date(2025, 3, 1)
+    assert deduped[1]["sec_id"] == "sec-2"
+
+
+def test_dedupe_dividend_rows_uses_latest_retrieved_at_when_completeness_equal():
+    from datetime import datetime, timezone
+
+    earlier = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    later = datetime(2026, 1, 2, tzinfo=timezone.utc)
+    rows = [
+        {
+            "sec_id": "sec-1",
+            "ex_date": date(2025, 3, 31),
+            "provider": "OPENBB",
+            "decl_date": date(2025, 3, 1),
+            "rec_date": None,
+            "pay_date": date(2025, 4, 15),
+            "amount": 1.0,
+            "adjusted_amount": None,
+            "frequency": "Quarterly",
+            "currency": "USD",
+            "feed": "yfinance",
+            "amount_feed": "yfinance",
+            "concept": "",
+            "retrieved_at": earlier,
+            "is_special": False,
+        },
+        {
+            "sec_id": "sec-1",
+            "ex_date": date(2025, 3, 31),
+            "provider": "OPENBB",
+            "decl_date": date(2025, 3, 2),
+            "rec_date": None,
+            "pay_date": date(2025, 4, 15),
+            "amount": 1.0,
+            "adjusted_amount": None,
+            "frequency": "Quarterly",
+            "currency": "USD",
+            "feed": "fmp",
+            "amount_feed": "fmp",
+            "concept": "",
+            "retrieved_at": later,
+            "is_special": False,
+        },
+    ]
+
+    deduped = dividend_data.dedupe_dividend_rows(rows)
+
+    assert len(deduped) == 1
+    assert deduped[0]["feed"] == "fmp"
+    assert deduped[0]["decl_date"] == date(2025, 3, 2)

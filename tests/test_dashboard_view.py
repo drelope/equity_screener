@@ -188,3 +188,162 @@ def test_the_backtest_loader_reports_no_run_when_the_directory_is_empty(tmp_path
     from app.views.dashboard import _load_latest_backtest
 
     assert _load_latest_backtest(str(tmp_path)) is None
+
+
+def test_reports_include_provenance_metadata_and_caveat():
+    index = pd.to_datetime(["2026-10-01", "2026-10-02"])
+    path = pd.DataFrame(
+        {
+            "return": [0.01, -0.005],
+            "nav": [BASE_NAV * 1.01, BASE_NAV * 1.01 * 0.995],
+            "drawdown": [0.0, -0.005],
+        },
+        index=index,
+    )
+    table = pd.DataFrame(
+        {
+            "security_id": ["s1"],
+            "ticker": ["AAA"],
+            "side": ["Long"],
+            "sector": ["Tech"],
+            "weight": [0.1],
+            "notional": [1_000_000.0],
+            "pnl": [1000.0],
+        }
+    )
+    context = {
+        "path": path,
+        "table": table,
+        "book": table,
+        "risk": {
+            "historical_var": 0.01,
+            "historical_var_amount": 1000.0,
+            "expected_shortfall": 0.02,
+            "parametric_var": 0.015,
+            "components": pd.DataFrame({"security_id": ["s1"], "component_var": [0.01]}),
+        },
+        "performance": {"cumulative_return": 0.00495},
+        "analyses": pd.DataFrame(
+            columns=[
+                "ticker",
+                "status",
+                "recommendation",
+                "confidence",
+                "overall_risk_score",
+                "created_at",
+                "updated_at",
+            ]
+        ),
+        "formed": pd.Timestamp("2026-09-30"),
+        "latest": pd.Timestamp("2026-10-02"),
+    }
+
+    reports = _reports(context)
+    morning = reports["Morning note"]
+
+    assert "Simulated model portfolio" in morning
+    assert "resolved_as_of `2026-10-02`" in morning
+    assert "generated_at_utc `" in morning
+    assert "run_ref `" in morning
+    assert "storage `transient (in-memory draft)`" in morning
+    assert "historical_selection `not available`" in morning
+
+
+def test_report_as_of_choice_fails_closed_for_historical_dates():
+    from app.views.dashboard import _report_as_of_choice
+
+    context = {
+        "path": pd.DataFrame(index=pd.to_datetime(["2026-10-02"])),
+        "dates": [pd.Timestamp("2026-09-30"), pd.Timestamp("2026-10-02")],
+    }
+    assert _report_as_of_choice(context, None) == ("2026-10-02", None)
+    assert _report_as_of_choice(context, "Latest available") == ("2026-10-02", None)
+    assert _report_as_of_choice(context, "2026-10-02") == ("2026-10-02", None)
+    resolved, message = _report_as_of_choice(context, "2026-09-30")
+    assert resolved == "2026-10-02"
+    assert "Historical report generation is unavailable" in message
+
+
+def test_report_download_filename_includes_as_of_and_generated_marker():
+    from app.views.dashboard import _report_download_filename
+
+    name = _report_download_filename("Morning note", "2026-10-02", "2026-10-03T01:02:03+00:00")
+    assert name == "morning-note-2026-10-02-20261003T010203+0000.md"
+
+
+def test_report_payload_is_run_keyed_and_idempotent(tmp_path):
+    from app.views.dashboard import _persist_report_payload
+
+    report = "# Morning note - 2026-10-02\n\n**Provenance:** run_ref `abc123def456`\n"
+    first = _persist_report_payload(
+        report,
+        choice="Morning note",
+        resolved_as_of="2026-10-02",
+        generated_at="2026-10-03T01:02:03+00:00",
+        root=tmp_path,
+        write=True,
+    )
+    second = _persist_report_payload(
+        report,
+        choice="Morning note",
+        resolved_as_of="2026-10-02",
+        generated_at="2026-10-03T01:02:03+00:00",
+        root=tmp_path,
+        write=True,
+    )
+    assert first["run_id"] == "abc123def456"
+    assert first["written"] is True
+    assert second["existed"] is True
+    assert second["content_hash"] == first["content_hash"]
+    assert (tmp_path / "abc123def456" / "report.json").is_file()
+
+
+def test_exported_report_retains_provenance_and_caveat():
+    import pandas as pd
+
+    from app.views.dashboard import _reports
+
+    index = pd.to_datetime(["2026-10-02"])
+    context = {
+        "path": pd.DataFrame(
+            {"return": [0.01], "nav": [1_000_000.0], "drawdown": [0.0]}, index=index
+        ),
+        "table": pd.DataFrame(
+            {
+                "security_id": ["s1"],
+                "ticker": ["AAA"],
+                "side": ["Long"],
+                "sector": ["Tech"],
+                "weight": [0.1],
+                "notional": [1_000_000.0],
+                "pnl": [1000.0],
+            }
+        ),
+        "risk": {
+            "historical_var": 0.01,
+            "historical_var_amount": 1000.0,
+            "expected_shortfall": 0.02,
+            "parametric_var": 0.015,
+            "components": pd.DataFrame({"security_id": ["s1"], "component_var": [0.01]}),
+        },
+        "performance": {"cumulative_return": 0.00495},
+        "analyses": pd.DataFrame(
+            columns=[
+                "ticker",
+                "status",
+                "recommendation",
+                "confidence",
+                "overall_risk_score",
+                "created_at",
+                "updated_at",
+            ]
+        ),
+        "formed": pd.Timestamp("2026-09-30"),
+        "latest": pd.Timestamp("2026-10-02"),
+    }
+    report = _reports(context)["Morning note"]
+    assert "Provenance:" in report
+    assert "resolved_as_of `2026-10-02`" in report
+    assert "generated_at_utc `" in report
+    assert "run_ref `" in report
+    assert "Simulated model portfolio" in report

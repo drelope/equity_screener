@@ -1,0 +1,98 @@
+{
+  "manifest": {
+    "code_dirty": false,
+    "code_sha": "abc123",
+    "created_at_utc": "2026-11-16 00:00:00+00:00",
+    "environment": {
+      "dependency_lock_hashes": {
+        "requirements-dev.lock.txt": "138a930907a2932ddedc605425718e51ccb2b596eade25fd01502f2e0d189f21",
+        "requirements.lock.txt": "138a930907a2932ddedc605425718e51ccb2b596eade25fd01502f2e0d189f21"
+      },
+      "python": "3.11"
+    },
+    "git_branch": null,
+    "input_refs": {
+      "snapshot": "snap-1"
+    },
+    "manifest_hash": "79d68817cec9100a53d4077c155517778b32a58e45306a9494823498204f9775",
+    "manifest_json": {
+      "acceptance_policy": {
+        "hash": null,
+        "id": null,
+        "version": null
+      },
+      "code": {
+        "dirty": false,
+        "sha": "abc123"
+      },
+      "config": {
+        "model_version": "v1"
+      },
+      "created_at_utc": "2026-11-16T00:00:00+00:00",
+      "environment": {
+        "dependency_lock_hashes": {
+          "requirements-dev.lock.txt": "138a930907a2932ddedc605425718e51ccb2b596eade25fd01502f2e0d189f21",
+          "requirements.lock.txt": "138a930907a2932ddedc605425718e51ccb2b596eade25fd01502f2e0d189f21"
+        },
+        "python": "3.11"
+      },
+      "hashes": {
+        "config_hash": "4bbbc870468ccc5fd384c7602b23dbc85beca21b89f351a0d4e3239ac65faa12",
+        "environment_hash": "2c9b120307ac5fc0d47eb1607cc441b738ba0f3b4f2d663bce7a3c299f7e4529",
+        "inputs_hash": "20f13c8c9e11e0be379899fc0c14684b7df03d96c2b578c8b6b8f0ed56c73494",
+        "manifest_core_hash": "76a7f833fbf4caeea71efabcb83e70d3a3634d6ab129600883fd7bbcd522820b",
+        "parameters_hash": "4985c801d59c891b6cf348c96f9de4380620a5e216319eaaef1f946633a06ca1"
+      },
+      "inputs": {
+        "snapshot": "snap-1"
+      },
+      "notes": null,
+      "outputs": {
+        "rows": 1
+      },
+      "parameters": {
+        "as_of": "2026-11-15"
+      },
+      "resolved_as_of": "2026-11-15",
+      "run_id": "rehearsal-run-1",
+      "run_type": "score",
+      "status": "created"
+    },
+    "output_refs": {
+      "rows": 1
+    },
+    "parameters": {
+      "as_of": "2026-11-15"
+    },
+    "recorded_at": "2026-11-17 02:48:20.255192+00:00",
+    "recorded_by": "agent",
+    "resolved_as_of": "2026-11-15",
+    "run_id": "rehearsal-run-1",
+    "run_type": "score",
+    "status": "created"
+  },
+  "output_count": 1,
+  "outputs": [
+    {
+      "content_hash": "deadbeef",
+      "created_at_utc": "2026-11-17 02:48:20+00:00",
+      "entity_id": null,
+      "entity_type": null,
+      "metadata": {
+        "rows": 1
+      },
+      "output_id": 1,
+      "output_kind": "score",
+      "recorded_at": "2026-11-17 02:48:20.255192+00:00",
+      "run_id": "rehearsal-run-1",
+      "storage_ref": "artifacts/scores/rehearsal-run-1.parquet"
+    }
+  ],
+  "read_only": true,
+  "run_id": "rehearsal-run-1",
+  "target": {
+    "database": "rehearsal",
+    "driver": "postgresql+psycopg",
+    "host": "127.0.0.1"
+  }
+}

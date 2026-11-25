@@ -37,7 +37,9 @@ from pathlib import Path
 import pandas as pd
 from sqlalchemy import text
 
+from src.crispdm.config import settings
 from src.crispdm.db import engine, read_df
+from src.crispdm.ledger_opt_in import persist_run_if_opted_in
 from src.crispdm.model import (
     FEATURES,
     MIN_PR_AUC_LIFT,
@@ -49,7 +51,10 @@ from src.crispdm.model import (
     naive_baseline,
     walk_forward,
     walk_forward_folds,
+    walk_forward_pit_metadata,
 )
+from src.crispdm.promotion_contract import draft_holdout_contract
+from src.crispdm.run_manifest import build_run_manifest, get_git_state, write_manifest_file
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 CHECKPOINT_PATH = PROJECT_ROOT / "data" / "walk_forward_checkpoint.json"
@@ -551,6 +556,15 @@ def main():
     parser.add_argument(
         "--out", type=Path, default=CHECKPOINT_PATH, help="Where to write the JSON checkpoint"
     )
+    parser.add_argument("--persist-ledger", action="store_true")
+    parser.add_argument("--ledger-dsn")
+    parser.add_argument("--i-understand-ledger-write", action="store_true")
+    parser.add_argument("--holdout-id")
+    parser.add_argument("--holdout-snapshot-ref")
+    parser.add_argument("--holdout-freeze-date")
+    parser.add_argument("--holdout-owner")
+    parser.add_argument("--holdout-access-policy-ref")
+    parser.add_argument("--holdout-untouched-evidence-ref")
     args = parser.parse_args()
 
     df = load_labeled_features()
@@ -671,6 +685,68 @@ def main():
                 f"headroom={e['pr_auc_headroom']:.4f} lift={e['pr_auc_lift']:+.4f} "
                 f"{'unattainable' if e['headroom_below_reference'] else 'usable'}"
             )
+
+    git_state = get_git_state(PROJECT_ROOT)
+    manifest = build_run_manifest(
+        run_type="evaluate_walk_forward",
+        code_sha=git_state.get("sha"),
+        code_dirty=git_state.get("dirty"),
+        parameters={
+            "folds": args.folds,
+            "max_flag_rate": args.max_flag_rate,
+            "out": str(args.out),
+        },
+        inputs={
+            "feature_table": "model.features",
+            "label_column": "target_sustainable_dividend",
+            "holdout": draft_holdout_contract(
+                {
+                    "id": args.holdout_id,
+                    "snapshot_ref": args.holdout_snapshot_ref,
+                    "freeze_date": args.holdout_freeze_date,
+                    "owner": args.holdout_owner,
+                    "access_policy_ref": args.holdout_access_policy_ref,
+                    "untouched_evidence_ref": args.holdout_untouched_evidence_ref,
+                }
+            ),
+            "pit": walk_forward_pit_metadata(
+                embargo_days=settings.label_horizon_days,
+                test_start=checkpoint.get("test_end"),
+            ),
+        },
+        outputs={"checkpoint": str(args.out), "readiness": checkpoint.get("readiness")},
+        environment={"script": "scripts.evaluate_walk_forward"},
+        status="completed" if checkpoint.get("gate_passed") else "failed",
+        acceptance_policy_id=checkpoint.get("contract", {}).get("acceptance_policy_version"),
+        acceptance_policy_version=checkpoint.get("contract", {}).get("acceptance_policy_version"),
+    )
+    manifest_path = args.out.parent / f"walk_forward_manifest_{checkpoint['run_id']}.json"
+    try:
+        write_manifest_file(manifest, manifest_path)
+        checkpoint["manifest"] = {
+            "run_id": manifest["run_id"],
+            "path": str(manifest_path),
+            "hash": manifest["hashes"]["manifest_core_hash"],
+        }
+    except Exception as exc:
+        print(f"Manifest write failed: {exc}")
+    ledger_result = persist_run_if_opted_in(
+        manifest=manifest,
+        outputs=[
+            {
+                "output_kind": "walk_forward_checkpoint",
+                "storage_ref": str(args.out),
+                "content_hash": manifest["hashes"]["manifest_core_hash"],
+                "metadata": {"readiness": checkpoint.get("readiness")},
+            }
+        ],
+        dsn=args.ledger_dsn,
+        enabled=args.persist_ledger,
+        acknowledge=args.i_understand_ledger_write,
+        recorded_by="scripts.evaluate_walk_forward",
+    )
+    if ledger_result is not None:
+        print(f"Ledger: {ledger_result['run_id']} persisted={ledger_result['inserted']}")
 
     persist(checkpoint)
     args.out.parent.mkdir(parents=True, exist_ok=True)

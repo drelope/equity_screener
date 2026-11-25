@@ -56,6 +56,7 @@ import pandas as pd
 from sqlalchemy import text
 
 from .db import engine, read_df
+from .pit import FORWARD_RETURN_TIMING_MODE_DRAFT, pit_manifest_metadata
 
 #: Trading observations in a one-year window. The same horizon the trailing
 #: ``momentum_252d`` feature uses, so a forward return and a trailing return are
@@ -158,6 +159,19 @@ WHERE window_days = :window_days
   AND total_return IS NOT NULL
   AND as_of_date >= :date_from AND as_of_date < :date_to
 """
+
+
+def build_forward_returns_pit_metadata(*, as_of=None, window_days=FORWARD_WINDOW_DAYS):
+    """Draft PIT metadata for forward-return consumers (RM-02 integration)."""
+    return pit_manifest_metadata(
+        as_of=as_of,
+        universe_mode="priced_observation_dates_draft",
+        feature_timing_mode=FORWARD_RETURN_TIMING_MODE_DRAFT,
+        notes=(
+            "Draft PIT metadata: forward returns are realization-window computations over stored prices/dividends; "
+            "PIT universe eligibility and formation-availability controls are not fully implemented or verified."
+        ),
+    ) | {"forward_window_days": int(window_days)}
 
 
 def build_forward_returns(date_from=None, date_to=None, window_days=FORWARD_WINDOW_DAYS):

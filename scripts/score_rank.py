@@ -1,16 +1,25 @@
 import sys
 import uuid
 from datetime import date
+from pathlib import Path
 
 import pandas as pd
 from sqlalchemy import text
 
 from src.crispdm.db import engine, read_df
-from src.crispdm.feature_window import carry_forward_days, scoring_features_sql
+from src.crispdm.feature_window import (
+    carry_forward_days,
+    feature_window_pit_metadata,
+    scoring_features_sql,
+)
 from src.crispdm.features import db_value
+from src.crispdm.ledger_opt_in import persist_run_if_opted_in
+from src.crispdm.pit import normalize_as_of
 from src.crispdm.regime import MacroState, determine_market_regime
 from src.crispdm.regime_pipeline import apply_regime_layer, summarize
+from src.crispdm.run_manifest import build_run_manifest, get_git_state, write_manifest_file
 from src.crispdm.scoring import MIN_PRESENT_WEIGHT, predictions, rankings, score
+from src.crispdm.versioning import DATA_VERSION, FEATURE_VERSION, MODEL_VERSION
 
 
 def read_macro_state(features):
@@ -159,6 +168,23 @@ def main():
     # --as-of pivots the window on a past date so a scoring-policy change can be
     # replayed over history; the nightly passes None and pivots on the newest row.
     as_of_arg = parse_as_of(sys.argv)
+    as_of_arg_iso = normalize_as_of(as_of_arg)
+    args = type(
+        "LedgerArgs",
+        (),
+        {
+            "persist_ledger": "--persist-ledger" in sys.argv,
+            "ledger_dsn": next(
+                (
+                    sys.argv[i + 1]
+                    for i, a in enumerate(sys.argv)
+                    if a == "--ledger-dsn" and i + 1 < len(sys.argv)
+                ),
+                None,
+            ),
+            "i_understand_ledger_write": "--i-understand-ledger-write" in sys.argv,
+        },
+    )()
     prune_superseded, prune_reason = superseded_prune_decision(as_of_arg, sys.argv)
     if prune_reason:
         print(f"{as_of_arg}: {prune_reason}")
@@ -467,7 +493,77 @@ def main():
         .head(20)
     )
     print(out.to_string(index=False))
-    print(f"\nRun id: {run_id}")
+
+    try:
+        git_state = get_git_state(Path(__file__).resolve().parents[1])
+        manifest = build_run_manifest(
+            run_type="score_rank",
+            run_id=str(run_id),
+            code_sha=git_state.get("sha"),
+            code_dirty=git_state.get("dirty"),
+            config={
+                "model_version": MODEL_VERSION,
+                "feature_version": FEATURE_VERSION,
+                "data_version": DATA_VERSION,
+                "threshold": 0.5,
+            },
+            parameters={
+                "as_of_arg": as_of_arg_iso,
+                "carry_days": carry_days,
+                "include_historical": include_historical,
+                "apply_regime_weights": apply_weights,
+                "prune_superseded": prune_superseded,
+            },
+            inputs={
+                "features_table": "model.features",
+                "scored_rows": int(len(x)),
+                "scorable_rows": int((~unscorable).sum()),
+                "pit": feature_window_pit_metadata(
+                    as_of=as_of,
+                    include_historical=include_historical,
+                    carry_days=carry_days,
+                ),
+            },
+            outputs={
+                "scores_table": "model.scores",
+                "predictions_table": "model.predictions",
+                "rankings_table": "model.rankings",
+                "as_of_date": str(as_of),
+            },
+            resolved_as_of=str(as_of),
+            environment={"script": "scripts.score_rank"},
+            status="completed",
+        )
+        manifest_path = (
+            Path(__file__).resolve().parents[1]
+            / "artifacts"
+            / "runs"
+            / str(run_id)
+            / "manifest.json"
+        )
+        write_manifest_file(manifest, manifest_path)
+        ledger_result = persist_run_if_opted_in(
+            manifest=manifest,
+            outputs=[
+                {
+                    "output_kind": "score_rank_manifest",
+                    "storage_ref": str(manifest_path),
+                    "content_hash": manifest["hashes"]["manifest_core_hash"],
+                    "metadata": {"run_type": "score_rank"},
+                }
+            ],
+            dsn=getattr(args, "ledger_dsn", None),
+            enabled=getattr(args, "persist_ledger", False),
+            acknowledge=getattr(args, "i_understand_ledger_write", False),
+            recorded_by="scripts.score_rank",
+        )
+        if ledger_result is not None:
+            print(f"Ledger: {ledger_result['run_id']} persisted={ledger_result['inserted']}")
+        print(f"\nRun id: {run_id}")
+        print(f"Manifest: {manifest_path}")
+    except Exception as exc:
+        print(f"\nRun id: {run_id}")
+        print(f"Manifest write failed: {exc}", file=sys.stderr)
     return 0
 
 

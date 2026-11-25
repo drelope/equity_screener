@@ -780,9 +780,7 @@ def test_go_to_analysis_switches_pages_and_carries_the_ticker(without_token):
             url_path=investment_analysis.PAGE_PATH,
         )
         nav.register({nav.ANALYSIS: analysis})
-        st.navigation(
-            [st.Page(home, title="Home", url_path="home", default=True), analysis]
-        ).run()
+        st.navigation([st.Page(home, title="Home", url_path="home", default=True), analysis]).run()
 
     at = AppTest.from_function(shell, args=(ticker,), default_timeout=TIMEOUT).run()
     assert not at.exception, [e.value for e in at.exception]

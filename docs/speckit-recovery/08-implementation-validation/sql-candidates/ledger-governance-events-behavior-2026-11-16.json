@@ -1,0 +1,23 @@
+{
+  "status": "behavior_rehearsal_passed",
+  "target": "disposable postgres:17-alpine 127.0.0.1:55446 (destroyed)",
+  "script": "ledger-governance-behavior-2026-11-16.sql",
+  "observations": {
+    "writer_insert_manifest": "allowed",
+    "writer_update_manifest": "permission denied (grant layer)",
+    "reader_select_manifest": "allowed",
+    "reader_insert_manifest": "permission denied (grant layer)",
+    "auditor_select_schema_migrations": "allowed",
+    "governance_incident_opened_no_dual_control": "inserted",
+    "governance_self_approval": "rejected by ledger_governance_event_separation_chk",
+    "governance_legal_hold_without_dual_control": "rejected by ledger_governance_event_dual_control_chk",
+    "governance_legal_hold_with_dual_control": "inserted",
+    "governance_purge_completed_without_export": "rejected by ledger_governance_event_purge_export_chk",
+    "governance_update": "rejected: append-only governance event log (SQLSTATE 23000)",
+    "governance_delete": "rejected: append-only governance event log (SQLSTATE 23000)",
+    "governance_rows_final": 2,
+    "writer_update_privilege": false,
+    "reader_insert_privilege": false
+  },
+  "note": "Observed via psql with SET ROLE. Rejections were by check constraints or the append-only trigger, as designed."
+}

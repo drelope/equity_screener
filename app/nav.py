@@ -75,9 +75,7 @@ def render_flow_bar(current: str, ticker: str | None = None) -> None:
         if name == current:
             cell.markdown(f"**:blue[{label}]**")
         elif name == SCREENER or ticker:
-            if cell.button(
-                label, key=f"flow_{current}_{name}", type="tertiary", width="stretch"
-            ):
+            if cell.button(label, key=f"flow_{current}_{name}", type="tertiary", width="stretch"):
                 open_page(name, ticker, origin=current)
         else:
             cell.caption(label)

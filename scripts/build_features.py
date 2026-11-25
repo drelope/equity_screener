@@ -13,13 +13,15 @@ together cover every observation date exactly once.
 import argparse
 import sys
 import time
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
+from pathlib import Path
 
 from sqlalchemy import text
 
 from src.crispdm.db import engine
-from src.crispdm.features import build_features, persist_features
+from src.crispdm.features import build_features, build_features_pit_metadata, persist_features
 from src.crispdm.model import FEATURES, feature_completeness
+from src.crispdm.run_manifest import build_run_manifest, get_git_state, write_manifest_file
 
 
 def observation_date_range():
@@ -117,6 +119,44 @@ def main():
         print("Cumulative feature coverage:")
         for f in FEATURES:
             print(f"  {f}: {non_null[f] / total:.1%}")
+
+    try:
+        git_state = get_git_state(Path(__file__).resolve().parents[1])
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        manifest = build_run_manifest(
+            run_type="build_features",
+            code_sha=git_state.get("sha"),
+            code_dirty=git_state.get("dirty"),
+            parameters={
+                "window_days": args.window_days,
+                "days": args.days,
+                "date_from": str(first) if first else None,
+                "date_to": str(last) if last else None,
+            },
+            inputs={
+                "market_data_table": "raw.market_data",
+                "pit": build_features_pit_metadata(
+                    as_of=str(last) if last else None,
+                    date_from=str(first) if first else None,
+                    date_to=str(last) if last else None,
+                ),
+            },
+            outputs={"feature_rows_written": total, "resolved_range": [str(first), str(last)]},
+            resolved_as_of=str(last) if last else None,
+            environment={"script": "scripts.build_features"},
+            status="completed",
+        )
+        manifest_path = (
+            Path(__file__).resolve().parents[1]
+            / "artifacts"
+            / "runs"
+            / f"build_features_{stamp}"
+            / "manifest.json"
+        )
+        write_manifest_file(manifest, manifest_path)
+        print(f"Manifest: {manifest_path}")
+    except Exception as exc:
+        print(f"Manifest write failed: {exc}")
     return 0
 
 

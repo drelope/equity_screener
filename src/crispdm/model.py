@@ -18,6 +18,7 @@ from sklearn.preprocessing import StandardScaler
 from src.crispdm.config import settings
 from src.crispdm.feature_set import FEATURES
 from src.crispdm.features import RETIRED_FEATURES
+from src.crispdm.pit import WALK_FORWARD_TIMING_MODE_DRAFT, pit_manifest_metadata
 
 #: A feature that is present in the declared list but has no real source is a
 #: placeholder. Nine of the thirteen originally declared features were written
@@ -469,6 +470,21 @@ def walk_forward(df, max_flag_rate=0.10, features=None, embargo_days=None):
     dates = sorted(df.as_of_date.unique())
     cut = max(1, int(len(dates) * 0.70))
     return _fit_and_score(df, used, horizon, pd.Timestamp(dates[cut]), None, max_flag_rate)
+
+
+def walk_forward_pit_metadata(*, embargo_days=None, test_start=None):
+    """Draft PIT metadata for walk-forward label/timing consumers (RM-02 integration)."""
+    horizon = settings.label_horizon_days if embargo_days is None else int(embargo_days)
+    return pit_manifest_metadata(
+        as_of=test_start,
+        universe_mode="labeled_feature_rows_draft",
+        feature_timing_mode=WALK_FORWARD_TIMING_MODE_DRAFT,
+        notes=(
+            "Draft PIT metadata: walk-forward trains only on rows where D + label_horizon < test_start "
+            "(purge/embargo). This mitigates label-window leakage but does not verify feature availability, "
+            "universe PIT membership, delisted handling, or promotion-grade evidence."
+        ),
+    ) | {"embargo_days": horizon}
 
 
 def walk_forward_folds(
