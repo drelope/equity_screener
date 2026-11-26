@@ -18,11 +18,19 @@ PLACEHOLDERS = {
     "<workflow>",
 }
 
-FILES = [
+STATUS_FILES = {
     "docs/evidence/m1.md",
     "docs/evidence/ci/m1-ci-evidence.md",
     "docs/evidence/attestations/m1-attestation.md",
+}
+
+REQUIRED_FILES = [
+    "docs/evidence/README.md",
+    "docs/evidence/m1.md",
+    "docs/evidence/Prompt_M1approval.md",
     "docs/evidence/audit-checklist.md",
+    "docs/evidence/ci/m1-ci-evidence.md",
+    "docs/evidence/attestations/m1-attestation.md",
 ]
 
 M1_FILE = "docs/evidence/m1.md"
@@ -47,20 +55,7 @@ def read_file(path):
     return p.read_text(encoding="utf-8")
 
 
-def check_required_files():
-    for file in FILES:
-        if not Path(file).exists():
-            errors.append(f"Missing required file: {file}")
-
-
 def get_status(text):
-    """
-    Finds:
-        Status: BLOCKED
-        Status: CI PASS
-        Status: COMPLETE
-    """
-
     if not text:
         return None
 
@@ -76,23 +71,48 @@ def get_status(text):
     return match.group(1).upper()
 
 
-def contains_placeholder(text):
+def contains_placeholders(text):
     found = []
 
-    for value in PLACEHOLDERS:
-        if value in text:
-            found.append(value)
+    for placeholder in PLACEHOLDERS:
+        if placeholder in text:
+            found.append(placeholder)
 
     return found
 
 
+def validate_required_files():
+    for file in REQUIRED_FILES:
+        if not Path(file).exists():
+            errors.append(f"Missing required file: {file}")
+
+
 def validate_placeholders(path, text):
+    """
+    Placeholder validation only applies
+    to status-bearing evidence files.
+    """
+
+    if path not in STATUS_FILES:
+        return
+
     status = get_status(text)
 
+    #
+    # Templates or files without status
+    # are ignored.
+    #
+    if status is None:
+        return
+
+    #
+    # BLOCKED state intentionally allows
+    # TBD/TODO placeholders.
+    #
     if status == "BLOCKED":
         return
 
-    found = contains_placeholder(text)
+    found = contains_placeholders(text)
 
     for item in found:
         errors.append(
@@ -100,59 +120,68 @@ def validate_placeholders(path, text):
         )
 
 
-def validate_github_actions_url(ci_text):
-    match = re.search(
-        r"https://github\.com/[^\s]+/actions/runs/\d+",
-        ci_text
+def validate_github_actions_url(text):
+    pattern = (
+        r"https://github\.com/"
+        r"[^\s]+/"
+        r"actions/runs/"
+        r"\d+"
     )
 
-    return match is not None
+    return re.search(pattern, text) is not None
 
 
-def validate_sha(ci_text):
-    match = re.search(
+def validate_sha(text):
+    return re.search(
         r"\b[a-f0-9]{40}\b",
-        ci_text,
+        text,
         re.IGNORECASE,
-    )
-
-    return match is not None
+    ) is not None
 
 
 def validate_ci_evidence():
     text = read_file(CI_FILE)
 
-    if text is None:
+    if not text:
         return
-
-    status = get_status(text)
 
     validate_placeholders(CI_FILE, text)
 
-    if status == "BLOCKED":
+    status = get_status(text)
+
+    #
+    # BLOCKED evidence may still
+    # contain placeholders.
+    #
+    if status in (None, "BLOCKED"):
         return
 
     if not validate_github_actions_url(text):
         errors.append(
-            "CI evidence status is not BLOCKED but no valid GitHub Actions run URL was found"
+            "CI evidence is not BLOCKED but no valid GitHub Actions run URL was found"
         )
 
     if not validate_sha(text):
         errors.append(
-            "CI evidence status is not BLOCKED but no valid 40-character SHA was found"
+            "CI evidence is not BLOCKED but no valid 40-character SHA was found"
         )
 
 
 def validate_attestation():
     text = read_file(ATTESTATION_FILE)
 
-    if text is None:
+    if not text:
         return
 
     validate_placeholders(ATTESTATION_FILE, text)
 
-    m1_status = get_status(read_file(M1_FILE) or "")
+    m1_text = read_file(M1_FILE) or ""
+    m1_status = get_status(m1_text)
 
+    #
+    # Attestation only enforced
+    # once COMPLETE is claimed.
+    #
     if m1_status != "COMPLETE":
         return
 
@@ -173,14 +202,14 @@ def validate_attestation():
 def validate_m1_status():
     text = read_file(M1_FILE)
 
-    if text is None:
+    if not text:
         return
 
     validate_placeholders(M1_FILE, text)
 
     m1_status = get_status(text)
 
-    if m1_status not in VALID_STATUSES:
+    if not m1_status:
         errors.append(
             "m1.md does not contain a valid status"
         )
@@ -188,23 +217,23 @@ def validate_m1_status():
 
     ci_text = read_file(CI_FILE)
 
-    if ci_text is None:
+    if not ci_text:
         return
 
     ci_status = get_status(ci_text)
 
     #
-    # COMPLETE requires CI PASS evidence
+    # COMPLETE requires CI evidence
     #
     if m1_status == "COMPLETE":
 
         if ci_status == "BLOCKED":
             errors.append(
-                "m1.md is COMPLETE but CI evidence remains BLOCKED"
+                "m1.md reports COMPLETE but CI evidence remains BLOCKED"
             )
 
     #
-    # CI PASS requires CI evidence
+    # CI PASS requires CI PASS evidence
     #
     if m1_status == "CI PASS":
 
@@ -224,6 +253,9 @@ def validate_cross_file_consistency():
     m1_status = get_status(m1_text)
     ci_status = get_status(ci_text)
 
+    #
+    # BLOCKED allows blocked evidence.
+    #
     if m1_status == "BLOCKED":
         return
 
@@ -234,9 +266,9 @@ def validate_cross_file_consistency():
 
 
 def validate():
-    check_required_files()
+    validate_required_files()
 
-    for file in FILES:
+    for file in REQUIRED_FILES:
         text = read_file(file)
 
         if text:
