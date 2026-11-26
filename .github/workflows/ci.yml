@@ -17,6 +17,8 @@ jobs:
       - run: pip install -r requirements-dev.lock.txt
       - run: ruff check .
       - run: ruff format --check .
+      - name: Validate M1 Evidence
+        run: python scripts/validate_m1_evidence.py
 
   test:
     name: Tests (pytest)
