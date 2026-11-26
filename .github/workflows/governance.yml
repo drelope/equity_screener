@@ -1,0 +1,55 @@
+name: Governance Validation
+
+on:
+  pull_request:
+    branches:
+      - main
+
+  push:
+    branches:
+      - main
+      - master
+      - fix/**
+
+permissions:
+  contents: read
+
+jobs:
+  governance:
+
+    runs-on: ubuntu-latest
+
+    steps:
+
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Verify required evidence files
+        run: |
+          test -f docs/evidence/m1.md
+          test -f docs/evidence/Prompt_M1approval.md
+          test -f docs/evidence/audit-checklist.md
+          test -f docs/evidence/ci/m1-ci-evidence.md
+          test -f docs/evidence/attestations/m1-attestation.md
+
+      - name: Detect forbidden placeholders
+        run: |
+          ! grep -R "Example URL" docs/evidence || exit 1
+          ! grep -R "Example SHA" docs/evidence || exit 1
+          ! grep -R "Sample SHA" docs/evidence || exit 1
+          ! grep -R "Sample Workflow" docs/evidence || exit 1
+
+      - name: Validate governance evidence
+        run: |
+          python scripts/validate_m1_evidence.py
+
+      - name: Verify markdown formatting
+        uses: DavidAnson/markdownlint-cli2-action@v18
+        with:
+          globs: |
+            docs/**/*.md

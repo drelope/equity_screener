@@ -6,9 +6,9 @@
 
 Review repository evidence and determine the highest supportable M1 status based exclusively on verifiable evidence recorded in the repository.
 
-Do not rely on assumptions, memory, undocumented history, or inferred intent.
+Do not rely on assumptions, memory, undocumented history, inferred intent, historical conversations, or placeholder documentation.
 
-Every conclusion must be traceable to evidence stored in version control.
+Every conclusion must be traceable to evidence committed to the repository.
 
 ---
 
@@ -28,7 +28,7 @@ CI PASS
 COMPLETE
 ```
 
-Advancement to a higher status is permitted only when the supporting evidence already exists in the repository.
+Advancement to a higher status is permitted only when supporting evidence already exists and has been committed to the repository.
 
 ---
 
@@ -51,6 +51,8 @@ Do not report any of the following unless verifiable evidence exists:
 - Validation completed
 - Acceptance criteria satisfied
 - Milestone complete
+- Approval granted
+- Testing completed
 
 Unsupported statements must be identified as findings requiring remediation.
 
@@ -60,7 +62,39 @@ When documentation conflicts with evidence:
 
 - Repository evidence is authoritative.
 - Documentation must be corrected.
-- Status must reflect the evidence rather than the documentation.
+- Status must reflect evidence rather than documentation.
+
+---
+
+# Canonical Evidence Locations
+
+The following files are authoritative sources for milestone governance decisions.
+
+## Primary Evidence Files
+
+```text
+docs/evidence/m1.md
+docs/evidence/ci/m1-ci-evidence.md
+docs/evidence/attestations/m1-attestation.md
+docs/evidence/audit-checklist.md
+docs/evidence/Prompt_M1approval.md
+```
+
+## Review Guidance
+
+Reviewers should prefer canonical evidence locations when determining status.
+
+Evidence stored elsewhere should be referenced from a canonical evidence file.
+
+Evidence found only in:
+
+- PR comments
+- Issue comments
+- Chat transcripts
+- Temporary notes
+- Draft documents
+
+must not be considered authoritative unless linked from a canonical evidence file.
 
 ---
 
@@ -88,8 +122,8 @@ Required for COMPLETE:
 
 - Written maintainer attestation
 - Attestation references tested SHA
-- Attestation references CI run
-- Attestation committed to the repository
+- Attestation references workflow run
+- Attestation committed to repository
 
 ## Repository Evidence
 
@@ -103,29 +137,62 @@ Required:
 
 ---
 
+# Placeholder Detection Rules
+
+The following values are considered placeholders:
+
+```text
+TBD
+TODO
+Not yet recorded
+Pending
+Example URL
+Example SHA
+Sample SHA
+Sample Workflow
+Dummy Workflow
+Placeholder
+<run-url>
+<sha>
+<workflow>
+```
+
+The presence of placeholder values in required evidence fields results in:
+
+```text
+Status: BLOCKED
+```
+
+until corrected.
+
+---
+
 # Review Procedure
 
-Perform the following review sequence.
+Perform the following review sequence in order.
 
 ---
 
 ## Step 1: Inspect Repository Evidence
 
-Review all relevant evidence locations including:
+Review:
 
-- docs/evidence/
-- governance documentation
-- recovery documentation
-- decision logs
-- validation records
-- milestone records
+```text
+docs/evidence/
+governance documentation
+recovery documentation
+decision logs
+validation records
+milestone records
+```
 
 Identify:
 
 - recorded CI evidence
 - maintainer attestations
-- milestone status declarations
+- milestone declarations
 - unsupported claims
+- conflicting status statements
 
 ---
 
@@ -142,9 +209,11 @@ Verify:
 
 Result:
 
-- PASS
-- FAIL
-- NOT VERIFIED
+```text
+PASS
+FAIL
+NOT VERIFIED
+```
 
 ### SHA Verification
 
@@ -153,16 +222,46 @@ Verify:
 - tested SHA is recorded
 - SHA exists in repository history
 - SHA corresponds to workflow evidence
+- SHA is not a placeholder value
 
 Result:
 
-- PASS
-- FAIL
-- NOT VERIFIED
+```text
+PASS
+FAIL
+NOT VERIFIED
+```
 
 ---
 
-## Step 3: Validate Maintainer Attestation
+## Step 3: Validate CI Run Authenticity
+
+A valid CI run must:
+
+- Reference a GitHub Actions workflow run
+- Contain a workflow run identifier
+- Correspond to the recorded tested SHA
+- Be traceable to repository history
+- Not be a sample or placeholder URL
+
+Verify:
+
+- Run URL is real
+- Workflow exists
+- Workflow status can be confirmed
+- Workflow references the tested SHA
+
+Result:
+
+```text
+PASS
+FAIL
+NOT VERIFIED
+```
+
+---
+
+## Step 4: Validate Maintainer Attestation
 
 Verify:
 
@@ -173,13 +272,15 @@ Verify:
 
 Result:
 
-- PASS
-- FAIL
-- NOT VERIFIED
+```text
+PASS
+FAIL
+NOT VERIFIED
+```
 
 ---
 
-## Step 4: Validate Documentation Integrity
+## Step 5: Validate Documentation Integrity
 
 Identify:
 
@@ -188,11 +289,14 @@ Identify:
 - unsupported CI claims
 - unsupported completion claims
 - contradictory status statements
+- stale documentation
 
 Result:
 
-- PASS
-- FAIL
+```text
+PASS
+FAIL
+```
 
 ---
 
@@ -210,6 +314,7 @@ Conditions include:
 - Evidence not committed
 - Placeholder values remain
 - Unsupported claims remain
+- Contradictory documentation exists
 
 Output:
 
@@ -220,7 +325,7 @@ Status: BLOCKED
 Reason:
 
 ```text
-Required evidence is incomplete or unverifiable.
+Required evidence is incomplete, unsupported, or unverifiable.
 ```
 
 ---
@@ -233,6 +338,7 @@ Use CI PASS only when all of the following are verified:
 - Workflow run URL recorded
 - Tested SHA recorded
 - Evidence committed
+- No placeholder values remain in CI evidence
 - No unsupported CI claims remain
 
 Output:
@@ -250,7 +356,8 @@ Required CI evidence has been verified and recorded.
 Notes:
 
 - Implementation work may continue.
-- Documentation cleanup may continue.
+- Repository cleanup may continue.
+- Governance completion may still be pending.
 - Maintainer attestation may still be pending.
 
 ---
@@ -285,10 +392,16 @@ Required governance evidence has been verified and recorded.
 ```text
 Maintainer Attestation
 
+Repository:
+_________________________
+
 Maintainer:
 _________________________
 
 Date:
+_________________________
+
+Branch:
 _________________________
 
 Tested SHA:
@@ -317,9 +430,80 @@ _________________________
 
 ---
 
+# Anti-Retroactive Certification Rule
+
+An attestation does not create evidence.
+
+An attestation may only certify:
+
+- Existing CI evidence
+- Existing repository records
+- Existing tested SHA records
+- Existing workflow records
+
+Attestations must not be used as a substitute for:
+
+- Missing CI URLs
+- Missing workflow runs
+- Missing tested SHAs
+- Missing validation records
+
+If the underlying evidence does not exist:
+
+```text
+Status: BLOCKED
+```
+
+regardless of the presence of an attestation.
+
+---
+
+# Audit Checklist
+
+## Canonical Evidence
+
+Verify:
+
+- [ ] docs/evidence/m1.md exists
+- [ ] docs/evidence/ci/m1-ci-evidence.md exists
+- [ ] docs/evidence/attestations/m1-attestation.md exists
+- [ ] docs/evidence/audit-checklist.md exists
+
+## CI Evidence
+
+Verify:
+
+- [ ] Workflow run exists
+- [ ] Run URL recorded
+- [ ] Workflow succeeded
+- [ ] Tested SHA recorded
+- [ ] Tested SHA exists in repository history
+
+## Integrity Review
+
+Verify:
+
+- [ ] No placeholder URLs
+- [ ] No placeholder SHAs
+- [ ] No TBD values
+- [ ] No TODO values
+- [ ] No contradictory status statements
+- [ ] No unsupported claims
+
+## Attestation Review
+
+Verify:
+
+- [ ] Attestation completed
+- [ ] Attestation references workflow run
+- [ ] Attestation references tested SHA
+- [ ] Attestation committed
+
+---
+
 # Required Output Format
 
-Produce the following sections.
+Produce all of the following sections.
 
 ## Summary
 
@@ -327,7 +511,7 @@ Concise assessment of milestone readiness.
 
 ## Findings
 
-Verified observations supported by evidence.
+Verified observations supported by repository evidence.
 
 ## Missing Evidence
 
@@ -351,7 +535,7 @@ CI PASS
 COMPLETE
 ```
 
-Provide supporting justification.
+Include justification tied directly to evidence.
 
 ---
 
@@ -363,11 +547,12 @@ Examples:
 
 - Removing unsupported approval claims
 - Correcting governance documentation
-- Updating evidence templates
-- Refactoring repository documentation
-- Organizing validation records
+- Updating templates
+- Refactoring documentation
+- Organizing evidence
+- Creating audit records
 
-Such activities do not constitute proof of CI success.
+Such activities are valuable but do not constitute proof of CI success.
 
 Only verified evidence may change milestone status.
 
@@ -380,9 +565,10 @@ Only verified evidence may change milestone status.
 Required:
 
 - Verified workflow run
-- Recorded workflow URL
+- Verified workflow URL
 - Recorded tested SHA
 - Evidence committed
+- No placeholder values remain
 
 ## CI PASS → COMPLETE
 
@@ -413,5 +599,8 @@ Never infer missing evidence.
 
 Never replace evidence with assumptions.
 
+Never use an attestation as a substitute for missing CI records.
+
 Evidence first.
+
 Status second.
