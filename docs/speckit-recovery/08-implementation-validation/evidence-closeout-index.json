@@ -1,7 +1,7 @@
 {
   "schema": "p0_evidence_closeout/v1",
   "status": "draft_not_promotion_grade",
-  "generated_at_utc": "2026-11-25T18:45:00+00:00",
+  "generated_at_utc": "2026-11-25T19:00:00+00:00",
   "promotion_claim": false,
   "promotion_grade": false,
   "promotion_blockers": [
@@ -555,7 +555,7 @@
     {
       "id": "m1-corrections-audit",
       "path": "docs/M1_CORRECTIONS_AUDIT.md",
-      "sha256": "cb8f7938b9961e96b54643cd12a70f505f7ab1cde0d58040ed48ca6b35352967",
+      "sha256": "4237be9d178f53708abfdb3ddc593d9ad6357029d1a07ab2ce55cc50392d9d0b",
       "kind": "governance_policy",
       "claim_scope": "draft_policy",
       "purpose": "M1 correction audit and before/after record",
@@ -565,7 +565,7 @@
     {
       "id": "m1-claim-scan",
       "path": "docs/M1_CLAIM_SCAN_REPORT.md",
-      "sha256": "f44a04b55e867e8da4ee0bbee4bc606afca60adab557f2cf009df7c8fabb3288",
+      "sha256": "757857dcfb691fcfb9f4b41f5a119121e584580f4f57943220e80711de569274",
       "kind": "governance_policy",
       "claim_scope": "draft_policy",
       "purpose": "Full leftover-claim scan report",

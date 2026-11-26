@@ -1533,3 +1533,11 @@
 | `tests/test_check_promotion_evidence.py:93` | approved/approval | Accurate — code/test identifier | Approval term is a code identifier, CLI flag, or test constant. | `policy["status"] = "approved"` |
 | `tests/test_check_promotion_evidence.py:119` | approved/approval | Accurate — code/test identifier | Approval term is a code identifier, CLI flag, or test constant. | `{"approver": "x", "approved_at": "2026-02-01", "evidence_refs": ["e"]}` |
 | `tests/test_verify_nightly_run.py:297` | GO | Accurate — code/test identifier | Approval term is a code identifier, CLI flag, or test constant. | `"""The accepted NO-GO: rule-based scoring is the product, so it neither alarms nor passes.` |
+
+## Post-2026-11-25 rejection recheck
+
+- `docs/evidence/m1.md` was corrected from `CI PASS` / `Overall M1: CONDITIONAL` to `CI REJECTED` / `Overall M1: BLOCKED`.
+- The URL `.../runs/12345678901` returned HTTP 404.
+- The SHA `64f74e18d8cbbcf0f9c3e4f3b6f9d1d7e2a12345` is not a git object.
+- Remaining occurrences of these invalid values are in rejection/audit text only and are accurate.
+- No approved CI status, approver name, or approved SHA was recorded.

@@ -77,3 +77,14 @@ All other `approval`/`approved` hits are accurate when read in context: they des
 - No `promotion_grade=true` or `release ready` claim was found.
 - No active M1 ratification or Conditional GO claim remains after the fixes above.
 - Hits needing manual review are historical model GO/NO-GO findings, future approval requirements, or blank approval fields in draft governance files; none records an M1 approval.
+
+## Invalid CI evidence rejection (2026-11-25)
+
+| File | Before | Now | Claim corrected |
+|---|---|---|---|
+| `docs/evidence/m1.md` | `Status: CI PASS`; workflow status `PASS`; tested SHA `64f74e18d8cbbcf0f9c3e4f3b6f9d1d7e2a12345`; `CI: PASS`; `Overall M1: CONDITIONAL`. | `CI REJECTED — no passing CI baseline`; URL verified as HTTP 404; SHA verified as not a git object; `Approval: PENDING`; `Overall M1: BLOCKED`. | False CI PASS / CONDITIONAL M1 claim |
+| `docs/M1_EXTERNAL_EVIDENCE_STEPS.md` | CI URL captured as step 3 complete; pending steps still open. | Step 3 reset to capture a passing CI URL; added note that the previous CI PASS claim was rejected in a new commit without history rewrite. | Invalid CI capture |
+| `docs/speckit-recovery/08-implementation-validation/execution-log.md` | No record of the invalid evidence rejection. | Added rejection row with URL/SHA verification results and blocked status. | Audit trail |
+| `docs/speckit-recovery/08-implementation-validation/evidence-closeout-index.json` | Did not include `docs/evidence/m1.md`. | Added corrected M1 evidence record; all hashes refreshed. | Evidence bundle coverage |
+
+The invalid URL and SHA remain in the audit note, steps note, and execution log only as rejected evidence descriptions, not as valid CI inputs. No history was rewritten.
