@@ -4,27 +4,31 @@
 
 ## Purpose
 
-Review repository evidence and determine the highest supportable M1 status based solely on verifiable evidence recorded in the repository.
+Review repository evidence and determine the highest supportable M1 status based exclusively on verifiable evidence recorded in the repository.
 
-This review must not rely on assumptions, memory, or undocumented claims.
+Do not rely on assumptions, memory, undocumented history, or inferred intent.
 
-All conclusions must be traceable to evidence stored in version control.
+Every conclusion must be traceable to evidence stored in version control.
 
 ---
 
 # Governance Model
 
-This repository is maintained under a solo-maintainer governance model.
+This repository operates under a solo-maintainer governance model.
 
 Independent reviewer approval is not required.
 
-Evidence-based validation is required.
+Repository status progression is:
 
-Milestone progression is:
+```text
+BLOCKED
+    ↓
+CI PASS
+    ↓
+COMPLETE
+```
 
-BLOCKED → CI PASS → COMPLETE
-
-Status advancement must be supported by repository evidence at the time of review.
+Advancement to a higher status is permitted only when the supporting evidence already exists in the repository.
 
 ---
 
@@ -36,27 +40,27 @@ Evidence creates status.
 
 Status does not create evidence.
 
-A milestone may only be advanced when supporting evidence already exists.
+A milestone may only advance when supporting evidence has been collected, verified, and committed.
 
 ## No Unsupported Claims
 
-Do not report any of the following unless evidence is present:
+Do not report any of the following unless verifiable evidence exists:
 
-- Approval granted
+- Milestone approved
 - CI passed
-- Verification completed
+- Validation completed
 - Acceptance criteria satisfied
 - Milestone complete
 
-Unsupported claims must be reported as findings.
+Unsupported statements must be identified as findings requiring remediation.
 
 ## Repository Truth
 
 When documentation conflicts with evidence:
 
-Repository evidence is authoritative.
-
-Documentation must be corrected.
+- Repository evidence is authoritative.
+- Documentation must be corrected.
+- Status must reflect the evidence rather than the documentation.
 
 ---
 
@@ -66,32 +70,36 @@ Documentation must be corrected.
 
 Required:
 
-- GitHub Actions workflow run exists
-- Workflow completed successfully
-- Workflow run URL recorded
-- Exact tested commit SHA recorded
+- Verified GitHub Actions workflow run
+- Successful workflow completion
+- Recorded workflow run URL
+- Recorded tested commit SHA
 
 Optional:
 
-- Workflow screenshots
-- CI logs
-- Additional artifacts
+- Build logs
+- Test reports
+- Screenshots
+- Additional validation artifacts
 
 ## Maintainer Evidence
 
-Required:
+Required for COMPLETE:
 
 - Written maintainer attestation
 - Attestation references tested SHA
-- Attestation stored in repository
+- Attestation references CI run
+- Attestation committed to the repository
 
 ## Repository Evidence
 
 Required:
 
-- Evidence files committed
+- Evidence committed to version control
 - Evidence references actual repository state
 - No placeholder values remain
+- No sample URLs remain
+- No sample SHAs remain
 
 ---
 
@@ -99,56 +107,58 @@ Required:
 
 Perform the following review sequence.
 
-## Step 1: Inspect Evidence
+---
 
-Review:
+## Step 1: Inspect Repository Evidence
+
+Review all relevant evidence locations including:
 
 - docs/evidence/
 - governance documentation
-- milestone documents
-- recovery documents
+- recovery documentation
 - decision logs
 - validation records
+- milestone records
 
 Identify:
 
 - recorded CI evidence
-- attestation records
+- maintainer attestations
 - milestone status declarations
+- unsupported claims
 
 ---
 
 ## Step 2: Validate CI Evidence
 
+### Workflow Verification
+
 Verify:
 
-### Workflow Run
-
-Evidence exists for:
-
-- workflow name
-- workflow result
-- workflow URL
+- workflow exists
+- workflow completed successfully
+- workflow run URL is recorded
+- workflow evidence is internally consistent
 
 Result:
 
-PASS
-FAIL
-NOT VERIFIED
+- PASS
+- FAIL
+- NOT VERIFIED
 
-### Tested SHA
+### SHA Verification
 
 Verify:
 
-- SHA recorded
+- tested SHA is recorded
 - SHA exists in repository history
-- SHA matches workflow evidence
+- SHA corresponds to workflow evidence
 
 Result:
 
-PASS
-FAIL
-NOT VERIFIED
+- PASS
+- FAIL
+- NOT VERIFIED
 
 ---
 
@@ -158,95 +168,152 @@ Verify:
 
 - attestation exists
 - attestation references tested SHA
+- attestation references workflow run
 - attestation is committed
 
 Result:
 
-PASS
-FAIL
-NOT VERIFIED
+- PASS
+- FAIL
+- NOT VERIFIED
 
 ---
 
-## Step 4: Review Documentation Integrity
+## Step 4: Validate Documentation Integrity
 
 Identify:
 
-- unsupported approval claims
-- unsupported CI claims
 - placeholder URLs
 - placeholder SHAs
-- contradictory status values
+- unsupported CI claims
+- unsupported completion claims
+- contradictory status statements
 
 Result:
 
-PASS
-FAIL
+- PASS
+- FAIL
 
 ---
 
-# Status Determination Rules
+# Status Matrix
 
 ## BLOCKED
 
-Return BLOCKED when ANY of the following are true:
+Use BLOCKED when any required CI evidence is missing.
 
-- CI run not recorded
-- CI URL missing
-- Tested SHA missing
+Conditions include:
+
+- Missing workflow run URL
+- Missing tested SHA
 - Workflow success cannot be verified
-- Attestation missing
 - Evidence not committed
-- Placeholder values present
-- Unsupported claims present
+- Placeholder values remain
+- Unsupported claims remain
 
 Output:
 
+```text
 Status: BLOCKED
+```
 
 Reason:
-Missing required evidence.
+
+```text
+Required evidence is incomplete or unverifiable.
+```
 
 ---
 
 ## CI PASS
 
-Return CI PASS only when ALL of the following are true:
+Use CI PASS only when all of the following are verified:
 
-- GitHub Actions workflow successfully completed
-- Run URL recorded
+- Successful GitHub Actions workflow run
+- Workflow run URL recorded
 - Tested SHA recorded
 - Evidence committed
 - No unsupported CI claims remain
 
 Output:
 
+```text
 Status: CI PASS
+```
 
 Reason:
-CI evidence verified.
 
-Note:
-Repository may proceed with implementation and cleanup activities while awaiting final milestone completion requirements.
+```text
+Required CI evidence has been verified and recorded.
+```
+
+Notes:
+
+- Implementation work may continue.
+- Documentation cleanup may continue.
+- Maintainer attestation may still be pending.
 
 ---
 
 ## COMPLETE
 
-Return COMPLETE only when ALL of the following are true:
+Use COMPLETE only when all of the following are verified:
 
 - CI PASS requirements satisfied
 - Maintainer attestation recorded
+- Attestation references tested SHA
+- Attestation references workflow run
 - Documentation internally consistent
 - No unsupported claims remain
-- Evidence repository is complete
 
 Output:
 
+```text
 Status: COMPLETE
+```
 
 Reason:
-Required governance evidence verified.
+
+```text
+Required governance evidence has been verified and recorded.
+```
+
+---
+
+# Maintainer Attestation Template
+
+```text
+Maintainer Attestation
+
+Maintainer:
+_________________________
+
+Date:
+_________________________
+
+Tested SHA:
+_________________________
+
+GitHub Actions Run:
+_________________________
+
+Workflow:
+_________________________
+
+Attestation:
+
+I attest that:
+
+1. The commit identified above successfully completed the required CI workflow.
+2. The recorded SHA matches the commit evaluated for M1.
+3. Repository evidence accurately reflects the current state of validation.
+4. No known unsupported approval or CI claims remain.
+5. M1 acceptance criteria have been reviewed and satisfied.
+
+Signed:
+
+_________________________
+```
 
 ---
 
@@ -256,11 +323,11 @@ Produce the following sections.
 
 ## Summary
 
-Brief overall assessment.
+Concise assessment of milestone readiness.
 
 ## Findings
 
-List verified findings.
+Verified observations supported by evidence.
 
 ## Missing Evidence
 
@@ -268,7 +335,7 @@ List unresolved evidence gaps.
 
 ## Unsupported Claims
 
-List any unsupported statements discovered.
+List unsupported or contradictory statements.
 
 ## Recommended Actions
 
@@ -278,29 +345,53 @@ Provide prioritized remediation actions.
 
 One of:
 
-- BLOCKED
-- CI PASS
-- COMPLETE
+```text
+BLOCKED
+CI PASS
+COMPLETE
+```
 
-Provide justification.
+Provide supporting justification.
 
 ---
 
 # Repository Cleanup Guidance
 
-Repository cleanup may proceed while status remains BLOCKED.
+Repository cleanup may continue regardless of milestone status.
 
 Examples:
 
-- Removing unsupported approval statements
-- Correcting governance documents
+- Removing unsupported approval claims
+- Correcting governance documentation
 - Updating evidence templates
-- Refactoring documentation
+- Refactoring repository documentation
 - Organizing validation records
 
-Such work does not constitute proof of CI success.
+Such activities do not constitute proof of CI success.
 
 Only verified evidence may change milestone status.
+
+---
+
+# Exit Criteria
+
+## BLOCKED → CI PASS
+
+Required:
+
+- Verified workflow run
+- Recorded workflow URL
+- Recorded tested SHA
+- Evidence committed
+
+## CI PASS → COMPLETE
+
+Required:
+
+- Maintainer attestation completed
+- Attestation committed
+- Documentation internally consistent
+- No unsupported claims remain
 
 ---
 
@@ -308,11 +399,15 @@ Only verified evidence may change milestone status.
 
 If evidence is missing:
 
+```text
 Report BLOCKED.
+```
 
 If evidence exists:
 
-Report the highest status fully supported by repository evidence.
+```text
+Report the highest status fully supported by evidence.
+```
 
 Never infer missing evidence.
 
