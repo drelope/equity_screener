@@ -54,3 +54,7 @@ t -ErrorAction SilentlyContinue | Select-Object Name,Source
 ObbCredentials.json
 artifacts/*
 !artifacts/.gitkeep
+pytest.log
+security.log
+pytest.log
+security.log
