@@ -1,7 +1,7 @@
 {
   "schema": "p0_evidence_closeout/v1",
   "status": "draft_not_promotion_grade",
-  "generated_at_utc": "2026-11-19T01:15:00+00:00",
+  "generated_at_utc": "2026-11-19T01:45:00+00:00",
   "promotion_claim": false,
   "promotion_grade": false,
   "promotion_blockers": [
@@ -25,7 +25,7 @@
     {
       "id": "execution-log",
       "path": "docs/speckit-recovery/08-implementation-validation/execution-log.md",
-      "sha256": "e3be54aadfdd1bf47235ab1dac695b1bf601cebe924c941b17202f462fa73af1",
+      "sha256": "9d2ec3ba8025e3efff2d488f23a1403ad64e6e752b26808bc7b26b22ce9e828f",
       "kind": "execution_log",
       "claim_scope": "execution_record",
       "purpose": "Command-level execution and validation record",
@@ -545,7 +545,7 @@
     {
       "id": "p0-acceptance-tracker",
       "path": "docs/speckit-recovery/08-implementation-validation/p0-acceptance-evidence-tracker.md",
-      "sha256": "c897a558e17e879cf8c258fee2cd48a4e57ddbfcc85a03484ae1a564ce0be0f7",
+      "sha256": "b7c5bc496aeb383cc121d447cb3b2887755e76b67979e20753c4ec5bd3fb9c60",
       "kind": "policy_draft",
       "claim_scope": "draft_policy",
       "purpose": "P0 acceptance evidence status and external gates",
@@ -575,7 +575,7 @@
     {
       "id": "governance-draft",
       "path": "GOVERNANCE.md",
-      "sha256": "4209934c450062203bf26ca39cb865db327d4e2d5ec36bbfbee87298de9e92af",
+      "sha256": "8062d45f4620295ee583395c160766a9373f2f236dd8cc01d2142957353ab4ef",
       "kind": "governance_policy",
       "claim_scope": "draft_policy",
       "purpose": "Draft governance structure with owner placeholders",
@@ -595,7 +595,7 @@
     {
       "id": "m1-external-steps",
       "path": "docs/M1_EXTERNAL_EVIDENCE_STEPS.md",
-      "sha256": "b3b66c1f041beb300c71e051935d47bea04c583c651b7305cfd73baf33cea1dc",
+      "sha256": "f8e46f9bd15b1fa518016bc14d6daa26afc6ac9a5766bfeec9bbd2eb925762a9",
       "kind": "governance_policy",
       "claim_scope": "draft_policy",
       "purpose": "Pending M1 external evidence steps and gate invariants",

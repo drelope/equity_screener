@@ -37,7 +37,7 @@
 1. approver name [PENDING]; approval date 2026-11-19 owner-supplied, not effective until CI run URL and approved SHA are recorded.
 2. DEC-001..008 and UNK-001..007 closure evidence or approved exceptions.
 3. Interactive Reports Center verification (`unk004-ui-verification-checklist.md`).
-4. CI run URL [PENDING] — must match `https://github.com/drelope/equity_screener/actions/runs/<run_id>`; approved SHA [PENDING].
+4. CI run URL observed but not approved: `https://github.com/drelope/equity_screener/actions/runs/45700975373/job/139510657402?pr=10` — owner-supplied CI job URL; page title identifies `Remove unsupported M1 approval claims and document CI evidence` at `64f74e1`; visible job `Security (dependency audit + secret scan)` failed with exit code 127 (`pip-audit` command not found); warning: Node.js 20 actions forced to Node.js 24; not a passing CI baseline; a passing run on the exact approved SHA is still required.
 5. Controlled PIT recompute, survivor-vs-PIT delta, and approved basis decisions.
 6. Frozen holdout, acceptance-policy version, cost model, exposure-matched benchmark, and net-return evidence.
 7. Final AC review with named approver and decision date.
@@ -47,7 +47,7 @@
 | Gate | Check | Result | Consequence |
 |---|---|---|---|
 | Named M1 approver | Supersedes `86f6a59` | approver name [PENDING]; approval date 2026-11-19 owner-supplied | Not effective approval; do not mark M1 complete |
-| External CI | Supersedes `86f6a59` | `repository: https://github.com/drelope/equity_screener`; CI run URL [PENDING]; approved SHA [PENDING] | No external CI run URL/log; AC-P0-09/AC-P0-11 remain partial |
+| External CI |Supersedes `86f6a59` | `repository: https://github.com/drelope/equity_screener`; observed URL: `https://github.com/drelope/equity_screener/actions/runs/45700975373/job/139510657402?pr=10`; approved SHA [PENDING] | owner-supplied CI job URL; page title identifies `Remove unsupported M1 approval claims and document CI evidence` at `64f74e1`; visible job `Security (dependency audit + secret scan)` failed with exit code 127 (`pip-audit` command not found); warning: Node.js 20 actions forced to Node.js 24; not a passing CI baseline; AC-P0-09/AC-P0-11 remain partial |
 | Branch publication | `git branch -vv` | `feature/speckit-recovery` is local-only; no upstream | Branch must be pushed to a remote with CI before an external run can exist |
 
 ## Owner-supplied inputs (not effective)
@@ -57,11 +57,11 @@
 | approver name | [PENDING] | Supersedes `86f6a59`; no history rewrite |
 | approval date | 2026-11-19 | Owner-supplied; not effective until CI run URL and approved SHA |
 | repository | https://github.com/drelope/equity_screener | Repository only |
-| CI run URL | [PENDING] | Must match https://github.com/drelope/equity_screener/actions/runs/<run_id> |
-| approved SHA | [PENDING] | Exact commit SHA to be approved |
+| CI run URL | https://github.com/drelope/equity_screener/actions/runs/45700975373/job/139510657402?pr=10 | Observed, not approved; failed job |
+| approved SHA | [PENDING] | Exact commit SHA to be approved; observed CI page identifies 64f74e1 but is not an approved baseline |
 
 ## Non-claims
 
-- This tracker does not close any AC-P0 criterion or record effective M1 approval/CI status. The approval date is owner-supplied only; M1 approval, CI status, merge, release, push, and tag remain BLOCKED.
+- This tracker does not close any AC-P0 criterion or record effective M1 approval/CI status. Observed CI: owner-supplied CI job URL; page title identifies `Remove unsupported M1 approval claims and document CI evidence` at `64f74e1`; visible job `Security (dependency audit + secret scan)` failed with exit code 127 (`pip-audit` command not found); warning: Node.js 20 actions forced to Node.js 24; not a passing CI baseline. M1 approval, CI status, merge, release, push, and tag remain BLOCKED.
 - It does not authorize migration promotion, production cutover, or performance claims.
 - It does not convert local scaffolding into external acceptance evidence.
