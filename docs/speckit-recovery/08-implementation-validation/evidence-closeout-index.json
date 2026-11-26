@@ -1,7 +1,7 @@
 {
   "schema": "p0_evidence_closeout/v1",
   "status": "draft_not_promotion_grade",
-  "generated_at_utc": "2026-11-19T01:45:00+00:00",
+  "generated_at_utc": "2026-11-25T18:45:00+00:00",
   "promotion_claim": false,
   "promotion_grade": false,
   "promotion_blockers": [
@@ -25,7 +25,7 @@
     {
       "id": "execution-log",
       "path": "docs/speckit-recovery/08-implementation-validation/execution-log.md",
-      "sha256": "9d2ec3ba8025e3efff2d488f23a1403ad64e6e752b26808bc7b26b22ce9e828f",
+      "sha256": "ae678f5d51ba9209e14ed0ca39cd8e4f192e989e1bd1e7511f7c6b698e816c6d",
       "kind": "execution_log",
       "claim_scope": "execution_record",
       "purpose": "Command-level execution and validation record",
@@ -595,10 +595,20 @@
     {
       "id": "m1-external-steps",
       "path": "docs/M1_EXTERNAL_EVIDENCE_STEPS.md",
-      "sha256": "f8e46f9bd15b1fa518016bc14d6daa26afc6ac9a5766bfeec9bbd2eb925762a9",
+      "sha256": "d91bdb420004d8e5a569db1ea9f0c3f473c1ae50b7ba3f171a7d117df7b9d6c5",
       "kind": "governance_policy",
       "claim_scope": "draft_policy",
       "purpose": "Pending M1 external evidence steps and gate invariants",
+      "promotion_claim": false,
+      "status": "draft_not_promotion_grade"
+    },
+    {
+      "id": "m1-evidence-correction",
+      "path": "docs/evidence/m1.md",
+      "sha256": "5a9065c795e4bc1e3ba0a755afbeb8c655a39f6de67b7dda34c7c06be1848c60",
+      "kind": "governance_policy",
+      "claim_scope": "draft_policy",
+      "purpose": "M1 CI evidence record corrected after invalid-evidence rejection",
       "promotion_claim": false,
       "status": "draft_not_promotion_grade"
     }
