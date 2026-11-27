@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 
-from pathlib import Path
 import re
 import sys
+from pathlib import Path
 
 PLACEHOLDERS = {
     "TBD",
@@ -115,9 +115,7 @@ def validate_placeholders(path, text):
     found = contains_placeholders(text)
 
     for item in found:
-        errors.append(
-            f"{path} contains placeholder '{item}' while status is {status}"
-        )
+        errors.append(f"{path} contains placeholder '{item}' while status is {status}")
 
 
 def validate_github_actions_url(text):
@@ -132,11 +130,14 @@ def validate_github_actions_url(text):
 
 
 def validate_sha(text):
-    return re.search(
-        r"\b[a-f0-9]{40}\b",
-        text,
-        re.IGNORECASE,
-    ) is not None
+    return (
+        re.search(
+            r"\b[a-f0-9]{40}\b",
+            text,
+            re.IGNORECASE,
+        )
+        is not None
+    )
 
 
 def validate_ci_evidence():
@@ -157,14 +158,10 @@ def validate_ci_evidence():
         return
 
     if not validate_github_actions_url(text):
-        errors.append(
-            "CI evidence is not BLOCKED but no valid GitHub Actions run URL was found"
-        )
+        errors.append("CI evidence is not BLOCKED but no valid GitHub Actions run URL was found")
 
     if not validate_sha(text):
-        errors.append(
-            "CI evidence is not BLOCKED but no valid 40-character SHA was found"
-        )
+        errors.append("CI evidence is not BLOCKED but no valid 40-character SHA was found")
 
 
 def validate_attestation():
@@ -194,9 +191,7 @@ def validate_attestation():
 
     for field in required_fields:
         if field not in text:
-            errors.append(
-                f"Attestation missing required field: {field}"
-            )
+            errors.append(f"Attestation missing required field: {field}")
 
 
 def validate_m1_status():
@@ -210,9 +205,7 @@ def validate_m1_status():
     m1_status = get_status(text)
 
     if not m1_status:
-        errors.append(
-            "m1.md does not contain a valid status"
-        )
+        errors.append("m1.md does not contain a valid status")
         return
 
     ci_text = read_file(CI_FILE)
@@ -226,21 +219,15 @@ def validate_m1_status():
     # COMPLETE requires CI evidence
     #
     if m1_status == "COMPLETE":
-
         if ci_status == "BLOCKED":
-            errors.append(
-                "m1.md reports COMPLETE but CI evidence remains BLOCKED"
-            )
+            errors.append("m1.md reports COMPLETE but CI evidence remains BLOCKED")
 
     #
     # CI PASS requires CI PASS evidence
     #
     if m1_status == "CI PASS":
-
         if ci_status == "BLOCKED":
-            errors.append(
-                "m1.md reports CI PASS but CI evidence remains BLOCKED"
-            )
+            errors.append("m1.md reports CI PASS but CI evidence remains BLOCKED")
 
 
 def validate_cross_file_consistency():
@@ -260,9 +247,7 @@ def validate_cross_file_consistency():
         return
 
     if ci_status == "BLOCKED":
-        errors.append(
-            f"Status mismatch: m1.md={m1_status}, ci evidence={ci_status}"
-        )
+        errors.append(f"Status mismatch: m1.md={m1_status}, ci evidence={ci_status}")
 
 
 def validate():

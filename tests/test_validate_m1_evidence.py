@@ -4,7 +4,6 @@ from pathlib import Path
 
 import pytest
 
-
 VALIDATOR = Path("scripts/validate_m1_evidence.py")
 
 
@@ -34,9 +33,7 @@ def test_validator_compiles():
         text=True,
     )
 
-    assert result.returncode == 0, (
-        result.stdout + result.stderr
-    )
+    assert result.returncode == 0, result.stdout + result.stderr
 
 
 @pytest.mark.smoke
@@ -52,18 +49,11 @@ def test_validator_executes():
 
     result = run_validator()
 
-    output = (
-        result.stdout +
-        result.stderr
-    ).strip()
+    output = (result.stdout + result.stderr).strip()
 
     assert result.returncode in (0, 1)
 
-    assert (
-        "VALIDATION PASSED" in output
-        or
-        "VALIDATION FAILED" in output
-    ), output
+    assert "VALIDATION PASSED" in output or "VALIDATION FAILED" in output, output
 
 
 @pytest.mark.smoke
@@ -72,20 +62,14 @@ def test_validator_emits_machine_readable_status():
 
     result = run_validator()
 
-    output = (
-        result.stdout +
-        result.stderr
-    )
+    output = result.stdout + result.stderr
 
     expected_tokens = {
         "VALIDATION PASSED",
         "VALIDATION FAILED",
     }
 
-    assert any(
-        token in output
-        for token in expected_tokens
-    )
+    assert any(token in output for token in expected_tokens)
 
 
 @pytest.mark.smoke
@@ -96,9 +80,6 @@ def test_validator_does_not_crash():
 
     result = run_validator()
 
-    output = (
-        result.stdout +
-        result.stderr
-    )
+    output = result.stdout + result.stderr
 
     assert "Traceback" not in output

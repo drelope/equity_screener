@@ -315,7 +315,7 @@
     {
       "id": "ci-workflow",
       "path": ".github/workflows/ci.yml",
-      "sha256": "d0a44cbbb2d07ae0b5d959b917a9a1504fee06f4ad9b082851353a0a9dd3dbcb",
+      "sha256": "148d8427768826e013b8ed9b86773c2d6c29c5134f3715cfe778137b91b1bb1a",
       "kind": "ci_gate",
       "claim_scope": "ci_gate",
       "purpose": "CI jobs including the non-promotion evidence closeout gate",
@@ -605,7 +605,7 @@
     {
       "id": "m1-evidence-correction",
       "path": "docs/evidence/m1.md",
-      "sha256": "5a9065c795e4bc1e3ba0a755afbeb8c655a39f6de67b7dda34c7c06be1848c60",
+      "sha256": "e06f12b48cb7916c48237545d04ffcc0956e8e9027454f585137ae2ef18ec131",
       "kind": "governance_policy",
       "claim_scope": "draft_policy",
       "purpose": "M1 CI evidence record corrected after invalid-evidence rejection",
