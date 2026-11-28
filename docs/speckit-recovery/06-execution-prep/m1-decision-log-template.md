@@ -9,7 +9,7 @@
 
 > **Instructions:** Complete during/after stakeholder review. Attach or link evidence artifacts. Do not backfill approvals without authority/date.
 >
-> **Preparation basis:** Recommendations were prepared in `m1-ratification-packet-2026-11-18.md` and `project-constitution-ratification-draft.md`. The M1 approval record supersedes commit `86f6a59` by a new commit without history rewrite: approver name [PENDING], owner-supplied approval date 2026-11-19, repository: https://github.com/drelope/equity_screener, CI run URL [PENDING], approved SHA [PENDING]. These fields are not effective approval or CI evidence.
+> **Preparation basis:** Recommendations were prepared in `m1-ratification-packet-2026-11-18.md` and `project-constitution-ratification-draft.md`. The M1 approval record supersedes commit `86f6a59` by a new commit without history rewrite: approver name [PENDING], owner-supplied approval date 2026-11-19, repository: https://github.com/drelope/equity_screener, CI run URL [PENDING], approved SHA [PENDING]. Owner-supplied CI URL observed: owner-supplied CI job URL; page title identifies `Remove unsupported M1 approval claims and document CI evidence` at `64f74e1`; visible job `Security (dependency audit + secret scan)` failed with exit code 127 (`pip-audit` command not found); warning: Node.js 20 actions forced to Node.js 24; not a passing CI baseline. These fields are not effective approval or passing CI evidence.
 
 ## 1. Review session record
 
@@ -80,7 +80,7 @@
 **approver name:** [PENDING]
 **approval date:** 2026-11-19 (owner-supplied; not effective until CI run URL and approved SHA are recorded)
 **repository:** https://github.com/drelope/equity_screener
-**CI run URL:** [PENDING]
+**CI run URL (observed, not approved):** https://github.com/drelope/equity_screener/actions/runs/45700975373/job/139510657402?pr=10
 **approved SHA:** [PENDING]
 **Authorized by / date:** Not recorded
 **Next review date:** Pending

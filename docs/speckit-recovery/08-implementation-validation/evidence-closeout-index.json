@@ -1,7 +1,7 @@
 {
   "schema": "p0_evidence_closeout/v1",
   "status": "draft_not_promotion_grade",
-  "generated_at_utc": "2026-11-19T01:15:00+00:00",
+  "generated_at_utc": "2026-11-25T19:00:00+00:00",
   "promotion_claim": false,
   "promotion_grade": false,
   "promotion_blockers": [
@@ -25,7 +25,7 @@
     {
       "id": "execution-log",
       "path": "docs/speckit-recovery/08-implementation-validation/execution-log.md",
-      "sha256": "e3be54aadfdd1bf47235ab1dac695b1bf601cebe924c941b17202f462fa73af1",
+      "sha256": "ae678f5d51ba9209e14ed0ca39cd8e4f192e989e1bd1e7511f7c6b698e816c6d",
       "kind": "execution_log",
       "claim_scope": "execution_record",
       "purpose": "Command-level execution and validation record",
@@ -315,7 +315,7 @@
     {
       "id": "ci-workflow",
       "path": ".github/workflows/ci.yml",
-      "sha256": "d0a44cbbb2d07ae0b5d959b917a9a1504fee06f4ad9b082851353a0a9dd3dbcb",
+      "sha256": "148d8427768826e013b8ed9b86773c2d6c29c5134f3715cfe778137b91b1bb1a",
       "kind": "ci_gate",
       "claim_scope": "ci_gate",
       "purpose": "CI jobs including the non-promotion evidence closeout gate",
@@ -545,7 +545,7 @@
     {
       "id": "p0-acceptance-tracker",
       "path": "docs/speckit-recovery/08-implementation-validation/p0-acceptance-evidence-tracker.md",
-      "sha256": "c897a558e17e879cf8c258fee2cd48a4e57ddbfcc85a03484ae1a564ce0be0f7",
+      "sha256": "b7c5bc496aeb383cc121d447cb3b2887755e76b67979e20753c4ec5bd3fb9c60",
       "kind": "policy_draft",
       "claim_scope": "draft_policy",
       "purpose": "P0 acceptance evidence status and external gates",
@@ -555,7 +555,7 @@
     {
       "id": "m1-corrections-audit",
       "path": "docs/M1_CORRECTIONS_AUDIT.md",
-      "sha256": "cb8f7938b9961e96b54643cd12a70f505f7ab1cde0d58040ed48ca6b35352967",
+      "sha256": "4237be9d178f53708abfdb3ddc593d9ad6357029d1a07ab2ce55cc50392d9d0b",
       "kind": "governance_policy",
       "claim_scope": "draft_policy",
       "purpose": "M1 correction audit and before/after record",
@@ -565,7 +565,7 @@
     {
       "id": "m1-claim-scan",
       "path": "docs/M1_CLAIM_SCAN_REPORT.md",
-      "sha256": "f44a04b55e867e8da4ee0bbee4bc606afca60adab557f2cf009df7c8fabb3288",
+      "sha256": "757857dcfb691fcfb9f4b41f5a119121e584580f4f57943220e80711de569274",
       "kind": "governance_policy",
       "claim_scope": "draft_policy",
       "purpose": "Full leftover-claim scan report",
@@ -575,7 +575,7 @@
     {
       "id": "governance-draft",
       "path": "GOVERNANCE.md",
-      "sha256": "4209934c450062203bf26ca39cb865db327d4e2d5ec36bbfbee87298de9e92af",
+      "sha256": "8062d45f4620295ee583395c160766a9373f2f236dd8cc01d2142957353ab4ef",
       "kind": "governance_policy",
       "claim_scope": "draft_policy",
       "purpose": "Draft governance structure with owner placeholders",
@@ -595,10 +595,20 @@
     {
       "id": "m1-external-steps",
       "path": "docs/M1_EXTERNAL_EVIDENCE_STEPS.md",
-      "sha256": "b3b66c1f041beb300c71e051935d47bea04c583c651b7305cfd73baf33cea1dc",
+      "sha256": "d91bdb420004d8e5a569db1ea9f0c3f473c1ae50b7ba3f171a7d117df7b9d6c5",
       "kind": "governance_policy",
       "claim_scope": "draft_policy",
       "purpose": "Pending M1 external evidence steps and gate invariants",
+      "promotion_claim": false,
+      "status": "draft_not_promotion_grade"
+    },
+    {
+      "id": "m1-evidence-correction",
+      "path": "docs/evidence/m1.md",
+      "sha256": "e06f12b48cb7916c48237545d04ffcc0956e8e9027454f585137ae2ef18ec131",
+      "kind": "governance_policy",
+      "claim_scope": "draft_policy",
+      "purpose": "M1 CI evidence record corrected after invalid-evidence rejection",
       "promotion_claim": false,
       "status": "draft_not_promotion_grade"
     }

@@ -17,6 +17,8 @@ jobs:
       - run: pip install -r requirements-dev.lock.txt
       - run: ruff check .
       - run: ruff format --check .
+      - name: Validate M1 Evidence
+        run: python scripts/validate_m1_evidence.py
 
   test:
     name: Tests (pytest)
@@ -65,6 +67,8 @@ jobs:
         with:
           python-version: "3.12"
       - run: pip install -r requirements-dev.lock.txt
+      - name: Install security tools
+        run: pip install pip-audit
       - name: Audit dependencies for known CVEs
         run: pip-audit -r requirements.lock.txt
       - name: Scan for committed secrets
